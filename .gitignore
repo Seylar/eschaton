@@ -1,2 +1,8 @@
 .worktrees/
 .superpowers/
+
+*.pkg.tar.*
+*.log
+packages/**/pkg/
+packages/**/src/
+repo/out/

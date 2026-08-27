@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Usage: tools/build-pkg <dossier-sous-packages/>
+# Construit le paquet dans un conteneur Arch propre, puis namcap.
+set -euo pipefail
+pkg="${1:?usage: build-pkg <nom>}"
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+image="${ESCHATON_SANDBOX_IMAGE:-}"
+if [[ -z "$image" ]]; then
+  if [[ "$(uname -m)" == "arm64" ]]; then image="menci/archlinuxarm:base-devel"
+  else image="archlinux:base-devel"; fi
+fi
+docker run --rm -v "$repo_root":/eschaton -w "/eschaton/packages/$pkg" "$image" bash -euo pipefail -c '
+  # --disable-sandbox : le bac à sable Landlock de pacman 7 exige des appels
+  # système que le profil seccomp par défaut de Docker refuse
+  # ("Landlock ruleset could not be applied"). Le conteneur est déjà jetable.
+  pacman -Syu --noconfirm --needed --disable-sandbox namcap sudo >/dev/null
+  useradd -m builder && chown -R builder .
+  sudo -u builder makepkg -f --noconfirm
+  namcap ./*.pkg.tar.* || true   # namcap = avertissements à lire, pas bloquant en v0
+  ls -l ./*.pkg.tar.*
+'

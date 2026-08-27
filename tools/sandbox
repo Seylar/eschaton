@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Shell Arch jetable monté sur le repo. arm64 → image ALARM (rapide),
+# sinon image officielle x86_64. Les paquets étant arch=(any), les deux conviennent.
+set -euo pipefail
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+image="${ESCHATON_SANDBOX_IMAGE:-}"
+if [[ -z "$image" ]]; then
+  if [[ "$(uname -m)" == "arm64" ]]; then image="menci/archlinuxarm:base-devel"
+  else image="archlinux:base-devel"; fi
+fi
+# -i -t seulement si l'on a bien un TTY : sans ça `docker run -it` échoue
+# dans un shell non interactif (CI, agent, `tools/sandbox -c '...'` piped).
+tty_flags=()
+[ -t 0 ] && tty_flags=(-i -t)
+# Dans le conteneur, `pacman -Sy` a besoin de --disable-sandbox : le bac à sable
+# Landlock de pacman 7 est bloqué par le profil seccomp par défaut de Docker.
+exec docker run --rm "${tty_flags[@]}" -v "$repo_root":/eschaton -w /eschaton "$image" bash "$@"
