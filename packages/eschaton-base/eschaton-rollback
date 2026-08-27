@@ -89,4 +89,9 @@ fi
 echo "==> Rollback appliqué. Redémarre pour démarrer sur l'état restauré (sudo reboot)."
 echo "    État précédent conservé dans le sous-volume « $backup ». Une fois le"
 echo "    retour validé, le libérer avec :"
-echo "      sudo mount -o subvolid=5 $dev /mnt && sudo btrfs subvolume delete /mnt/$backup && sudo umount /mnt"
+# --recursive est indispensable : systemd crée `var/lib/machines` et
+# `var/lib/portables` comme sous-volumes imbriqués, et un `delete` simple
+# échoue alors sur « Directory not empty » (constat Task 10).
+echo "      sudo mount -o subvolid=5 $dev /mnt &&"
+echo "      sudo btrfs subvolume delete --recursive /mnt/$backup &&"
+echo "      sudo umount /mnt"
