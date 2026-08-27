@@ -1,6 +1,6 @@
 pkgname=eschaton-base
 pkgver=0.1.0
-pkgrel=7
+pkgrel=8
 pkgdesc="Meta-paquet du socle Eschaton : dépendances système et configuration par défaut"
 arch=(any)
 license=(MIT)
@@ -35,7 +35,14 @@ package() {
   # backup= chez eux) — voir le fichier pour l'invariant TARGET_OS_NAME.
   install -Dm644 limine-default.conf "$pkgdir/etc/default/limine"
   install -Dm644 zram-generator.conf "$pkgdir/etc/systemd/zram-generator.conf"
-  install -Dm440 10-wheel.sudoers "$pkgdir/etc/sudoers.d/10-wheel"
+  # /etc/sudoers.d appartient AUSSI au paquet sudo, qui le livre en 750. Le
+  # `install -D` créerait le parent en 755 : eschaton-base revendiquerait alors
+  # un mode qui contredit sudo, pacman avertirait à chaque transaction
+  # (« les permissions pour le répertoire /etc/sudoers.d/ sont différentes ») et
+  # `pacman -Qkk eschaton-base` compterait un fichier « modifié » à perpétuité —
+  # de quoi noyer une vraie altération. Créer le répertoire au bon mode d'abord.
+  install -d -m750 "$pkgdir/etc/sudoers.d"
+  install -m440 10-wheel.sudoers "$pkgdir/etc/sudoers.d/10-wheel"
   install -Dm644 50-eschaton.preset "$pkgdir/usr/lib/systemd/system-preset/50-eschaton.preset"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 lib.sh "$pkgdir/usr/lib/eschaton/lib.sh"
