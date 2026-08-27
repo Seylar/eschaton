@@ -30,9 +30,13 @@ if [[ "$arch" == "x86_64" && "$DRY_RUN" == "0" ]]; then
   kernels="linux $(microcode_for_cpu)"
 fi
 
-# 1. Partitionnement (spec §4.3) — ESP 2 Gio + btrfs sur le reste
+# 1. Partitionnement (spec §4.3) — ESP 4 Gio + btrfs sur le reste
+# 4 Gio et pas 2 : limine-snapper-sync cesse d'ajouter des entrées de snapshot
+# au-delà de LIMIT_USAGE_PERCENT (85 % par défaut) de l'ESP, et chaque snapshot
+# amarré au menu y stocke son kernel et son initramfs. Trop petit = filet de
+# sécurité qui s'arrête en silence.
 run_cmd sgdisk --zap-all "$DISK"
-run_cmd sgdisk -n1:0:+2G -t1:ef00 -c1:ESP "$DISK"
+run_cmd sgdisk -n1:0:+4G -t1:ef00 -c1:ESP "$DISK"
 run_cmd sgdisk -n2:0:0 -t2:8300 -c2:eschaton "$DISK"
 part() { [[ "$DISK" == *[0-9] ]] && echo "${DISK}p$1" || echo "${DISK}$1"; }
 run_cmd mkfs.vfat -F32 -n ESP "$(part 1)"

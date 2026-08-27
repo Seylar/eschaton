@@ -15,7 +15,7 @@ setup() { source "$BATS_TEST_DIRNAME/../installer/lib.sh"; }
   run "$BATS_TEST_DIRNAME/../installer/eschaton-install" --dry-run --disk /dev/vda --hostname eschaton --user seylar
   [ "$status" -eq 0 ]
   [[ "$output" == *"sgdisk --zap-all /dev/vda"* ]]
-  [[ "$output" == *"-n1:0:+2G"*  ]]              # ESP 2 Gio
+  [[ "$output" == *"-n1:0:+4G"*  ]]              # ESP 4 Gio
   [[ "$output" == *"mkfs.btrfs"* ]]
   for sv in @ @home @log @pkg @snapshots; do [[ "$output" == *"subvolume create /mnt/$sv"* ]]; done
   [[ "$output" == *"pacstrap"* && "$output" == *"eschaton-base"* ]]
