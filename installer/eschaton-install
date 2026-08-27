@@ -57,7 +57,12 @@ run_cmd mount "$(part 1)" /mnt/boot
 
 # 3. Dépôt [eschaton] dans le live env, puis pacstrap
 run_cmd bash -c 'grep -q "^\[eschaton\]" /etc/pacman.conf || printf "\n[eschaton]\nSigLevel = Optional TrustAll\nInclude = /etc/pacman.d/eschaton-mirror\n" >> /etc/pacman.conf'
-run_cmd bash -c 'echo "Server = https://REMPLACER-EN-TASK-8.github.io/eschaton" > /etc/pacman.d/eschaton-mirror'
+# Le `\$` est indispensable : `$arch` doit atterrir LITTÉRALEMENT dans le
+# fichier, c'est pacman qui le substitue (dépôt publié par architecture,
+# spec §5.3). Sans l'échappement, le `bash -c` l'expanserait ici — et en vide,
+# puisque la variable `arch` de ce script n'est pas exportée.
+# shellcheck disable=SC2016  # non-expansion voulue : voir ci-dessus
+run_cmd bash -c 'echo "Server = https://seylar.github.io/eschaton/\$arch" > /etc/pacman.d/eschaton-mirror'
 # shellcheck disable=SC2086
 run_cmd pacstrap -K /mnt base $kernels eschaton-base eschaton-branding
 run_cmd bash -c 'genfstab -U /mnt >> /mnt/etc/fstab'
