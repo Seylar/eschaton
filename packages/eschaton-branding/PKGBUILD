@@ -4,10 +4,15 @@ pkgrel=1
 pkgdesc="Identité Eschaton : os-release, message d'accueil"
 arch=(any)
 license=(MIT)
-source=(os-release 10-eschaton.motd)
-sha256sums=(SKIP SKIP)
+# LICENSE est un lien symbolique vers le LICENSE partagé à la racine du dépôt :
+# makepkg réduit toute entrée locale de source=() à son basename, donc un chemin
+# relatif ("../../LICENSE") n'est pas résoluble — cf. get_filename() dans
+# /usr/share/makepkg/util/source.sh. Le lien conserve une licence unique.
+source=(os-release 10-eschaton.motd LICENSE)
+sha256sums=(SKIP SKIP SKIP)
 
 package() {
   install -Dm644 os-release "$pkgdir/usr/share/eschaton/os-release"
   install -Dm644 10-eschaton.motd "$pkgdir/usr/lib/motd.d/10-eschaton"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
