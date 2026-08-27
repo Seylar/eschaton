@@ -1,12 +1,20 @@
 pkgname=eschaton-base
 pkgver=0.1.0
-pkgrel=5
+pkgrel=6
 pkgdesc="Meta-paquet du socle Eschaton : dépendances système et configuration par défaut"
 arch=(any)
 license=(MIT)
 depends=(
   base networkmanager btrfs-progs snapper snap-pac
   limine limine-snapper-sync limine-mkinitcpio-hook
+  # inotify-tools n'est qu'un optdepend de limine-snapper-sync ; pour Eschaton
+  # il est requis. Sans `inotifywait`, limine-snapper-watcher journalise
+  # « inotifywait is not installed. Falling back to Snapper plugin
+  # integration. » et s'arrête aussitôt (rc=0, aucune unité en échec) : le
+  # service reste `enabled` mais `inactive`, et la création d'un snapshot
+  # n'actualise plus limine.conf (constat Task 9). Le filet de la spec §6
+  # cesserait sans le moindre message d'erreur.
+  inotify-tools
   zram-generator openssh sudo git vim htop man-db
   eschaton-branding
 )
