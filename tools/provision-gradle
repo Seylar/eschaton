@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Installe la distribution Gradle officielle dans un conteneur de construction Arch.
+#
+# POURQUOI CE SCRIPT EXISTE
+# Les paquets de packages/vendor/ (limine-snapper-sync, limine-mkinitcpio-hook)
+# ont `gradle` en makedepends, et aucun dépôt ne fournit un gradle utilisable :
+#   - ALARM aarch64 : `gradle` est absent des dépôts, purement et simplement ;
+#   - Arch x86_64   : `extra/gradle 9.7.0-1` est présent mais cassé — sa
+#     distribution ne contient pas le module `gradle-public-api-legacy`, et
+#     échoue à configurer n'importe quel projet, y compris un projet trivial
+#     n'utilisant que le plugin interne `application` :
+#     « Cannot find module 'gradle-public-api-legacy' in distribution
+#     directory '/usr/share/java/gradle' ».
+# On fournit donc Gradle nous-mêmes, sans toucher aux PKGBUILDs vendorés (qui
+# appellent `/usr/bin/gradle` en chemin absolu).
+# À RÉÉVALUER quand Arch aura réparé son paquet : cf. packages/vendor/PROVENANCE.md.
+#
+# CHOIX DE VERSION
+# Les upstreams n'épinglent aucune version : ni wrapper Gradle
+# (`gradle/wrapper/` absent des deux dépôts), ni contrainte dans les
+# `build.gradle.kts` ; leurs README demandent seulement « `gradle` and GraalVM 25
+# (build-time only) ». On prend donc la stable courante, 9.7.1 (2026-08-19) —
+# c'est aussi la version corrective de la ligne 9.7 qu'Arch a empaquetée (9.7.0),
+# donc au plus près de ce que construit le mainteneur AUR, sans le défaut d'Arch.
+#
+# La somme SHA-256 est épinglée en dur ci-dessous. Elle provient des sources
+# officielles gradle.org (endpoint `versions/current` et fichier publié
+# `gradle-9.7.1-bin.zip.sha256`, concordants) — jamais calculée depuis l'archive
+# téléchargée, sans quoi la vérification ne vaudrait rien.
+#
+# Usage : à exécuter en root DANS le conteneur de build, avant makepkg.
+set -euo pipefail
+
+readonly GRADLE_VERSION="9.7.1"
+readonly GRADLE_SHA256="acd53f1edaf02f1a8ff99879f8a34b302661a057d9b063ae9e35b552f804d20a"
+readonly GRADLE_URL="https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
+readonly GRADLE_HOME="/opt/gradle"
+# Gradle a besoin d'un JVM pour démarrer. jdk25 et non le `jdk-openjdk` par
+# défaut (Java 26) : les upstreams ciblent Java/GraalVM 25, et Gradle ne
+# supporte pas forcément le JDK le plus récent.
+readonly JDK_PKG="jdk25-openjdk"
+
+if ((EUID != 0)); then
+	echo "provision-gradle : à exécuter en root dans le conteneur de build." >&2
+	exit 1
+fi
+
+# Idempotent : un conteneur déjà provisionné n'est pas retouché.
+if [[ -x "${GRADLE_HOME}/bin/gradle" ]]; then
+	echo "provision-gradle : Gradle déjà présent dans ${GRADLE_HOME}, rien à faire."
+	exit 0
+fi
+
+echo "provision-gradle : installation de ${JDK_PKG} (JVM d'exécution de Gradle)..."
+pacman -S --noconfirm --needed "${JDK_PKG}" >/dev/null
+
+tmp_dir="$(mktemp -d)"
+readonly tmp_dir
+cleanup() { rm -rf "${tmp_dir}"; }
+trap cleanup EXIT
+
+zip_path="${tmp_dir}/gradle-${GRADLE_VERSION}-bin.zip"
+echo "provision-gradle : téléchargement de ${GRADLE_URL}..."
+# -L : services.gradle.org redirige vers son CDN.
+curl -fsSL -o "${zip_path}" "${GRADLE_URL}"
+
+echo "provision-gradle : vérification de la somme SHA-256 épinglée..."
+computed="$(sha256sum "${zip_path}" | cut -d' ' -f1)"
+if [[ "${computed}" != "${GRADLE_SHA256}" ]]; then
+	echo "provision-gradle : ERREUR — somme SHA-256 inattendue." >&2
+	echo "  attendue : ${GRADLE_SHA256}" >&2
+	echo "  obtenue  : ${computed}" >&2
+	exit 1
+fi
+echo "provision-gradle : somme conforme (${GRADLE_SHA256})."
+
+# bsdtar plutôt qu'unzip : fourni par libarchive, donc toujours présent (pacman
+# en dépend), là où unzip ne fait pas partie de base-devel.
+bsdtar -xf "${zip_path}" -C "${tmp_dir}"
+mv "${tmp_dir}/gradle-${GRADLE_VERSION}" "${GRADLE_HOME}"
+ln -sf "${GRADLE_HOME}/bin/gradle" /usr/bin/gradle
+
+echo "provision-gradle : installé — $(gradle --version | grep -E '^Gradle ')"

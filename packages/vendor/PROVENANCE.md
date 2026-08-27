@@ -96,7 +96,38 @@ conséquences pour l'outillage :
     distribution directory '/usr/share/java/gradle'`. Ce n'est donc pas un
     défaut des PKGBUILDs vendorés.
 
-  Conséquence : les deux paquets ne sont pas constructibles en l'état, sur
-  aucune des deux architectures. Un `gradle` fonctionnel doit être fourni à
-  l'environnement de construction — décision à arbitrer, voir le rapport de la
-  Task 6 (`.superpowers/sdd/2026-08-27-socle/task-6-report.md`).
+  Conséquence : sans intervention, ces deux paquets ne sont constructibles sur
+  aucune des deux architectures.
+
+### Contournement en place : `tools/provision-gradle`
+
+Puisque aucun dépôt ne fournit de `gradle` utilisable, l'environnement de
+construction se le procure lui-même : **`tools/provision-gradle`** installe la
+distribution Gradle officielle (9.7.1) dans le conteneur, vérifiée contre une
+**somme SHA-256 épinglée en dur** dans le script, et la lie en `/usr/bin/gradle`
+— le chemin absolu qu'appellent les deux PKGBUILDs. **Aucun PKGBUILD vendoré
+n'est modifié** : le contournement vit entièrement dans l'environnement de build.
+
+Le script s'exécute en root dans le conteneur, avant `makepkg` :
+
+```bash
+tools/provision-gradle
+```
+
+Deux points à connaître pour construire ces paquets :
+
+- **`makepkg -d` et non `-s`** : makepkg résout les `makedepends` via la base de
+  données pacman, pas via le `PATH`. Il réclamerait donc le *paquet* `gradle`
+  (inexistant sur ALARM) malgré `/usr/bin/gradle` bien présent. On installe
+  l'autre makedepend (`git`) à la main et on saute la vérification.
+- **règle sudoers** : `makepkg` tourne sous l'utilisateur `builder` et appelle
+  `sudo pacman` ; le conteneur n'a aucune règle sudo par défaut. À ajouter
+  (conteneur jetable uniquement) :
+  `echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder`.
+
+**À réévaluer** : ce provisioning est un contournement, pas une cible. Dès
+qu'Arch aura réparé `extra/gradle` (et, pour la branche aarch64, si ALARM
+finit par distribuer `gradle`), il faudra revérifier si le `gradle` des dépôts
+suffit et, le cas échéant, supprimer `tools/provision-gradle` du flux de build.
+Tant que le script est utilisé, sa version et sa somme SHA-256 sont à tenir à
+jour comme n'importe quelle dépendance épinglée.
