@@ -85,6 +85,8 @@ Trois faits nouveaux ([rapport de veille](../veille/2026-08-28-sp2-bureau.md)) a
 
 Le différenciateur formulé au §1 (« zéro-terminal ») est par ailleurs requalifié par la veille : voir la [spec du Bureau](../superpowers/specs/2026-08-28-bureau-design.md) §1 — le créneau réel est l'administration système **intégrée au shell**, rollback graphique en tête.
 
+**Erratas factuels** (constats de veille, corrigent le tableau du §1) : DMS est sous licence **MIT** (pas GPL-3.0 — seul end-4 est GPL) et son packaging nominal est **`extra`, dépôt Arch officiel** depuis 2026-07-27 (`dms-shell 1.5.3-1`), plus l'AUR. La « récolte n°2 » du §3 (épingler Quickshell à un commit) est **caduque** : Quickshell est en dépôt officiel avec releases taguées — le pinning pertinent est celui de pacman.
+
 ## 6. Sources
 
 - [AvengeMedia/DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell) · [Dank Linux](https://danklinux.com/) · [DankInstall](https://danklinux.com/docs/dankinstall)

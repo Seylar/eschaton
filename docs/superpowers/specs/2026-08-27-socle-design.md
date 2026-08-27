@@ -19,6 +19,8 @@ Inspirations assumées : **Omarchy** (légèreté, fluidité, esthétique, AI-fi
 
 > **Note de veille (2026-08-27)** — Omarchy 4 « Quattro » (14 août 2026) a migré tout son bureau sur Quickshell : un process unique remplace Waybar, Walker, Mako, SwayOSD, hyprlock, hypridle, swaybg et polkit-gnome, et l'intégration d'agents IA y est désormais poussée (suivi de consommation dans la barre, diagnostic de crash confié à l'agent). « Hyprland + Quickshell » et « IA intégrée » ne différencient donc plus Eschaton d'Omarchy en tant que tels — seul le **zéro-terminal / GUI de bout en bout** le fait.
 
+> **Note de veille (2026-08-28, passe SP2)** — la formulation ci-dessus est à son tour périmée : Omarchy 4 installe et supprime des paquets Arch **et AUR depuis son menu graphique** (l'affirmation « Omarchy assume le TUI comme réponse aux interfaces système » est fausse pour les paquets — sa page TUI ne liste que des outils de développement), a adopté le modèle *fat packages* et un système de plugins ; CachyOS livre un gestionnaire de paquets GUI par défaut depuis avril 2026. Le territoire encore vide, reformulé ([veille SP2](../../veille/2026-08-28-sp2-bureau.md) §6) : **le rollback et l'administration système comme fonctions natives et unifiées du shell** — pas comme applications tierces juxtaposées — combinés à l'assistant IA systémique. Cette affirmation est la plus volatile du projet : la veille se rejoue à l'ouverture de chaque sous-projet.
+
 ### 1.1 Décisions macro actées
 
 | Sujet | Décision |

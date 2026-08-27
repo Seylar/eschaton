@@ -31,7 +31,7 @@ Quatre paquets `arch=(any)`, mêmes conventions que le Socle (LICENSE symlink, d
 
 | Paquet | Rôle | Contenu principal |
 |---|---|---|
-| `eschaton-desktop` | Meta | Dépend : `hyprland`, `dms-shell-hyprland` (tire dms-shell, quickshell, dgop), `pipewire`, `wireplumber`, `xdg-desktop-portal-hyprland`, `greetd`, `polkit`, polices (`ttf-jetbrains-mono-nerd`, `noto-fonts`), `eschaton-desktop-config`, les deux plugins. |
+| `eschaton-desktop` | Meta | Dépend : `hyprland`, `dms-shell-hyprland` (tire dms-shell, quickshell, dgop ; le compositeur reste substituable — `dms-shell-niri` fournit le même virtuel `dms-shell-compositor`), `pipewire`, `wireplumber`, `xdg-desktop-portal-hyprland`, `greetd`, `polkit`, **`btrfs-assistant`** (rollback graphique disponible dès le jour 1 — dette assumée : retiré quand le plugin natif §3 le remplace, condition de sortie explicite per ADR 0002), polices (`ttf-jetbrains-mono-nerd`, `noto-fonts`), `eschaton-desktop-config`, les deux plugins. |
 | `eschaton-desktop-config` | Configs | Config Hyprland **en Lua** (voir §4), entrée de session Wayland, config greetd (auto-login → session Hyprland), `/etc/skel/.config/hypr/hyprland.lua` d'amorçage, drop-in preset (`greetd.service`). |
 | `eschaton-dms-plugin-update` | Plugin DMS | `/etc/xdg/quickshell/dms-plugins/eschaton-update/` — QML + manifest, permission `process` (exécute `eschaton-update`), vérification périodique (`checkupdates`-équivalent en lecture seule). |
 | `eschaton-dms-plugin-rollback` | Plugin DMS | `/etc/xdg/quickshell/dms-plugins/eschaton-rollback/` — QML + manifest ; dialogue avec **snapperd via D-Bus** (`org.opensuse.Snapper`), autorisé par une règle polkit livrée (groupe `wheel`) — pas de sudo, pas de terminal. Rollback = `snapper rollback` via D-Bus + invite au reboot. |
@@ -61,11 +61,16 @@ Quatre paquets `arch=(any)`, mêmes conventions que le Socle (LICENSE symlink, d
 | # | Risque | Traitement |
 |---|---|---|
 | 1 | Rendu QtQuick sous virtio-gpu en VM inconnu | Spike en tâche 1 ; repli : rendu logiciel Qt (`QSG_RHI_BACKEND=software`) le temps du diagnostic. |
-| 2 | Cadence DMS (1.x jeune) et stabilité de l'API plugins | Versions flottantes des dépôts officiels assumées (rolling) ; les plugins Eschaton s'écrivent contre l'API documentée du registre, re-testés à chaque `eschaton-update` de la VM. |
+| 2 | Cadence DMS (1.x jeune) et **API de plugins non versionnée** (les plugins importent les internes `qs.*` et héritent de `PluginComponent` — aucune promesse de compatibilité) | Politique de version : suivre **`extra/dms-shell` uniquement** (jamais `-git` ni `master`, qui a ~440 commits d'avance) ; `requires_dms` **obligatoire** dans chaque `plugin.json` Eschaton ; smoke test CI de chargement des plugins ; les 12 plugins first-party servent de canari amont. |
 | 3 | Fenêtre de suppression d'hyprlang (~0.57, oct. 2026) | Lua exclusif dès le premier commit (§4.1) — le risque devient nul pour nous. |
 | 4 | `dms setup` écrase des configs | Règle de propriété §4.2 ; aucun fichier Eschaton sous `~/.config/hypr/dms/`. |
 | 5 | Surface D-Bus/polkit du plugin rollback | Règle polkit scopée au groupe `wheel` et aux seules actions snapper nécessaires ; revue de la règle en tâche dédiée. |
 | 6 | Auto-login = session ouverte sans mot de passe | Assumé en VM de dogfooding ; le greeter authentifiant est un livrable SP4 explicite. |
+| 7 | Retard `hyprland` sur ALARM (0.56.1 vs 0.56.2) — critique si ALARM traîne quand 0.57 supprimera hyprlang | Intégré à la surveillance ALARM instaurée par le Socle §8 risque 2. |
+| 8 | Night mode DMS inopérant en VM (gamma matériel, issue upstream #2061) | Hors critères d'acceptation SP2 tant que le test réel n'a pas tranché. |
+| 9 | Bus factor Quickshell = 1 (`outfoxxed`) | Surveillance ; atténué par l'empaquetage `extra` et le couplage humain avec DMS (lead DMS = contributeur n°2 de Quickshell). Déclencheur le plus probable du critère 4 de l'ADR 0001. |
+
+Vérification de non-régression bi-architecture (recommandation de veille) : un script CI léger interroge les deux index de dépôts (API Arch + index miroir ALARM) et échoue si une dépendance d'`eschaton-desktop` manque d'un côté — le pendant SP2 du smoke test x86_64 du Socle.
 
 ## 8. Ce que le Bureau prépare
 
