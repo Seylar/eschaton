@@ -213,3 +213,4 @@ La vérification est une checklist manuelle en v0 ; son automatisation (tests d'
 - **Bureau (sous-projet 2)** : s'ajoutera comme meta-paquet `eschaton-desktop` tiré par le socle ; la VM UTM sert de banc d'essai quotidien.
 - **Assistant IA (sous-projet 3)** : meta-paquet `eschaton-ai` ; la couche d'abstraction de providers fera l'objet de sa propre spec.
 - **Atomique futur (sous-projet 4)** : la discipline « état = paquets » + btrfs rend la migration vers des mises à jour atomiques possible sans réinstallation.
+- **ISO** : aucun ISO pendant le Socle (installation = ISO Arch officielle + `eschaton-install`, le chemin qu'Omarchy a suivi toute sa v1). Un premier ISO minimal x86_64 (archiso : boote et lance l'installeur) devient pertinent dès la fin du sous-projet 2, quand Eschaton est montrable. L'ISO grand public complet — session live, installeur graphique, paquets embarqués pour installation hors-ligne, dépôt signé — reste au sous-projet 4.
