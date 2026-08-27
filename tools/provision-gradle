@@ -52,7 +52,18 @@ if [[ -x "${GRADLE_HOME}/bin/gradle" ]]; then
 fi
 
 echo "provision-gradle : installation de ${JDK_PKG} (JVM d'exécution de Gradle)..."
-pacman -S --noconfirm --needed "${JDK_PKG}" >/dev/null
+# --disable-sandbox : le bac à sable Landlock de pacman 7 exige des appels système
+# que le profil seccomp par défaut de Docker refuse (« Landlock ruleset could not
+# be applied »). Sans ce drapeau, le script échoue ici dans un conteneur frais —
+# il ne doit pas dépendre d'un DisableSandbox préalable dans pacman.conf.
+# Le conteneur de build est jetable, le périmètre du contournement s'arrête là.
+#
+# -Syu et non -S : une image fraîche n'a aucune base de données de paquets
+# (« database file for 'core' does not exist »), donc `pacman -S` seul échoue par
+# « target not found ». On synchronise, et on le fait avec -u plutôt qu'un -Sy
+# nu pour ne pas fabriquer une mise à jour partielle — même choix que
+# tools/build-pkg.
+pacman -Syu --noconfirm --needed --disable-sandbox "${JDK_PKG}" >/dev/null
 
 tmp_dir="$(mktemp -d)"
 readonly tmp_dir
