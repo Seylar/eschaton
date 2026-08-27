@@ -89,11 +89,15 @@ for d in "$root"/packages/*/ "$root"/packages/vendor/*/; do
 	built=$((built + 1))
 done
 
-# Filet contre un PKGDEST ignoré (makepkg.conf d'une image qui le fixerait) :
-# sans ce contrôle, un dépôt vide partirait en production sans un mot.
+# Filet contre les deux façons d'arriver à un dépôt incomplet sans que rien
+# n'échoue : un PKGDEST ignoré (makepkg.conf d'une image qui le fixerait), et
+# une boucle qui n'a rien trouvé à construire (arborescence réorganisée). Dans
+# les deux cas repo-add produirait un index valide et vide, que la CI
+# publierait — et un `pacman -Syu` sur une machine Eschaton verrait d'un coup
+# tous les paquets du dépôt disparaître.
 pkgs=("$out"/*.pkg.tar.*)
-if ((${#pkgs[@]} != built)); then
-	echo "build-repo : $built paquet(s) construit(s) mais ${#pkgs[@]} dans $out." >&2
+if ((built == 0 || ${#pkgs[@]} != built)); then
+	echo "build-repo : $built paquet(s) construit(s), ${#pkgs[@]} dans $out — dépôt incomplet." >&2
 	exit 1
 fi
 
