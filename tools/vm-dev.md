@@ -292,6 +292,40 @@ Deux règles apprises à la dure :
 > commandes suivantes s'empilent dans le tampon du tty et le pilotage se
 > désynchronise silencieusement.
 
+### 5.3 Variante démon — nécessaire dès que la session dure
+
+Le `vmrun.py` ci-dessus ouvre et referme le pty à chaque **exécution du
+script**. Tant qu'on enchaîne les commandes d'un seul appel, c'est sans
+conséquence ; mais un agent qui appelle le script une fois par commande retombe
+exactement dans le SIGHUP décrit plus haut. La Task 9 a donc scindé le motif en
+deux :
+
+- un **démon** lancé une fois pour toute la session, qui garde le pty ouvert,
+  écrit tout ce qui arrive dans `console.log` et poste sur la ligne les fichiers
+  déposés dans `inbox/` ;
+- un **client** sans état (`run` / `send` / `raw` / `wait` / `tail`) qui écrit
+  dans `inbox/` et relit `console.log`.
+
+Le journal cumulatif est un bénéfice à lui seul : les sorties longues
+(`pacstrap`) restent relisibles après coup, et les barres de progression de
+pacman — qui saturent n'importe quel `tail` — se filtrent hors bande
+(`grep -Ev '\[#|\[-|B/s'`).
+
+Deux points de cycle de vie du pty, tous deux vérifiés :
+
+> **Un `reboot` de l'invité NE change PAS le pty.** QEMU ne redémarre que la
+> machine virtuelle, pas son processus : le démon continue de fonctionner à
+> travers les redémarrages, y compris d'archboot vers Eschaton. Seul un
+> `utmctl stop` / `start` renumérote le pty — il faut alors le redétecter et
+> relancer le démon.
+
+> **Après un redémarrage, la console est sur une invite de connexion, pas sur un
+> shell.** Envoyer des commandes à ce moment revient à les taper comme nom
+> d'utilisateur : elles échouent en silence et le pilotage semble « muet ».
+> Toujours vérifier ce qu'affiche la console (`tail`) avant de reprendre, et
+> attendre un motif franc (`eschaton login:`, `[root@archboot`) plutôt qu'un
+> délai fixe.
+
 ## 6. Résultat des 4 critères du spike
 
 Vérifiés une première fois via l'assistant, puis **re-vérifiés intégralement sur
@@ -369,7 +403,10 @@ Disk /dev/vda: 134217728 sectors, 64.0 GiB
 
 ---
 
-## 7. Ce que Task 9 doit savoir
+## 7. L'environnement live en pratique
+
+*(Écrit pour préparer la Task 9 ; vérifié par elle. La procédure d'installation
+elle-même est au §8.)*
 
 **Base = Arch Linux ARM, pas Arch vanille.** L'archboot aarch64 est bâti sur
 Arch Linux ARM : `pacman.conf` déclare `[core] [extra] [alarm] [aur]` et les
@@ -396,7 +433,11 @@ _aarch64_options="nr_cpus=1"
 C'est **volontaire et sans entrée de menu alternative** : archboot pilote son
 environnement par `kexec`, qui n'est autorisé qu'à un CPU sur aarch64. Un
 `pacstrap` dans cette VM sera donc mono-cœur. La restriction ne concerne que le
-live : le système Eschaton installé démarrera avec ses 4 cœurs.
+live : le système Eschaton installé démarre bien avec ses 4 cœurs (vérifié,
+§8.6).
+
+> Mesuré depuis : le mono-cœur **ne coûte presque rien**. Le `pacstrap` complet
+> prend 1 min 30 s, pas les 30 à 60 minutes qu'on craignait — voir §8.1.
 
 **Disposition disque vue par l'invité :**
 
@@ -436,3 +477,156 @@ tant qu'il n'est pas amorçable.
 > `config.plist` : UTM retombe alors sur le *bookmark* de `~/Downloads` et
 > remonte la même ISO. L'éjection réelle passe par l'interface graphique de UTM
 > (lecteur → *Eject*) — inutile ici grâce à l'ordre de démarrage.
+
+---
+
+## 8. Installation réelle d'Eschaton (procédure vérifiée)
+
+Déroulée trois fois de bout en bout le 2026-08-28, entièrement par la console
+série, sans jamais ouvrir l'interface de UTM. C'est la procédure qui valide la
+définition de terminé §7.1 de la spec.
+
+### 8.1 Durées réelles
+
+Le plan tablait sur un `pacstrap` de 30 à 60 minutes à cause du CPU unique du
+live env (§7). **La réalité est vingt fois plus rapide** — le mono-cœur ne pèse
+presque rien : l'essentiel du temps part en téléchargement, et le reste est
+dominé par les entrées/sorties.
+
+| Étape | Durée |
+|---|---|
+| Démarrage de la VM → invite archboot | ~30 s |
+| `pacman -Sy` + 4 outils d'installation | ~15 s |
+| `eschaton-install` complet (231 paquets, 276 Mio téléchargés, 1,5 Gio installés) | **1 min 30 s** |
+| `reboot` → invite de connexion Eschaton | ~18 s |
+| **Total, VM éteinte → session ouverte** | **≈ 4 min** |
+
+Prévoir large reste raisonnable (le débit du miroir n'est pas garanti), mais un
+timeout de 10 minutes suffit très largement, et un pilotage qui abandonne au
+bout de 2 minutes se trompe de diagnostic.
+
+### 8.2 Déroulé
+
+```bash
+# 1. Depuis le Mac : démarrer, récupérer le pty, lancer le démon de console
+UTMCTL=/Applications/UTM.app/Contents/MacOS/utmctl
+$UTMCTL start eschaton-dev
+$UTMCTL attach eschaton-dev          # affiche « PTTY: /dev/ttysNNN »
+```
+
+Attendre `Hit ENTER for login routine or CTRL-C for bash prompt.`, envoyer
+**`Ctrl-C`** (octet `0x03`) → `[root@archboot /] #`. Puis, dans la VM :
+
+```bash
+stty cols 200 rows 60                # sinon les lignes longues sont repliées
+pacman -Sy --noconfirm arch-install-scripts gptfdisk btrfs-progs dosfstools
+
+cd /root
+curl -fsSLO https://raw.githubusercontent.com/Seylar/eschaton/socle/installer/eschaton-install
+curl -fsSLO https://raw.githubusercontent.com/Seylar/eschaton/socle/installer/lib.sh
+chmod +x eschaton-install
+sha256sum eschaton-install lib.sh    # à comparer au dépôt : raw.githubusercontent met en cache
+
+./eschaton-install --disk /dev/vda --user seylar
+#   → deux invites `passwd` : saisir le mot de passe, puis le confirmer
+umount -R /mnt && reboot
+```
+
+Le `pacman -Sy` du live passe **sans `--disable-sandbox`** : le bac à sable
+Landlock ne pose problème que dans les conteneurs Docker de la CI, pas ici.
+
+Rien à faire au redémarrage : le disque porte `bootindex=0` (§3.3) et Limine
+démarre tout seul (`default_entry`, §8.4).
+
+> **Mot de passe de la VM de dev : `eschaton`** (compte `seylar`, également
+> demandé par `sudo`). C'est une VM locale jetable — **à changer** dès que cette
+> image sert à autre chose qu'au développement.
+
+### 8.3 Réinstaller par-dessus
+
+Une fois le disque amorçable, l'UEFI ne retombe plus sur l'ISO. Inutile de
+toucher à la configuration de UTM : il suffit de rendre le disque non amorçable
+depuis Eschaton, puis de redémarrer.
+
+```bash
+sudo rm -rf /boot/EFI && sudo reboot   # → l'UEFI retombe sur archboot
+```
+
+Le `sgdisk --zap-all` que l'installeur exécute en première étape efface ensuite
+le reste. (Ne pas essayer de zapper la table des partitions depuis le système
+qui tourne dessus : l'arrêt propre n'a plus de disque où écrire.)
+
+### 8.4 Écarts trouvés et corrigés
+
+Quatre défauts, **tous silencieux** : le système démarrait et se disait en bon
+état dans chaque cas. Aucun n'était visible en `--dry-run`, aucun n'aurait été
+trouvé sans installation réelle. Corrigés dans le dépôt (installeur, PKGBUILD),
+puis revalidés par une réinstallation complète.
+
+| # | Symptôme | Cause | Correctif |
+|---|---|---|---|
+| 1 | 1re mise à jour : « signature … de confiance inconnue » | `base` ne tire qu'`archlinux-keyring` ; les clés ALARM n'ont jamais été signées dans la cible | `keyring_pkgs_for()` + `pacman-key --populate` dans le chroot |
+| 2 | Identité perdue à la 1re mise à jour de `filesystem` | `/etc/os-release` est un lien : le `cp` écrasait `/usr/lib/os-release` | `rm -f` avant le `cp` |
+| 3 | **Aucune entrée de snapshot, jamais** | `limine.conf` plat : limine-snapper-sync exige `//<kernel>` sous `/<OS>` | structure imbriquée + ancre `//Snapshots` |
+| 4 | Le veilleur de snapshots meurt à 54 ms | `inotify-tools` n'est qu'un *optdepend* de limine-snapper-sync | dépendance de `eschaton-base` |
+
+Le correctif n°3 en a appelé un cinquième, trouvé au redémarrage suivant :
+une entrée de premier niveau qui contient des sous-entrées **n'est plus
+amorçable**, c'est un sous-menu. Limine restait donc sur son menu à l'expiration
+du `timeout`, et la VM ne démarrait plus du tout. D'où
+`default_entry: Eschaton/<kernel>` — désigné par son **chemin** et non par un
+index, puisque limine-snapper-sync insère des entrées qui décaleraient toute
+numérotation. Vérifié : la ligne survit aux réécritures de l'outil.
+
+> La leçon générale : sur ce socle, **une panne se signale rarement**. Un
+> système qui démarre, dont aucune unité n'est en échec et dont
+> `eschaton-update` rend 0, peut être privé de tout son filet de sécurité. Les
+> vérifications qui comptent sont celles qui exercent la mécanique — installer
+> un paquet, créer un snapshot — pas celles qui lisent un état.
+
+### 8.5 Pièges de vérification
+
+- **`findmnt` n'accepte qu'une seule cible.** `findmnt -no TARGET,OPTIONS / /home
+  …` rend une sortie **vide** et `rc=1` — ce qui ressemble beaucoup à « les
+  montages sont absents ». Boucler sur les points de montage, ou utiliser
+  `findmnt -nrt btrfs -o TARGET,SOURCE`.
+- **Ne jamais utiliser `ping`** (§6, critère 2) : l'ICMP ne traverse pas le NAT
+  `vmnet-shared`. `curl -fsI https://archlinux.org` est le test qui fait foi.
+- **`hostname` n'existe pas** sur une base Arch moderne (`inetutils` n'est pas
+  dans `base`) : utiliser `hostnamectl`.
+- **`fatal library error, lookup self`** pendant le `pacstrap` : c'est snap-pac
+  qui tente un snapshot post-transaction dans le chroot. Sans conséquence, le
+  système installé prend ses snapshots normalement.
+- **`sd-vconsole: "/etc/vconsole.conf" not found`** pendant le `pacstrap` :
+  l'initramfs est généré avant que l'installeur n'écrive le fichier. Sans
+  conséquence pratique (systemd applique la disposition au démarrage), et corrigé
+  de lui-même à la première régénération de l'initramfs.
+
+### 8.6 État vérifié du système installé
+
+Tout ce qui suit a été lu sur la console de la VM, sur l'installation finale :
+
+```
+ID=eschaton                              /etc/os-release (fichier, plus un lien)
+curl -fsI https://archlinux.org          → NET_OK      (enp0s1, 192.168.64.x)
+lsblk -no SIZE,FSTYPE /dev/vda1          → 4G vfat     (ESP, spec §4.3)
+5 subvolumes  @ @home @log @pkg @snapshots  montés, compress=zstd:1,noatime
+swapon --show                            → /dev/zram0 seul, 1,9 Gio, aucune partition
+NetworkManager sshd fstrim.timer limine-snapper-sync snapper-cleanup.timer → enabled
+limine-snapper-sync.service              → active (le veilleur tourne)
+systemctl --failed                       → vide
+TARGET_OS_NAME="Eschaton"                = nom de l'entrée /Eschaton (invariant §4.2)
+grep -c '^/' /boot/limine.conf           → 1  (aucun doublon d'entrée)
+nproc                                    → 4  (le live env est le seul bridé à 1)
+motd « Bienvenue sur Eschaton »          affiché à l'ouverture de session
+eschaton-update                          → rc=0, les 5 dépôts se synchronisent
+pacman -S tree                           → snapshots snapper 1 (pre) / 2 (post)
+                                           puis entrées de démarrage générées
+                                           automatiquement sous //Snapshots
+```
+
+La réserve de la Task 7 sur un éventuel doublon d'entrée « Eschaton » **ne se
+pose pas sur aarch64** : `limine-update` (limine-entry-tool) s'y arrête sur
+« The system is not x86_64 » et ne génère donc jamais rien. `limine.conf` y a une
+seule source, l'installeur. La réserve reste entière côté x86_64, où l'outil
+fonctionne — c'est à la Task 11 de la lever.
