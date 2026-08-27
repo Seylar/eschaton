@@ -37,6 +37,16 @@ Chaque sous-projet suit son propre cycle spec → plan → implémentation.
 4. **Grand public** — installeur graphique, onboarding, mises à jour atomiques, chiffrement.
 5. **Gaming** — Steam, Proton, drivers GPU, sur vrai matériel x86_64.
 
+### 1.3 Trajectoire vers le x86_64 grand public
+
+Le x86_64 n'est pas un portage futur : c'est la cible officielle dès le jour 1, l'aarch64 n'étant que le banc d'essai quotidien. Concrètement :
+
+- les paquets `[eschaton]` sont `arch=(any)` : les mêmes fichiers, servis par le même dépôt, s'installent sur les deux architectures ;
+- `eschaton-install` contient les deux branches dès sa première version (§4.2) ; côté x86_64 il s'appuie sur l'ISO Arch officielle et les dépôts Arch officiels ;
+- le smoke test x86_64 fait partie de la définition de « Socle terminé » (§7) : la cible officielle ne peut pas régresser silencieusement pendant que le développement se fait sur ARM.
+
+Le passage réel au grand public x86_64 (sous-projet 4) n'est donc pas un problème de mécanique mais de périmètre : ISO custom, installeur graphique, dépôt signé, et surtout la largeur du support matériel réel (GPU — Nvidia en tête —, Wi-Fi, laptops variés), qui ne se valide que sur de vraies machines. C'est aussi ce qui place le Gaming (sous-projet 5) après lui. L'aarch64 reste ensuite le banc d'essai de dev — et une piste bonus (Eschaton en VM sur Apple Silicon pour développeurs), pas la cible publique.
+
 ---
 
 ## 2. Périmètre du Socle
