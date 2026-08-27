@@ -47,3 +47,11 @@ setup() { source "$BATS_TEST_DIRNAME/../installer/lib.sh"; }
   run "$BATS_TEST_DIRNAME/../installer/eschaton-install" --dry-run --disk /dev/vda --user seylar
   [[ "$output" == *"rm -f /etc/os-release && cp /usr/share/eschaton/os-release /etc/os-release"* ]]
 }
+
+@test "limine.conf imbrique le kernel sous l'entrée OS (exigence limine-snapper-sync)" {
+  # Une entrée plate démarre, mais n'obtient JAMAIS d'entrée de snapshot.
+  run "$BATS_TEST_DIRNAME/../installer/eschaton-install" --dry-run --disk /dev/vda --user seylar
+  [[ "$output" == *"/Eschaton"* ]]
+  [[ "$output" == *"//linux"* ]]        # sous-entrée de kernel (linux / linux-aarch64)
+  [[ "$output" == *"//Snapshots"* ]]    # ancre des entrées de snapshot
+}

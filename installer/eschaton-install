@@ -112,14 +112,40 @@ else
   efi=BOOTX64.EFI;  kernel_file="vmlinuz-$kernel_name"; initramfs_file="initramfs-$kernel_name.img"
 fi
 chroot_cmd "mkdir -p /boot/EFI/BOOT && cp /usr/share/limine/$efi /boot/EFI/BOOT/$efi"
+# STRUCTURE IMBRIQUÉE — exigée par limine-snapper-sync, donc par le filet de
+# sécurité tout entier (spec §6). Le nombre de `/` donne le niveau :
+#
+#   /Eschaton          ← l'entrée « OS », celle que TARGET_OS_NAME désigne
+#       //<kernel>     ← au moins UNE sous-entrée de kernel : obligatoire
+#       //Snapshots    ← l'ancre où l'outil écrit les entrées de snapshot
+#
+# Une entrée PLATE (les clés du kernel directement sous `/Eschaton`) est
+# acceptée par Limine et démarre parfaitement — mais limine-snapper-sync la
+# refuse avec « Your OS entry has no kernel in /boot/limine.conf » et n'écrit
+# JAMAIS la moindre entrée de snapshot (constat Task 9). Le système démarre, le
+# filet de sécurité est absent, et rien ne le signale : exactement la panne
+# muette contre laquelle la spec §6 existe.
+#
+# `//Snapshots` est facultatif pour l'outil (à défaut il écrit dans l'entrée OS)
+# mais on le pose explicitement : l'ancre rend visible, dans le fichier même,
+# l'endroit où le filet s'accroche.
+#
+# À noter : sur aarch64 rien ne régénère ce fichier — `limine-update`
+# (limine-entry-tool) s'arrête sur « The system is not x86_64 ». Les chemins
+# ci-dessous sont donc définitifs, ce qui est sans risque : le paquet
+# linux-aarch64 d'ALARM réécrit toujours /boot/Image et /boot/initramfs-linux.img
+# sous les mêmes noms.
 run_cmd bash -c "cat > /mnt/boot/limine.conf <<EOF
 timeout: 3
 
 /Eschaton
-    protocol: linux
-    path: boot():/$kernel_file
-    module_path: boot():/$initramfs_file
-    cmdline: root=LABEL=eschaton rootflags=subvol=@ rw quiet
+    //$kernel_name
+        protocol: linux
+        path: boot():/$kernel_file
+        module_path: boot():/$initramfs_file
+        cmdline: root=LABEL=eschaton rootflags=subvol=@ rw quiet
+
+    //Snapshots
 EOF"
 
 # 6. Vérification post-install — /boot doit être complet AVANT de dire « terminé ».
