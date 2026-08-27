@@ -14,4 +14,4 @@ tty_flags=()
 [ -t 0 ] && tty_flags=(-i -t)
 # Dans le conteneur, `pacman -Sy` a besoin de --disable-sandbox : le bac à sable
 # Landlock de pacman 7 est bloqué par le profil seccomp par défaut de Docker.
-exec docker run --rm "${tty_flags[@]}" -v "$repo_root":/eschaton -w /eschaton "$image" bash "$@"
+exec docker run --rm ${tty_flags[@]+"${tty_flags[@]}"} -v "$repo_root":/eschaton -w /eschaton "$image" bash "$@"
