@@ -11,6 +11,13 @@ setup() { source "$BATS_TEST_DIRNAME/../installer/lib.sh"; }
   [ "$output" = "linux intel-ucode amd-ucode" ]
 }
 
+@test "keyring_pkgs_for donne le trousseau de l'architecture" {
+  run keyring_pkgs_for aarch64
+  [ "$output" = "archlinuxarm-keyring" ]
+  run keyring_pkgs_for x86_64
+  [ "$output" = "archlinux-keyring" ]
+}
+
 @test "le dry-run contient le déroulé complet dans l'ordre" {
   run "$BATS_TEST_DIRNAME/../installer/eschaton-install" --dry-run --disk /dev/vda --hostname eschaton --user seylar
   [ "$status" -eq 0 ]
@@ -23,4 +30,20 @@ setup() { source "$BATS_TEST_DIRNAME/../installer/lib.sh"; }
   [[ "$output" == *"limine"* ]]
   [[ "$output" == *"cp /usr/share/eschaton/os-release /etc/os-release"* ]]
   [[ "$output" == *"Include = /etc/pacman.d/eschaton.conf"* ]]   # le système cible connaît [eschaton]
+}
+
+# Les deux assertions ci-dessous verrouillent des pannes SILENCIEUSES
+# constatées à la Task 9 : le système démarrait, mais amputé.
+
+@test "le trousseau de l'architecture est installé par pacstrap" {
+  # Sans lui, la première mise à jour échoue sur « confiance inconnue ».
+  run "$BATS_TEST_DIRNAME/../installer/eschaton-install" --dry-run --disk /dev/vda --user seylar
+  [[ "$output" == *"pacstrap"*"keyring"* ]]
+  [[ "$output" == *"pacman-key --init && pacman-key --populate"* ]]
+}
+
+@test "os-release est délié avant d'être écrit" {
+  # Sinon le cp suit le lien et écrase /usr/lib/os-release (paquet filesystem).
+  run "$BATS_TEST_DIRNAME/../installer/eschaton-install" --dry-run --disk /dev/vda --user seylar
+  [[ "$output" == *"rm -f /etc/os-release && cp /usr/share/eschaton/os-release /etc/os-release"* ]]
 }

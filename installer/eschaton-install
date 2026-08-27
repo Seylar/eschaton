@@ -26,6 +26,7 @@ fi
 
 arch="$(detect_arch)"
 kernels="$(kernel_pkgs_for "$arch")"
+keyrings="$(keyring_pkgs_for "$arch")"
 if [[ "$arch" == "x86_64" && "$DRY_RUN" == "0" ]]; then
   kernels="linux $(microcode_for_cpu)"
 fi
@@ -64,16 +65,30 @@ run_cmd bash -c 'grep -q "^\[eschaton\]" /etc/pacman.conf || printf "\n[eschaton
 # shellcheck disable=SC2016  # non-expansion voulue : voir ci-dessus
 run_cmd bash -c 'echo "Server = https://seylar.github.io/eschaton/\$arch" > /etc/pacman.d/eschaton-mirror'
 # shellcheck disable=SC2086
-run_cmd pacstrap -K /mnt base $kernels eschaton-base eschaton-branding
+run_cmd pacstrap -K /mnt base $kernels $keyrings eschaton-base eschaton-branding
 run_cmd bash -c 'genfstab -U /mnt >> /mnt/etc/fstab'
 
 # 4. Configuration dans le chroot (spec §4.2 étape 5 + provisioning autorisé)
 chroot_cmd() { run_cmd arch-chroot /mnt bash -c "$1"; }
+# Signer localement les clés des trousseaux installés à l'étape 3. Le `-K` de
+# pacstrap amorce bien un trousseau, mais avec les trousseaux de
+# l'ENVIRONNEMENT LIVE ; les clés apportées par le paquet trousseau de la cible
+# n'y sont pas encore. Sans ce `--populate`, la clé ALARM se retrouve dans le
+# trousseau sans autre signature que la sienne — donc non fiable (constat
+# Task 9). Idempotent : `--init` ne recrée pas une clé maîtresse existante.
+chroot_cmd 'pacman-key --init && pacman-key --populate'
 chroot_cmd 'ln -sf /usr/share/zoneinfo/Europe/Paris /etc/localtime && hwclock --systohc || true'
 chroot_cmd 'sed -i "s/^#fr_FR.UTF-8/fr_FR.UTF-8/; s/^#en_US.UTF-8/en_US.UTF-8/" /etc/locale.gen && locale-gen'
 chroot_cmd 'echo LANG=fr_FR.UTF-8 > /etc/locale.conf && echo KEYMAP=fr > /etc/vconsole.conf'
 run_cmd bash -c "echo '$HOSTNAME_' > /mnt/etc/hostname"
-chroot_cmd 'cp /usr/share/eschaton/os-release /etc/os-release'
+# `rm -f` d'abord : /etc/os-release est un LIEN SYMBOLIQUE vers
+# ../usr/lib/os-release (paquet `filesystem`). Sans la suppression, le `cp` suit
+# le lien et écrase /usr/lib/os-release — un fichier que `filesystem` possède et
+# qui ne figure pas dans son `backup=` : la prochaine mise à jour de `filesystem`
+# le restaure en silence et le système redevient « Arch Linux ARM » (constat
+# Task 9). En remplaçant le lien par un vrai fichier, l'identité vit dans /etc,
+# qui prime sur /usr/lib pour tous les consommateurs (os-release(5)).
+chroot_cmd 'rm -f /etc/os-release && cp /usr/share/eschaton/os-release /etc/os-release'
 # Provisioning autorisé (spec §3) : activer le dépôt [eschaton] sur le système cible
 chroot_cmd 'grep -q "eschaton.conf" /etc/pacman.conf || printf "\nInclude = /etc/pacman.d/eschaton.conf\n" >> /etc/pacman.conf'
 chroot_cmd 'sed -i "s/^SNAPPER_CONFIGS=.*/SNAPPER_CONFIGS=\"root\"/" /etc/conf.d/snapper'
