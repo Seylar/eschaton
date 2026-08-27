@@ -1,0 +1,13 @@
+pkgname=eschaton-branding
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Identité Eschaton : os-release, message d'accueil"
+arch=(any)
+license=(MIT)
+source=(os-release 10-eschaton.motd)
+sha256sums=(SKIP SKIP)
+
+package() {
+  install -Dm644 os-release "$pkgdir/usr/share/eschaton/os-release"
+  install -Dm644 10-eschaton.motd "$pkgdir/usr/lib/motd.d/10-eschaton"
+}
