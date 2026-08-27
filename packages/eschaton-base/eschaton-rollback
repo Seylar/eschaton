@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+echo "==> Points de restauration disponibles :"
+sudo snapper --config root list
+read -rp "Numéro du snapshot vers lequel revenir (vide pour annuler) : " num
+[[ -z "$num" ]] && { echo "Annulé."; exit 0; }
+[[ "$num" =~ ^[0-9]+$ ]] || { echo "Numéro invalide." >&2; exit 1; }
+sudo snapper --config root rollback "$num"
+echo "==> Rollback préparé. Redémarre pour démarrer sur l'état restauré (sudo reboot)."
