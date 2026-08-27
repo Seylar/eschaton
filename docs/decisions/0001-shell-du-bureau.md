@@ -75,6 +75,16 @@ Tant qu'aucune de ces conditions n'est réunie, rester sur A est la bonne décis
 - **Risque aarch64** : ni Quickshell ni DMS (Go) n'ont de binaires ALARM ; tout se compile sur le banc d'essai. À vérifier tôt dans le sous-projet 2 — c'est possiblement le vrai facteur limitant, avant toute considération de design.
 - **Non vérifié à ce jour** : ni DMS ni end-4 n'ont été installés. Les jugements d'ergonomie et d'empreinte mémoire proviennent de tests tiers. Première tâche du sous-projet 2 : installer DMS dans la VM et confronter cet ADR au réel.
 
+## Addendum du 2026-08-28 (passe de veille SP2 — ajout contrôleur)
+
+Trois faits nouveaux ([rapport de veille](../veille/2026-08-28-sp2-bureau.md)) amendent cet ADR sans en changer la décision :
+
+1. **§5 « Risque aarch64 » est levé, en mieux** : DMS (`extra/dms-shell` 1.5.3), Quickshell (0.3.1) et dgop sont entrés dans les dépôts **officiels** d'Arch ET d'ALARM, en binaires natifs des deux architectures — rien ne se compile sur le banc d'essai, le Bureau entier tient en meta-paquets `any`.
+2. **Le mécanisme d'extension est meilleur qu'anticipé** : DMS scanne `/etc/xdg/quickshell/dms-plugins/` (plugins *système*, pacman-owned, lecture seule pour DMS) — le modèle *fat packages* exact ; `plugins.lock.json` ne concerne que les plugins git côté utilisateur et sort du périmètre Eschaton.
+3. **Le critère n°1 de passage au shell maison (§4) est affaibli** : les cinq types de plugins (`widget`, `daemon`, `launcher`, `desktop`, `composite`) et la permission `process` couvrent a priori l'assistant IA omniprésent. Le critère reste valable, mais sa probabilité de déclenchement baisse nettement.
+
+Le différenciateur formulé au §1 (« zéro-terminal ») est par ailleurs requalifié par la veille : voir la [spec du Bureau](../superpowers/specs/2026-08-28-bureau-design.md) §1 — le créneau réel est l'administration système **intégrée au shell**, rollback graphique en tête.
+
 ## 6. Sources
 
 - [AvengeMedia/DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell) · [Dank Linux](https://danklinux.com/) · [DankInstall](https://danklinux.com/docs/dankinstall)
