@@ -22,3 +22,40 @@ setup() { source "$BATS_TEST_DIRNAME/../packages/eschaton-base/lib.sh"; }
   run running_kernel_missing_modules "$dir" "6.10.1-arch1"
   [ "$status" -eq 1 ]
 }
+
+# Les quatre suivantes couvrent le remplacement de sous-volume d'eschaton-rollback
+# (Task 10) : `snapper rollback` refuse la disposition Arch d'Eschaton, la
+# restauration se fait donc en manipulant les noms de sous-volumes à la main.
+
+@test "device_of_source sépare le disque du sous-volume" {
+  run device_of_source "/dev/vda2[/@]"
+  [ "$output" = "/dev/vda2" ]
+  run device_of_source "/dev/vda2"
+  [ "$output" = "/dev/vda2" ]
+}
+
+@test "subvol_of_source lit le sous-volume, et refuse une source qui n'en a pas" {
+  run subvol_of_source "/dev/vda2[/@]"
+  [ "$status" -eq 0 ]
+  [ "$output" = "@" ]
+  run subvol_of_source "/dev/vda2[/@snapshots]"
+  [ "$output" = "@snapshots" ]
+  # Une partition montée à sa racine n'a pas de sous-volume à remplacer :
+  # eschaton-rollback doit s'arrêter là plutôt que de renommer au hasard.
+  run subvol_of_source "/dev/vda2"
+  [ "$status" -eq 1 ]
+}
+
+@test "snapshot_subvol_path compose le chemin vu depuis subvolid=5" {
+  run snapshot_subvol_path "@snapshots" 3
+  [ "$output" = "@snapshots/3/snapshot" ]
+}
+
+@test "valid_snapshot_number refuse 0, le vide et le non-numérique" {
+  run valid_snapshot_number 3;      [ "$status" -eq 0 ]
+  run valid_snapshot_number 007;    [ "$status" -eq 0 ]
+  # 0 est le pseudo-snapshot « current » de snapper : aucun sous-volume derrière.
+  run valid_snapshot_number 0;      [ "$status" -eq 1 ]
+  run valid_snapshot_number "";     [ "$status" -eq 1 ]
+  run valid_snapshot_number "3; rm -rf /"; [ "$status" -eq 1 ]
+}

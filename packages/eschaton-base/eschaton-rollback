@@ -1,9 +1,92 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# lib.sh n'existe qu'une fois le paquet installé ; shellcheck ne peut pas la
+# suivre depuis le dépôt, où elle vit à packages/eschaton-base/lib.sh.
+# shellcheck source=/dev/null
+source /usr/lib/eschaton/lib.sh
+
+### Pourquoi pas `snapper rollback` (que la spec §6 nommait) — constat Task 10.
+###
+### `snapper rollback` suppose la disposition openSUSE : le système tourne sur
+### le sous-volume PAR DÉFAUT de btrfs, et la restauration consiste à désigner
+### un autre sous-volume par défaut. Eschaton suit la disposition Arch — racine
+### sur le sous-volume `@`, désigné explicitement par `rootflags=subvol=@` sur
+### la ligne de commande du kernel, sous-volume par défaut laissé à FS_TREE.
+### Sur cette disposition la commande s'arrête net :
+###
+###     Cannot detect ambit since default subvolume is unknown.
+###     This can happen if the system was not set up for rollback.
+###
+### et la forcer par `--ambit classic` ne servirait à rien : elle changerait le
+### sous-volume par défaut, dont le démarrage ne tient aucun compte puisque la
+### ligne de commande du kernel épingle `subvol=@`.
+###
+### On applique donc la méthode « replace », celle que limine-snapper-sync
+### recommande pour les dispositions Arch : le sous-volume racine est renommé de
+### côté, puis recréé comme instantané inscriptible du snapshot choisi. Le NOM
+### `@` ne bouge pas — la ligne de commande du kernel reste valable, et rien
+### dans /boot ni dans fstab n'a besoin d'être réécrit.
+###
+### `limine-snapper-restore` (paquet limine-snapper-sync) ne remplace pas cet
+### outil : il restaure le snapshot sur lequel on a DÉMARRÉ, depuis le menu
+### Limine, quand le système normal ne démarre plus. Les deux chemins de la
+### spec §6 sont complémentaires.
+
+die() { echo "eschaton-rollback : $*" >&2; exit 1; }
+
 echo "==> Points de restauration disponibles :"
 sudo snapper --config root list
+
 read -rp "Numéro du snapshot vers lequel revenir (vide pour annuler) : " num
-[[ -z "$num" ]] && { echo "Annulé."; exit 0; }
-[[ "$num" =~ ^[0-9]+$ ]] || { echo "Numéro invalide." >&2; exit 1; }
-sudo snapper --config root rollback "$num"
-echo "==> Rollback préparé. Redémarre pour démarrer sur l'état restauré (sudo reboot)."
+if [[ -z "$num" ]]; then echo "Annulé."; exit 0; fi
+valid_snapshot_number "$num" || die "numéro invalide : « $num »."
+[[ -d "/.snapshots/$num/snapshot" ]] || die "le snapshot $num n'existe pas."
+
+root_src=$(findmnt -no SOURCE /) || die "impossible de lire le montage de /."
+snap_src=$(findmnt -no SOURCE /.snapshots) || die "/.snapshots n'est pas monté."
+dev=$(device_of_source "$root_src")
+root_subvol=$(subvol_of_source "$root_src") ||
+  die "/ n'est pas monté depuis un sous-volume btrfs ($root_src) — rien à remplacer."
+snaps_subvol=$(subvol_of_source "$snap_src") ||
+  die "/.snapshots n'est pas un sous-volume btrfs ($snap_src)."
+target=$(snapshot_subvol_path "$snaps_subvol" "$num")
+backup="${root_subvol}.avant-rollback-$(date +%Y%m%d-%H%M%S)"
+
+echo
+echo "==> Restauration du snapshot $num dans le sous-volume « $root_subvol » de $dev."
+echo "    L'état actuel n'est pas détruit : il est mis de côté sous « $backup »."
+read -rp "Confirmer ? [oui/N] " reply
+if [[ "$reply" != "oui" ]]; then echo "Annulé."; exit 0; fi
+
+# Le remplacement se fait depuis la racine du système de fichiers (subvolid=5),
+# seule vue où `@` et `@snapshots` sont frères et manipulables comme des noms.
+top=$(sudo mktemp -d /run/eschaton-rollback.XXXXXX) || die "mktemp a échoué."
+cleanup() {
+  mountpoint -q "$top" && sudo umount "$top"
+  sudo rmdir "$top" 2>/dev/null || true
+}
+trap cleanup EXIT
+sudo mount -o subvolid=5 "$dev" "$top" || die "montage de $dev (subvolid=5) impossible."
+[[ -e "$top/$target" ]] || die "sous-volume introuvable : $target"
+
+# Renommer un sous-volume monté est licite en btrfs : seul son nom dans l'arbre
+# racine change, le système qui tourne dessus n'en sait rien.
+sudo mv "$top/$root_subvol" "$top/$backup" || die "impossible de mettre « $root_subvol » de côté."
+if ! sudo btrfs subvolume snapshot "$top/$target" "$top/$root_subvol"; then
+  sudo mv "$top/$backup" "$top/$root_subvol"
+  die "création du sous-volume restauré impossible ; l'état d'origine est remis en place."
+fi
+
+# Les kernels vivent sur l'ESP, hors des snapshots : revenir avant une mise à
+# jour du kernel laisserait /boot en avance sur les modules de la racine
+# restaurée. limine-snapper-sync garde une copie de chaque kernel par snapshot.
+if ! sudo limine-snapper-sync --restore-kernels "$num"; then
+  echo "eschaton-rollback : la remise en place des kernels de /boot a échoué." >&2
+  echo "  Le sous-volume racine EST restauré. Si le kernel a changé depuis le" >&2
+  echo "  snapshot $num, démarre son entrée sous « Snapshots » dans Limine." >&2
+fi
+
+echo "==> Rollback appliqué. Redémarre pour démarrer sur l'état restauré (sudo reboot)."
+echo "    État précédent conservé dans le sous-volume « $backup ». Une fois le"
+echo "    retour validé, le libérer avec :"
+echo "      sudo mount -o subvolid=5 $dev /mnt && sudo btrfs subvolume delete /mnt/$backup && sudo umount /mnt"
