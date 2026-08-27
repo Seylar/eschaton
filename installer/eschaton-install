@@ -135,8 +135,18 @@ chroot_cmd "mkdir -p /boot/EFI/BOOT && cp /usr/share/limine/$efi /boot/EFI/BOOT/
 # ci-dessous sont donc définitifs, ce qui est sans risque : le paquet
 # linux-aarch64 d'ALARM réécrit toujours /boot/Image et /boot/initramfs-linux.img
 # sous les mêmes noms.
+#
+# `default_entry` est la contrepartie OBLIGATOIRE de l'imbrication : une entrée
+# de premier niveau qui contient des sous-entrées n'est plus amorçable, c'est un
+# sous-menu. À l'expiration du `timeout`, Limine n'a alors rien à démarrer et
+# reste sur son menu, indéfiniment — une VM sans clavier ne démarre plus du tout
+# (constat Task 9, au redémarrage qui a suivi le passage à l'imbrication).
+# On désigne la sous-entrée par son CHEMIN (`Eschaton/<kernel>`) et non par son
+# index : limine-snapper-sync insère des entrées de snapshot, donc tout numéro
+# se décalerait au premier snapshot venu.
 run_cmd bash -c "cat > /mnt/boot/limine.conf <<EOF
 timeout: 3
+default_entry: Eschaton/$kernel_name
 
 /Eschaton
     //$kernel_name

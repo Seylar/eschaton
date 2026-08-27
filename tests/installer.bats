@@ -54,4 +54,6 @@ setup() { source "$BATS_TEST_DIRNAME/../installer/lib.sh"; }
   [[ "$output" == *"/Eschaton"* ]]
   [[ "$output" == *"//linux"* ]]        # sous-entrée de kernel (linux / linux-aarch64)
   [[ "$output" == *"//Snapshots"* ]]    # ancre des entrées de snapshot
+  # Sans default_entry, le sous-menu n'est pas amorçable et Limine reste dessus.
+  [[ "$output" == *"default_entry: Eschaton/linux"* ]]
 }
