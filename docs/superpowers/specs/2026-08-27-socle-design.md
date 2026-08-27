@@ -10,10 +10,14 @@
 
 Eschaton est une distribution Linux basée sur Arch qui vise, à terme, le grand public : un système complet « qui juste marche » — installation simple, mises à jour gérées, retour arrière garanti, gaming (Steam/Proton) — avec deux différenciateurs identitaires :
 
-1. **Une expérience bureau fluide et belle, pensée tactile ET souris** (Hyprland + Quickshell), là où Omarchy est clavier/terminal-first.
+1. **Un bureau moderne entièrement pilotable en interface graphique** (Hyprland + Quickshell) : les réglages du bureau, mais aussi les paquets, les mises à jour, les snapshots et le matériel — sans jamais ouvrir un terminal. Omarchy, à l'inverse, assume le TUI comme réponse aux interfaces système (« Hyprland → Alacritty → un TUI ») et fait éditer ses configs dans Neovim : c'est un choix de design revendiqué, pas une lacune temporaire.
 2. **Un assistant IA omniprésent intégré au cœur du système**, agnostique du fournisseur (Claude, OpenAI, Ollama…, au choix de l'utilisateur).
 
-Inspirations assumées : **Omarchy** (légèreté, fluidité, esthétique, AI-first, dépôt de paquets maison, filet de snapshots) et **CachyOS** (plomberie éprouvée : Limine + btrfs + Snapper, installeur qui marche, gaming). Ces deux projets ont convergé indépendamment vers les mêmes fondations techniques — Eschaton reprend cette voie balisée. Le territoire qu'aucun des deux ne couvre, et qu'Eschaton vise : **bureau tactile designé d'un bloc + IA systémique + grand public**.
+Le **tactile est un nice-to-have**, pas un différenciateur : le parc de laptops tactiles est marginal, et l'état de l'art Wayland (hyprgrass en alpha, clavier virtuel non résolu) ne justifie pas d'en faire un objectif de v1.
+
+Inspirations assumées : **Omarchy** (légèreté, fluidité, esthétique, AI-first, dépôt de paquets maison, filet de snapshots) et **CachyOS** (plomberie éprouvée : Limine + btrfs + Snapper, installeur qui marche, gaming). Ces deux projets ont convergé indépendamment vers les mêmes fondations techniques — Eschaton reprend cette voie balisée. Le territoire qu'aucun des deux ne couvre, et qu'Eschaton vise : **une distro pilotable en GUI de bout en bout — le bureau ET la plomberie système — avec une IA systémique, pour le grand public**.
+
+> **Note de veille (2026-08-27)** — Omarchy 4 « Quattro » (14 août 2026) a migré tout son bureau sur Quickshell : un process unique remplace Waybar, Walker, Mako, SwayOSD, hyprlock, hypridle, swaybg et polkit-gnome, et l'intégration d'agents IA y est désormais poussée (suivi de consommation dans la barre, diagnostic de crash confié à l'agent). « Hyprland + Quickshell » et « IA intégrée » ne différencient donc plus Eschaton d'Omarchy en tant que tels — seul le **zéro-terminal / GUI de bout en bout** le fait.
 
 ### 1.1 Décisions macro actées
 
@@ -23,7 +27,7 @@ Inspirations assumées : **Omarchy** (légèreté, fluidité, esthétique, AI-fi
 | Machine de dev | VM UTM **aarch64** sur Mac (M1 Pro, 32 Go). Architecture cible officielle : **x86_64** (validée en émulation, puis sur vrai matériel). |
 | Base | **Arch vanilla** (pas de fork d'Omarchy ni de CachyOS). Côté aarch64 : Arch Linux ARM (ALARM). |
 | Stratégie distro | Séquencée : couche sur Arch d'abord (paquets + configs), migration vers un modèle atomique/immuable plus tard. Les choix du jour 1 (btrfs + snapshots, état déclaré dans des paquets) rendent cette migration possible sans réinstallation. |
-| Bureau | Hyprland + Quickshell — sous-projet 2. |
+| Bureau | Hyprland + Quickshell. Base de départ : **DankMaterialShell** étendu par des plugins Eschaton, shell maison à terme — voir [ADR 0001](../../decisions/0001-shell-du-bureau.md). Sous-projet 2. |
 | IA | Assistant omniprésent, provider-agnostique — sous-projet 3. |
 | Gaming | Steam/Proton, x86_64 uniquement — différé en dernier (non testable en VM ARM). |
 
@@ -89,7 +93,7 @@ Contre-modèle documenté : le système de « migrations » d'Omarchy (scripts b
 | Architecture | Environnement live | Statut |
 |---|---|---|
 | x86_64 | ISO Arch officielle | Éprouvé, aucun risque. |
-| aarch64 (VM UTM) | **archboot aarch64** (candidat) | À valider par un test réel — première tâche du plan. Repli : image Arch Linux ARM préfabriquée, amenée à l'état Eschaton par un mode « convergence » de `eschaton-install` (mêmes étapes sans partitionnement ni pacstrap) — mode développé uniquement si archboot échoue. |
+| aarch64 (VM UTM) | **archboot aarch64** | **Validé le 2026-08-27** (spike Task 1) : chemin nominal fonctionnel, le mode « convergence » de repli est donc sans objet et n'a pas été développé. Projet actif (mainteneur Tobias Powalowski, développeur Arch ; aarch64 supporté depuis janvier 2022, dernière mise à jour juillet 2026). |
 
 ### 4.2 `eschaton-install` : un seul script, déroulé
 
@@ -101,6 +105,7 @@ Lancé depuis l'environnement live. Étapes :
 4. **`pacstrap`** : `base`, kernel, `eschaton-base`, `eschaton-branding`. Le dépôt `[eschaton]` est ajouté au `pacman.conf` de l'environnement live au préalable.
 5. **Configuration en chroot** : fstab, locale, fuseau, hostname, utilisateur (groupe `wheel`, sudo), zram.
 6. **Bootloader** : installation de Limine sur l'ESP, config générée, `limine-snapper-sync` activé.
+   > **Invariant à tenir** — `limine-snapper-sync` ne devine pas le nom de l'entrée de démarrage : sans `TARGET_OS_NAME` explicite dans `/etc/limine-snapper-sync.conf`, il se rabat sur `PRETTY_NAME` puis `NAME` de `/etc/os-release`. **Le nom de l'entrée dans `limine.conf` doit donc être exactement le `PRETTY_NAME` livré par `eschaton-branding`** (`Eschaton` aujourd'hui, des deux côtés). Toute divergence — par exemple un `PRETTY_NAME` embelli en « Eschaton Linux » — fait cesser silencieusement la génération des entrées de snapshot, c'est-à-dire le filet de sécurité tout entier. Deux façons de sortir de ce couplage par convention : fixer `TARGET_OS_NAME` dans une configuration livrée par `eschaton-base`, ou utiliser le mécanisme `comment: machine-id=<machine-id>` de l'entrée Limine, indépendant du nom.
 7. **Services** : NetworkManager, snapper (+ `snap-pac` via dépendances), sshd (utile en VM, désactivable).
 8. Redémarrage sur Eschaton.
 
@@ -120,7 +125,7 @@ Table GPT, deux partitions :
 
 | Partition | Taille | Format | Rôle |
 |---|---|---|---|
-| ESP | 2 Gio | FAT32, montée sur `/boot` | Limine, kernels, initramfs, entrées de snapshots |
+| ESP | **4 Gio** | FAT32, montée sur `/boot` | Limine, kernels, initramfs, entrées de snapshots |
 | Système | reste du disque | btrfs | tout le reste |
 
 Subvolumes btrfs (layout plat) :
@@ -132,6 +137,8 @@ Subvolumes btrfs (layout plat) :
 | `@log` | `/var/log` | Non — les logs racontent ce qui s'est passé, même après restauration |
 | `@pkg` | `/var/cache/pacman/pkg` | Non — cache de téléchargement, inutile à snapshoter |
 | `@snapshots` | `/.snapshots` | Non — le stockage des snapshots eux-mêmes |
+
+> **Pourquoi 4 Gio et pas 2** — l'upstream de `limine-snapper-sync` recommande « au moins 4 Gio » pour l'ESP, et son `LIMIT_USAGE_PERCENT` vaut **85 % par défaut** : au-delà de ce seuil, **plus aucune entrée de snapshot n'est ajoutée à Limine** (et avec `MAX_SNAPSHOT_ENTRIES=auto`, les anciennes sont supprimées sans avertissement). Chaque snapshot amarré au menu y stocke son kernel et son initramfs ; avec la rétention visée (§6), 2 Gio franchissent le seuil avant même que la rétention ne se stabilise — le filet de sécurité s'arrêterait donc en silence, alors qu'il est le critère n° 2 de « Socle terminé » (§7). La marge est d'autant plus nécessaire que le sous-projet 5 (gaming) amène les pilotes Nvidia et DKMS, que l'upstream chiffre à plus de 300 Mio par version de kernel.
 
 Swap : **zram** (`zram-generator`), pas de partition. Mémoire compressée en RAM — adapté aux VM, pas d'hibernation possible (non-but assumé).
 
@@ -155,7 +162,7 @@ Eschaton/
 
 ### 5.2 Les meta-paquets v0
 
-**`eschaton-base`** — le système. Dépendances : `base`, `btrfs-progs`, `networkmanager`, `snapper`, `snap-pac`, `limine`, `limine-snapper-sync`, `zram-generator`, `openssh`, `sudo`, `git`, outils de base (`vim`, `htop`, `man-db`). Le kernel n'en fait volontairement pas partie : un paquet `arch=(any)` ne peut pas avoir de dépendances conditionnelles par architecture, c'est donc `eschaton-install` qui le pose (branche par arch, §4.2). Livre les configs par défaut : `pacman.conf` drop-in du dépôt `[eschaton]`, config snapper du subvolume racine (rétention bornée), config zram, et les commandes `eschaton-update` / `eschaton-rollback` (§6).
+**`eschaton-base`** — le système. Dépendances : `base`, `networkmanager`, `btrfs-progs`, `snapper`, `snap-pac`, `limine`, `limine-snapper-sync`, `limine-mkinitcpio-hook`, `zram-generator`, `openssh`, `sudo`, `git`, outils de base (`vim`, `htop`, `man-db`), et `eschaton-branding`. Le kernel n'en fait volontairement pas partie : un paquet `arch=(any)` ne peut pas avoir de dépendances conditionnelles par architecture, c'est donc `eschaton-install` qui le pose (branche par arch, §4.2). Livre les configs par défaut : `pacman.conf` drop-in du dépôt `[eschaton]`, config snapper du subvolume racine (rétention bornée), config zram, et les commandes `eschaton-update` / `eschaton-rollback` (§6).
 
 **`eschaton-branding`** — l'identité. `os-release` (`ID=eschaton`, `ID_LIKE=arch`, `NAME=Eschaton`) — c'est ce qui fait qu'un système « est » Eschaton aux yeux des outils —, message d'accueil. Plus tard : fonds d'écran, écran de démarrage.
 
@@ -170,7 +177,7 @@ Deux modes de vie :
 - **Dev local** : `makepkg` dans la VM, installation directe. Boucle courte pour itérer sur un paquet.
 - **Publié** : à chaque push sur `main`, la CI (GitHub Actions) construit les paquets, génère l'index (`repo-add`) et publie le tout sur GitHub Pages. Chaque machine Eschaton a `[eschaton]` dans son `pacman.conf` → `pacman -Syu` ramène les mises à jour Eschaton comme celles d'Arch. (Même schéma que l'OPR d'Omarchy.)
 
-Les meta-paquets et paquets de configs sont `arch=(any)` : un seul build sert aarch64 et x86_64. Les rares paquets compilés à venir (ex. composants du Bureau) seront construits par architecture — les runners ARM de GitHub Actions couvrent ce besoin le moment venu.
+Les meta-paquets et paquets de configs sont `arch=(any)` : un seul build sert aarch64 et x86_64. Les rares paquets compilés à venir (ex. composants du Bureau) seront construits par architecture — les runners ARM de GitHub Actions couvrent ce besoin **dès aujourd'hui** : `ubuntu-*-arm` est généralement disponible en dépôt public depuis août 2025, et en dépôt privé depuis le 29 janvier 2026 (imputé sur les minutes incluses du plan). Le besoin est déjà réel : les deux paquets vendorés (§8, risque 3) sont des binaires natifs, pas des paquets `any`.
 
 **Dette consciente** : pas de signature GPG des paquets en v0 (`SigLevel = Optional` pour `[eschaton]` uniquement — les dépôts Arch gardent leur vérification). Obligatoire avant toute distribution à des tiers ; tracé comme prérequis du sous-projet 4.
 
@@ -198,19 +205,32 @@ La vérification est une checklist manuelle en v0 ; son automatisation (tests d'
 
 ## 8. Risques et décisions différées
 
+*Table revue le 2026-08-27 (passe de veille, voir [ADR 0002](../../decisions/0002-veille-avant-spec.md)).*
+
 | # | Risque / question | Traitement |
 |---|---|---|
-| 1 | archboot aarch64 non validé comme environnement live | Première tâche du plan = test réel. Repli : image ALARM préfabriquée + mode convergence de `eschaton-install`. |
-| 2 | Divergence ALARM ↔ Arch x86_64 (dépôts distincts, versions décalées) | Acceptée : la VM ARM ne sert qu'à itérer sur des couches arch-agnostiques ; smoke tests x86_64 réguliers. |
-| 3 | `limine-snapper-sync` absent des dépôts Arch officiels | Packagé dans `[eschaton]` (c'est précisément le rôle du dépôt). |
+| 1 | ~~archboot aarch64 non validé comme environnement live~~ | **Levé le 2026-08-27** (spike Task 1) : chemin nominal validé, le mode convergence de repli est sans objet. |
+| 2 | **Santé d'Arch Linux ARM (ALARM)** — socle du banc d'essai quotidien | **Requalifié (aggravé)**. ALARM est une distribution *non affiliée* à Arch, portée par une équipe très réduite : sur son organisation GitHub, seuls `PKGBUILDs` et `wiki` bougent en 2026, et `archlinuxarm-keyring` n'a pas été touché depuis novembre 2022 ; la communauté rapporte des dépôts en retard de plusieurs semaines. Le risque n'est donc pas la « divergence de versions » mais un **gel**, et un keyring périmé casserait `pacman -Syu` sur le banc d'essai. Traitement : ALARM reste le choix v0 (prouvé fonctionnel par les spikes Task 1 et 6), la **surveillance devient explicite**, et deux portes de sortie sont identifiées — voir §8.1. |
+| 3 | `limine-snapper-sync` et `limine-mkinitcpio-hook` absents des dépôts | Packagés dans `[eschaton]`. Confirmé côté ALARM par la Task 6 ; `limine` lui-même est bien présent (`extra/limine 12.6.1-1`, aarch64), aucune contingence nécessaire de ce côté. |
 | 4 | Dépôt non signé | Dette v0 assumée, prérequis bloquant du sous-projet 4 (grand public). |
 | 5 | Émulation x86_64 très lente sur Apple Silicon | Réservée aux smoke tests périodiques ; le vrai matériel x86_64 arrive avec les sous-projets 4–5. |
+| 6 | **`gradle` inutilisable sur les deux architectures** — `makedepends` des deux paquets vendorés | Constaté le 2026-08-27 : absent des dépôts ALARM, et `extra/gradle 9.7.0-1` est cassé sur Arch x86_64 (module `gradle-public-api-legacy` manquant). Contournement en place : `tools/provision-gradle` installe la distribution officielle épinglée par somme SHA-256, sans modifier les PKGBUILDs vendorés. **Dette surveillée** : à retirer dès qu'Arch répare `extra/gradle` ; sa version et sa somme se maintiennent comme n'importe quelle dépendance épinglée. |
+| 7 | **Comportements intrusifs hérités de `limine-mkinitcpio-hook`** | Le paquet installe un wrapper `mkinitcpio` dans `/usr/local/bin` (précède `/usr/bin` dans le `PATH`, **ne propage pas le code de retour** du vrai binaire, et son invite se déclenche toute seule sur EOF en contexte non interactif), plus un hook pacman dans `/etc/pacman.d/hooks/` qui **remplace celui de `mkinitcpio`** sans figurer dans `backup=()`. Ce ne sont pas des failles mais des choix upstream dont Eschaton hérite. Mitigation en place : `eschaton-install` se termine par une vérification explicite du contenu de `/boot`, précisément pour qu'un initramfs non généré ne passe pas pour un succès. |
+| 8 | **Rupture silencieuse du filet de snapshots** | Deux mécanismes de `limine-snapper-sync` échouent sans bruit : le seuil `LIMIT_USAGE_PERCENT` (85 % de l'ESP) et le couplage du nom d'OS avec l'entrée `limine.conf` (§4.2 étape 6). Traitement : ESP portée à 4 Gio (§4.3) et invariant de nommage documenté. **À prouver en conditions réelles**, pas sur le papier : c'est le critère n° 2 de §7. |
+
+### 8.1 Portes de sortie si ALARM décroche
+
+Aucune n'est activée aujourd'hui ; elles sont identifiées pour que le décrochage d'ALARM soit un arbitrage et non une surprise.
+
+- **Arch Linux Ports — aarch64** ([RFC 0032](https://rfc.archlinux.page/0032-arch-linux-ports/)) : banc d'essai officiellement reconnu par Arch pour les architectures non supportées, dépôts communautaires, images reconstruites tous les ~15 jours. Réserve : paquets bâtis pour **ARMv8.2-A minimum**, non signés par Arch, hors infrastructure Arch.
+- **Holo Core** (Collabora / Valve, préview publique de juillet 2026) : port aarch64 d'Arch servant de base au Steam Frame, avec binaires, sources et conteneurs de développement publiés. Réserve : **pas de reconstruction complète du monde** — quelques milliers de paquets, ciblés sur les besoins du Steam Frame. À surveiller pour deux raisons : c'est le port aarch64 le mieux financé à ce jour, et il est directement adjacent au sous-projet 5 (gaming).
+- **Arch Linux lui-même** n'a toujours **pas** d'aarch64 officiel (statut « unofficial », aucun RFC de promotion en cours au 2026-08-27). C'est le signal à guetter : il rendrait ces portes de sortie caduques.
 
 ---
 
 ## 9. Ce que le Socle prépare pour la suite
 
-- **Bureau (sous-projet 2)** : s'ajoutera comme meta-paquet `eschaton-desktop` tiré par le socle ; la VM UTM sert de banc d'essai quotidien.
+- **Bureau (sous-projet 2)** : s'ajoutera comme meta-paquet `eschaton-desktop` tiré par le socle, les extensions maison étant packagées séparément (`eschaton-dms-plugin-*`) conformément à l'[ADR 0001](../../decisions/0001-shell-du-bureau.md) ; la VM UTM sert de banc d'essai quotidien. Point de vigilance : ni Quickshell ni DankMaterialShell n'ont de binaires ALARM — tout se compile sur le banc d'essai aarch64.
 - **Assistant IA (sous-projet 3)** : meta-paquet `eschaton-ai` ; la couche d'abstraction de providers fera l'objet de sa propre spec.
 - **Atomique futur (sous-projet 4)** : la discipline « état = paquets » + btrfs rend la migration vers des mises à jour atomiques possible sans réinstallation.
 - **ISO** : aucun ISO pendant le Socle (installation = ISO Arch officielle + `eschaton-install`, le chemin qu'Omarchy a suivi toute sa v1). Un premier ISO minimal x86_64 (archiso : boote et lance l'installeur) devient pertinent dès la fin du sous-projet 2, quand Eschaton est montrable. L'ISO grand public complet — session live, installeur graphique, paquets embarqués pour installation hors-ligne, dépôt signé — reste au sous-projet 4.
