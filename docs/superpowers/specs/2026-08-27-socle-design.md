@@ -1,7 +1,7 @@
 # Eschaton — Spec de conception : le Socle
 
 - **Date** : 2026-08-27
-- **Statut** : validé en brainstorming — en attente de relecture finale
+- **Statut** : implémenté (v0.1.0) — 2026-08-28
 - **Sous-projet** : 1/5 (Socle)
 
 ---
@@ -203,11 +203,13 @@ Les meta-paquets et paquets de configs sont `arch=(any)` : un seul build sert aa
 
 La vérification est une checklist manuelle en v0 ; son automatisation (tests d'installation scriptés sous QEMU) est un chantier ultérieur.
 
+> **Les quatre critères sont atteints au 2026-08-28** (`v0.1.0`). Le dossier de preuves — pour chacun : la section de `tools/vm-dev.md` qui la porte, le rapport de tâche, le commit — est consolidé dans [`tools/vm-dev.md` §11](../../../tools/vm-dev.md). Ce qui reste dû malgré tout y est nommé (§11.5).
+
 ---
 
 ## 8. Risques et décisions différées
 
-*Table revue le 2026-08-27 (passe de veille, voir [ADR 0002](../../decisions/0002-veille-avant-spec.md)).*
+*Table revue le 2026-08-27 (passe de veille, voir [ADR 0002](../../decisions/0002-veille-avant-spec.md)) ; ligne 9 ajoutée le 2026-08-28 (constat Task 11).*
 
 | # | Risque / question | Traitement |
 |---|---|---|
@@ -219,6 +221,7 @@ La vérification est une checklist manuelle en v0 ; son automatisation (tests d'
 | 6 | **`gradle` inutilisable sur les deux architectures** — `makedepends` des deux paquets vendorés | Constaté le 2026-08-27 : absent des dépôts ALARM, et `extra/gradle 9.7.0-1` est cassé sur Arch x86_64 (module `gradle-public-api-legacy` manquant). Contournement en place : `tools/provision-gradle` installe la distribution officielle épinglée par somme SHA-256, sans modifier les PKGBUILDs vendorés. **Dette surveillée** : à retirer dès qu'Arch répare `extra/gradle` ; sa version et sa somme se maintiennent comme n'importe quelle dépendance épinglée. |
 | 7 | **Comportements intrusifs hérités de `limine-mkinitcpio-hook`** | Le paquet installe un wrapper `mkinitcpio` dans `/usr/local/bin` (précède `/usr/bin` dans le `PATH`, **ne propage pas le code de retour** du vrai binaire, et son invite se déclenche toute seule sur EOF en contexte non interactif), plus un hook pacman dans `/etc/pacman.d/hooks/` qui **remplace celui de `mkinitcpio`** sans figurer dans `backup=()`. Ce ne sont pas des failles mais des choix upstream dont Eschaton hérite. Mitigation en place : `eschaton-install` se termine par une vérification explicite du contenu de `/boot`, précisément pour qu'un initramfs non généré ne passe pas pour un succès. |
 | 8 | **Rupture silencieuse du filet de snapshots** | Deux mécanismes de `limine-snapper-sync` échouent sans bruit : le seuil `LIMIT_USAGE_PERCENT` (85 % de l'ESP) et le couplage du nom d'OS avec l'entrée `limine.conf` (§4.2 étape 6). Traitement : ESP portée à 4 Gio (§4.3) et invariant de nommage documenté. **À prouver en conditions réelles**, pas sur le papier : c'est le critère n° 2 de §7. |
+| 9 | **Double Limine sur x86_64** — `limine-entry-tool` installe son propre exemplaire (`/boot/EFI/limine/`) et une entrée NVRAM prioritaire, à côté de celui posé par l'installeur (`EFI/BOOT/BOOTX64.EFI`) | Constaté le **2026-08-28** (Task 11). Bénin tant que les binaires sont identiques (même paquet) ; dette surveillée si les chemins de mise à jour divergent un jour. Traitement : **surveillance**, consigné `tools/vm-dev.md` §10.6. |
 
 ### 8.1 Portes de sortie si ALARM décroche
 

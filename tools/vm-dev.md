@@ -1650,3 +1650,193 @@ de kernel — le seul morceau du filet que la Task 10 n'a pas pu exercer faute d
 mise à jour de kernel ALARM — peut donc s'éprouver ici, sur x86_64, sans
 attendre. Hors périmètre du §7.3, mais l'occasion est ouverte.
 
+---
+
+## 11. Définition de terminé — dossier de preuves (spec §7)
+
+Cette section **ne rejoue rien** : elle compile le dossier. Pour chacun des
+quatre critères de la spec §7, elle dit où vit la preuve — la section de ce
+document qui la porte, le rapport de tâche qui la détaille, le commit qui l'a
+fixée dans le dépôt. Un seul critère se re-vérifie en direct, le **§7.4** : la CI
+et le dépôt publié sont les seuls dont l'état peut changer sans que personne ne
+touche à rien.
+
+Consolidé le **2026-08-28**, à la clôture du Socle (`v0.1.0`).
+
+| Critère §7 | Statut | Sections | Rapport de tâche | Commit qui le fixe |
+|---|---|---|---|---|
+| **7.1** Installation reproductible (VM UTM aarch64) | **Prouvé** le 2026-08-28 | §8, §8.6 | `task-9-report.md` | `43af004` |
+| **7.2** Casse réelle → restauration par snapshot | **Prouvé** le 2026-08-28 | §9, §9.4, §9.5, §9.8, §9.9 | `task-10-report.md` | `ed27687` |
+| **7.3** Cible x86_64 prouvée (VM émulée) | **Prouvé** le 2026-08-28 | §10, §10.6, §10.7 | `task-11-report.md` | `035fe92` |
+| **7.4** CI verte, dépôt publié et installable | **Re-vérifié en direct** le 2026-08-28 | §11.4 | `task-8-report.md` | `fa34322` |
+
+Les rapports vivent dans `.superpowers/sdd/2026-08-27-socle/`.
+
+Aucun des quatre n'est un constat sur le papier : chacun renvoie à des sorties
+console lues sur une VM, ou à une exécution de CI horodatée.
+
+### 11.1 §7.1 — Installation reproductible
+
+> *« depuis le Mac, la procédure documentée/scriptée (`tools/`) produit une VM
+> UTM aarch64 qui boote Eschaton — `os-release` l'affirme, le réseau fonctionne,
+> un utilisateur existe, `eschaton-update` s'exécute sans erreur. »*
+
+**Preuve** : §8 de ce document — procédure déroulée **trois fois de bout en
+bout** le 2026-08-28, entièrement par la console série, sans jamais ouvrir
+l'interface de UTM. Les quatre exigences, point par point, dans le relevé du
+§8.6 : `ID=eschaton` lu dans `/etc/os-release` (fichier, plus un lien) ;
+`curl -fsI https://archlinux.org` → `NET_OK` sur `enp0s1` ; compte `seylar` avec
+session ouverte et `sudo` ; `eschaton-update` → `rc=0`, cinq dépôts synchronisés.
+Le §8.1 chiffre la reproductibilité (≈ 4 min, VM éteinte → session ouverte), le
+§8.3 dit comment réinstaller par-dessus.
+
+**Rapport** : `task-9-report.md` (statut `DONE_WITH_CONCERNS`).
+
+**Commits** : `43af004` valide le critère ; il n'a été atteignable qu'après les
+correctifs que l'installation réelle a exigés — cinq défauts, quatre commits :
+`10cfd13` (trousseau de l'architecture + `os-release` délié, défauts 1 et 2),
+`2100c58` (`limine.conf` imbriqué, sans quoi **aucune** entrée de snapshot
+n'était jamais générée), `0508d19` (`inotify-tools`, le veilleur mourait à
+54 ms), `a277065` (`default_entry`, sans lequel la VM ne démarrait plus du tout
+— défaut appelé par le correctif précédent).
+
+**Réserve** : les cinq défauts trouvés étaient **tous silencieux** (§8.4) — le
+système démarrait et se disait en bon état dans chaque cas. La leçon vaut pour
+la suite du projet : sur ce socle, une panne se signale rarement.
+
+### 11.2 §7.2 — Test de casse réel
+
+> *« sabotage volontaire du système […] → restauration par snapshot → système
+> fonctionnel. Exécuté pour de vrai, pas sur le papier. »*
+
+**Preuve** : §9 de ce document, déroulé le 2026-08-28 **sur l'installation du §8,
+sans jamais la réinstaller**. Sabotage réel (`rm /usr/bin/ls`, §9.3), restauration
+par `eschaton-rollback` (§9.4 : `ROLLBACK_OK`, `pacman -Qkk coreutils` de nouveau
+à 0 fichier modifié, `systemctl --failed` vide), et **démarrage sur un snapshot
+depuis Limine** (§9.5) — le troisième scénario de la spec §6, celui du système
+qui ne démarre plus. Le §9.8 vérifie le correctif **par le chemin complet** —
+paquet publié → `eschaton-update` → empreintes identiques au dépôt — et non par
+un fichier posé à la main. Le §9.9 montre la VM rendue propre à la fin.
+
+**Rapport** : `task-10-report.md` (verdict : §7.2 validé).
+
+**Commits** : `ed27687` valide le critère. Le test a trouvé **quatre défauts,
+dont un bloquant** — `eschaton-rollback` ne fonctionnait pas du tout :
+`b71153c` (méthode `replace` : `snapper rollback` exige la disposition openSUSE),
+`398763a` (`--recursive` sur le nettoyage indiqué), `b7f8137` (refus de
+s'exécuter depuis un snapshot démarré), `78e4d73` (`/etc/sudoers.d` n'est plus
+revendiqué en 755). La spec §6 a été amendée en conséquence (`f801713`), et le
+contrat de `--restore-kernels` vérifié statiquement (`806fcea`).
+
+**Réserve ouverte, consignée §9.10** : le rollback **à travers un changement de
+kernel** n'a pas été exercé dynamiquement — les sept snapshots de la VM
+partagent la même empreinte de kernel, faute de mise à jour ALARM pendant le
+test. Le contrat de `limine-snapper-sync --restore-kernels` est vérifié sur ses
+sources (tag 1.31.0) ; la preuve dynamique reste due, et le §10.9 note que la VM
+x86_64 la rend exécutable dès maintenant (deux kernels distincts en
+`limine_history/`).
+
+### 11.3 §7.3 — Cible x86_64 prouvée
+
+> *« le même `eschaton-install` déroulé dans une VM x86_64 émulée (lente — smoke
+> test uniquement) produit un système qui boote. »*
+
+**Preuve** : §10 de ce document, déroulé le 2026-08-28 sur la VM
+`eschaton-x86-smoke`. Le même installeur, **sans une ligne de modification** —
+empreintes de `eschaton-install` et `lib.sh` relevées dans la VM et identiques au
+dépôt. Checklist et sorties réelles au §10.7 : `SMOKE_X86_OK`, `uname -m` →
+`x86_64`, détection du vendeur de microcode (`intel-ucode` posé, `amd-ucode`
+absent), cinq subvolumes, ESP 4 Gio, zram seul, `systemctl --failed` vide,
+`eschaton-update` → `rc=0` avec mise à jour de kernel puis redémarrage sur
+`7.1.10-arch1-1` avec modules concordants. Le §10.5 mesure le coût réel de
+l'émulation (≈ 3×, pas 15×) et le §10.8 liste les pièges propres à ce test.
+
+**Rapport** : `task-11-report.md` (statut : §7.3 validé, aucun défaut trouvé,
+aucun correctif au dépôt).
+
+**Commits** : `035fe92` valide le critère ; `c9a8a40` documente la fabrication de
+l'ISO patchée (console série) et rend le test rejouable.
+
+**Ce que ce test a aussi levé** : la réserve que la Task 9 avait laissée ouverte
+sur `limine-entry-tool` (§8.6), qui ne s'exerce que sur x86_64 — voir §10.6.
+`TARGET_OS_NAME` harmonise l'outil avec `limine-snapper-sync` et avec le
+`limine.conf` de l'installeur : pas d'entrée en double, `default_entry` et
+`cmdline` intacts, ancre `//Snapshots` préservée. **Constat neuf porté au registre
+des risques** (spec §8) : `limine-entry-tool` installe sur x86_64 son propre
+exemplaire de Limine (`/boot/EFI/limine/`) plus une entrée NVRAM prioritaire, à
+côté de celui posé par l'installeur — bénin tant que les binaires sont
+identiques, dette surveillée si les chemins de mise à jour divergent.
+
+### 11.4 §7.4 — CI verte, dépôt publié et installable
+
+> *« lint des scripts shell (shellcheck), lint des PKGBUILDs (namcap), build des
+> paquets, dépôt publié et installable. »*
+
+Le seul critère re-vérifié **en direct** à la clôture. La CI tourne sur `socle`
+(et sur `main`) : tant que la branche n'est pas fusionnée, c'est `socle` qui fait
+foi.
+
+```console
+$ gh run list --branch socle --limit 1
+completed  success  fix: contrat de --restore-kernels vérifié statiquement …
+           ci  socle  push  33134865064  4m51s  2026-08-28T02:05:50Z
+```
+
+Les quatre jobs du run, tous `success` — c'est leur découpage qui couvre les
+quatre exigences du critère :
+
+| Job | Couvre | Résultat |
+|---|---|---|
+| `lint` | `shellcheck` sur les 9 scripts du dépôt, `bats tests/` | `success` |
+| `build-x86_64` | `repo/build-repo` en conteneur Arch natif — build des 4 paquets + `namcap` (informatif, spec §7.4) | `success` |
+| `build-aarch64` | idem sur runner `ubuntu-24.04-arm`, image ALARM | `success` |
+| `publish` | index `repo-add` des deux architectures assemblé et déployé sur GitHub Pages | `success` |
+
+**Dépôt publié et installable**, vérifié le 2026-08-28 depuis le Mac :
+
+```console
+$ curl -fsI https://seylar.github.io/eschaton/x86_64/eschaton.db
+HTTP/2 200
+last-modified: Fri, 28 Aug 2026 02:10:35 GMT
+
+$ curl -fsI https://seylar.github.io/eschaton/aarch64/eschaton.db
+HTTP/2 200
+last-modified: Fri, 28 Aug 2026 02:10:35 GMT
+```
+
+(Extraits : `curl -fsI` rend l'en-tête complet ; `-I` et non `-i`, on ne
+télécharge pas l'index pour savoir qu'il est là.)
+
+L'horodatage est celui du run ci-dessus : c'est bien lui qui a publié l'index
+servi. Et « installable » n'est pas une lecture d'en-tête HTTP — c'est le chemin
+qu'ont emprunté les deux tests d'installation : §9.8 (aarch64 :
+`eschaton-update` installe `eschaton-base-0.1.0-10` depuis ce dépôt, empreintes
+identiques aux fichiers du dépôt git) et §10.7 (x86_64 : `eschaton-base 0.1.0-11`,
+`pacman -Qkk` à 0 fichier modifié).
+
+**Rapport** : `task-8-report.md` (statut `DONE_WITH_CONCERNS`) ; **commit** :
+`fa34322` (CI GitHub : lint, build des deux architectures, dépôt publié), avec
+`687a104` (`build-repo` refuse aussi un dépôt vide — un index valide et vide
+aurait fait disparaître tous les paquets d'un `pacman -Syu`).
+
+**Réserve, héritée de la Task 8** : le Gradle Plugin Portal est instable depuis
+le runner ARM — c'est la seule source connue d'échec intermittent de la CI, sur
+les deux paquets vendorés. Elle n'a pas rejoué depuis.
+
+> Le run déclenché par le commit qui porte cette section est suivi jusqu'à son
+> terme au moment de la clôture ; son numéro et son résultat sont consignés dans
+> `task-12-report.md`.
+
+### 11.5 Ce que « Socle terminé » ne dit pas
+
+Le §7 est atteint ; il ne prétend pas que tout est prouvé. Restent dus, tracés
+et non bloquants pour `v0.1.0` :
+
+- le **rollback à travers un changement de kernel** (§9.10) — protocole écrit,
+  exécutable sur la VM x86_64 (§10.9) ;
+- la **signature du dépôt** — dette v0 assumée, prérequis bloquant du
+  sous-projet 4 (spec §5.3 et risque n° 4) ;
+- le **double Limine sur x86_64** (§10.6) — surveillance, spec §8 ;
+- la **vérification elle-même**, qui reste une checklist manuelle en v0 : son
+  automatisation sous QEMU est un chantier ultérieur, nommé par la spec §7.
+
