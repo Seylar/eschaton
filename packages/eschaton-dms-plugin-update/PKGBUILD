@@ -1,0 +1,17 @@
+pkgname=eschaton-dms-plugin-update
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Plugin DMS Eschaton : disponibilité et installation des mises à jour"
+arch=(any)
+license=(MIT)
+depends=(dms-shell pacman-contrib foot eschaton-base)
+source=(plugin.json EschatonUpdateWidget.qml EschatonUpdateSettings.qml LICENSE)
+sha256sums=(SKIP SKIP SKIP SKIP)
+
+package() {
+  local plugin_dir="$pkgdir/etc/xdg/quickshell/dms-plugins/eschatonUpdate"
+  install -Dm644 plugin.json "$plugin_dir/plugin.json"
+  install -Dm644 EschatonUpdateWidget.qml "$plugin_dir/EschatonUpdateWidget.qml"
+  install -Dm644 EschatonUpdateSettings.qml "$plugin_dir/EschatonUpdateSettings.qml"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
