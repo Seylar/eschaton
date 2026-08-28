@@ -1,6 +1,6 @@
 pkgname=eschaton-desktop-config
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Configuration du bureau Eschaton : session Wayland, greetd, défauts Hyprland"
 arch=(any)
 license=(MIT)
@@ -11,9 +11,9 @@ backup=(etc/eschaton/greetd.toml)
 # relatif ("../../LICENSE") n'est pas résoluble — cf. get_filename() dans
 # /usr/share/makepkg/util/source.sh. Le lien conserve une licence unique.
 source=(eschaton-session eschaton.desktop greetd-eschaton.toml greetd-override.conf
-        51-eschaton-desktop.preset hyprland-session.target
+        51-eschaton-desktop.preset 90-eschaton-desktop-preset.hook hyprland-session.target
         seed-hyprland.lua eschaton-defaults.lua LICENSE)
-sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
 
 package() {
   install -Dm755 eschaton-session "$pkgdir/usr/bin/eschaton-session"
@@ -29,6 +29,12 @@ package() {
   install -Dm644 greetd-eschaton.toml "$pkgdir/etc/eschaton/greetd.toml"
   install -Dm644 greetd-override.conf "$pkgdir/usr/lib/systemd/system/greetd.service.d/eschaton.conf"
   install -Dm644 51-eschaton-desktop.preset "$pkgdir/usr/lib/systemd/system-preset/51-eschaton-desktop.preset"
+  # …et le crochet qui l'applique. Sans lui le préset ci-dessus n'est lu par
+  # personne sur un système déjà installé : rien dans pacman ni dans Arch ne joue
+  # `systemctl preset`. Numéroté 90- pour passer APRÈS les crochets systemd d'Arch
+  # (20- à 35-), donc après le `daemon-reload`. Voir l'en-tête du fichier pour la
+  # justification complète (exception versionnée de la spec du Socle §3).
+  install -Dm644 90-eschaton-desktop-preset.hook "$pkgdir/usr/share/libalpm/hooks/90-eschaton-desktop-preset.hook"
 
   # dms.service est livré `disabled` par dms-shell alors que son préset vaut
   # `enabled` : rien n'applique jamais les présets d'unités UTILISATEUR
