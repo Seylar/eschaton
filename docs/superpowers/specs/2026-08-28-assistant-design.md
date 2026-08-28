@@ -79,5 +79,5 @@ La veille (§7.4) éclaire deux candidats viables ; la spec acte la **trajectoir
 
 ## 8. Ce que l'Assistant prépare
 
-- **SP4** : serveur MCP exposant le catalogue (schémas déjà compatibles), mémoire persistante, greeter/onboarding qui configure le premier fournisseur ; signature du dépôt avant toute distribution.
+- **SP4** : serveur MCP exposant le catalogue (schémas déjà compatibles), mémoire persistante, greeter/onboarding qui configure le premier fournisseur **et déverrouille le trousseau par PAM (module gnome-keyring — exigence héritée de l'ADR 0003 §8.3, critères §6 de l'ADR rejoués au login authentifié)** ; signature du dépôt avant toute distribution.
 - **B** : l'extraction du démon quand la boucle d'outils est stable — le contrat §3 est écrit pour ça.

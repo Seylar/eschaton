@@ -2,7 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    # `assistant` : lint + builds de validation SP3 (le déploiement Pages reste main-only
+    # jusqu'à la vague de publication — motif SP2, policy à ajouter à ce moment-là).
+    branches: [main, assistant]
   pull_request:
 
 # La sérialisation doit couvrir les BUILDS, pas seulement le déploiement Pages.
