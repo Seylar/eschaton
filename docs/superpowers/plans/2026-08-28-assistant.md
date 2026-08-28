@@ -29,6 +29,8 @@ Veille risque 12 : aucun plugin IA DMS n'a jamais été installé ; risque 7 : c
 
 ### Task 2 : `AssistantCore` + adaptateur `openai` (le moteur)
 
+**Exécutée le 2026-08-28.** Moteur, catalogue, fixtures et harnais : `packages/eschaton-dms-plugin-assistant/` ; preuves VM : `tools/vm-dev.md` §20.
+
 1. `AssistantCore.qml` (+ `providers/OpenAIAdapter.qml` ou .js) : le contrat de la spec §3, la boucle conversation→outils, le parsing SSE (motifs validés au spike), `Process`+`curl` (URL/headers/body via argv, JAMAIS de shell interpolé), timeout et annulation propres.
 2. Le catalogue d'outils est déclaré ici (schémas JSON compatibles MCP, spec §5) mais les exécuteurs arrivent en Task 5 — stubs qui répondent « outil non encore branché ».
 3. Validation sans VM : `qmllint` ; fixtures SSE (fichiers de chunks réels captés au spike) rejouées via un harnais `qs`/`quickshell` minimal DANS LA VM, sorties consignées ; `jq` sur les schémas d'outils.

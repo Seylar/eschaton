@@ -3052,3 +3052,102 @@ conteneur `eschaton-sp3-spike` est arrêté. DMS a été redémarré : service
 `active`, seuls `eschatonUpdate` et `eschatonRollback` sont chargés, RSS revenu
 à 380 388 KiB. `ramalama`, `podman` et le modèle restent installés volontairement
 dans la VM de dogfooding pour les Tasks 2 et 6 ; aucun serveur ne tourne.
+
+## 20. SP3 Task 2 — `AssistantCore` et format OpenAI (2026-08-28)
+
+### 20.1 Ce qui est écrit
+
+`packages/eschaton-dms-plugin-assistant/AssistantCore.qml` matérialise la
+frontière de la spec : `send()`, signaux `delta`/`toolCall`/`done` (donc handlers
+QML `onDelta`/`onToolCall`/`onDone`) et `toolResult()`. L'UI ne voit jamais le
+`Process`. Le transport appelle directement `/usr/bin/curl` par argv, sans
+shell. Une clé éventuelle entre dans l'environnement enfant ; curl l'importe
+avec `--variable` et construit le header avec `--expand-header`, donc le secret
+n'apparaît pas dans argv.
+
+Le choix du spike est appliqué, pas seulement commenté :
+
+- `SplitParser` rend des chunks bruts ; le core reconstruit LF/CRLF et les
+  événements SSE sans conserver stdout en entier ;
+- les deltas sont regroupés par un timer de 16 ms avant mutation du `ListModel` ;
+- limites explicites : réponse 262 144 caractères, événement/tampon 1 MiB,
+  charge cumulée des appels d'outils 64 KiB, huit appels par tour, stderr
+  4 KiB, historique 40 messages, quatre tours d'outils, arrêt au troisième JSON
+  SSE invalide ;
+- timeout curl et `cancel()` envoient SIGTERM via `Process.running = false` ;
+- `finish_reason: length` devient `done("truncated")`, et non un faux succès ;
+- seuls les statuts HTTP 2xx et une réponse SSE exploitable deviennent un
+  succès ; une redirection, un statut absent ou un flux vide sont des erreurs ;
+- le catalogue versionné `tool-catalog.json` contient exactement
+  `system_status`, `trigger_update`, `propose_rollback`, avec schémas stricts et
+  `additionalProperties:false` ; tout autre nom est refusé ;
+- noms et arguments sont revalidés avant le signal `toolCall`, les identifiants
+  fournisseur sont préfixés dans la table interne (donc `__proto__` reste une
+  donnée) et un identifiant dupliqué fait échouer le tour ;
+- en attendant les exécuteurs Task 5, un outil autorisé reçoit réellement le
+  résultat JSON `outil non encore branché` et la boucle peut continuer.
+
+L'adaptateur `providers/OpenAIAdapter.js` normalise les bases avec ou sans
+suffixe `/vN`, construit payload/argv et transforme contenu, fragments
+`tool_calls`, raisons de fin, `[DONE]` et erreurs fournisseur en événements
+internes. `curl --disable` neutralise aussi tout `curlrc` utilisateur. Aucun
+agent CLI, `Quickshell.Networking`, mode auto-approuvé ou second chemin
+privilégié n'a été introduit.
+
+### 20.2 Fixtures et tests
+
+La fixture contenu est une réduction fidèle du flux RamaLama du §19 (mêmes id,
+modèle et chunks `**`, `R`, `é`, `ponds`, puis `length`). Une seconde fixture
+rejoue un nom et des arguments d'outil fragmentés.
+
+Dans la VM :
+
+```console
+$ /usr/lib/qt6/bin/qmllint --signal-handler-parameters disable -W 0 \
+    packages/eschaton-dms-plugin-assistant/AssistantCore.qml \
+    packages/eschaton-dms-plugin-assistant/ParserHarness.qml \
+    packages/eschaton-dms-plugin-assistant/CoreHarness.qml
+$ XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 \
+    qs -p packages/eschaton-dms-plugin-assistant/ParserHarness.qml --no-color
+DEBUG qml: ASSISTANT_PARSER_HARNESS_OK
+$ XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 \
+    qs -p packages/eschaton-dms-plugin-assistant/CoreHarness.qml --no-color
+DEBUG qml: ASSISTANT_CORE_HARNESS_OK status=truncated chars=228
+```
+
+La catégorie qmllint désactivée est le faux positif connu
+`QProcess::ExitStatus` des qmltypes Quickshell ; la même alerte sort sur les
+widgets DMS existants. `-W 0` laisse toute autre alerte fatale : la commande est
+sortie sans message.
+
+Le second harnais n'est pas un replay : il a exercé le vrai `AssistantCore`, le
+vrai `Process`, curl, le catalogue envoyé au fournisseur et RamaLama loopback.
+Un premier run mesuré a généré 64 tokens en 429,28 ms (170,97 tokens/s) et 293
+caractères. Après la revue de bornage (64 KiB de charge outil, huit appels par
+tour, `curlrc` neutralisé), puis le rejet précoce des outils invalides et des
+statuts HTTP non-2xx, les fichiers exacts ont été retransférés et les trois
+contrôles ci-dessus rejoués : le run non déterministe final a rendu 228
+caractères et a de nouveau correctement exposé la troncature.
+
+Côté hôte, `bats tests/` rend `1..41`, quarante-et-un succès. Les six nouveaux tests
+verrouillent les trois noms du catalogue, les schémas stricts, le seul argument
+`snapshot_id`, l'absence de shell/`Quickshell.Networking` et le passage de clé
+par expansion d'environnement curl ; ils imposent aussi l'ignorance de
+`curlrc` et les bornes cumulées des appels d'outils.
+
+### 20.3 Défaut trouvé pendant le harnais et nettoyage
+
+La première version utilisait `SplitParser` avec `splitMarker:"\n"` et attendait
+un callback vide pour la ligne séparant deux événements SSE. Quickshell ne rend
+pas ces tokens vides : le test live terminait `status=ok` avec zéro caractère.
+Le core lit désormais les chunks bruts (`splitMarker:""`) et reconstruit lui-même
+les lignes ; le contrôle final passe avec du contenu non vide. Sans le harnais réel,
+ce bug aurait survécu au lint et au replay pur de l'adaptateur. Le contrôle live
+final vérifie aussi qu'un outil hors catalogue et un `snapshot_id` nul sont
+refusés avant l'appel réseau.
+
+Les conteneurs de harnais `eschaton-sp3-core-harness` et
+`eschaton-sp3-core-final` puis `eschaton-sp3-core-bounded` sont arrêtés et
+supprimés, de même que `eschaton-sp3-core-final-audit` ; les répertoires de
+transfert `/tmp/assistant-task2{,-final,-bounded,-final-audit}` sont supprimés ;
+`podman ps` est vide. Le modèle RamaLama reste en cache pour la suite.

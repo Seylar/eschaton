@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "system_status",
+        "description": "Lit l'état Eschaton : mises à jour, snapshots et métriques. Cette opération est strictement en lecture seule.",
+        "strict": true,
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "trigger_update",
+        "description": "Ouvre le flux de mise à jour Eschaton existant. L'utilisateur voit le terminal et authentifie lui-même l'action privilégiée.",
+        "strict": true,
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "propose_rollback",
+        "description": "Propose la restauration d'un snapshot existant. Une modale polkit exige toujours l'authentification humaine avant l'action.",
+        "strict": true,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "snapshot_id": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Numéro positif d'un snapshot présent dans la liste Snapper courante."
+            }
+          },
+          "required": ["snapshot_id"],
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}
