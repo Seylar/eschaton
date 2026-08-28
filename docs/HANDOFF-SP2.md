@@ -10,7 +10,7 @@
   - T1 (spike rendu) : validé — Quickshell/DMS rendent sous virtio-gpu ; Hyprland exige `LIBGL_ALWAYS_SOFTWARE=1` (réglage **de la VM**, jamais des paquets).
   - T2 (`eschaton-desktop-config`) : livré et prouvé en session réelle (wrapper `eschaton-session`, greetd par drop-in, canal d'accroche via `dms/binds-user.lua`, target `hyprland-session.target` comblé).
   - T3 (meta `eschaton-desktop` + wallpaper + hook preset) : livré (14 depends dont `pipewire-pulse` — correction, pas précaution ; hook alpm `systemctl preset greetd.service` qui marche AUSSI en chroot/pacstrap).
-  - T4 (`tools/check-desktop-deps`, garde CI bi-arch) : livré ; **sa revue était en cours au moment du handoff** — considérer comme « à re-vérifier » (exécuter le script en local : il doit sortir 0 ; `--extra-dep intel-ucode` doit sortir 1).
+  - T4 (`tools/check-desktop-deps`, garde CI bi-arch) : livré **et revu (Approved)** — le reviewer a reproduit chaque claim par exécution indépendante. 4 mineurs différés (commentaires inexacts : pipefail « premier étage », renvoi « Tasks 4 et 5 » au lieu de T5/T6 ; raffinements de contrat de sortie sur chemins d'erreur déjà bruyants) — corrigeables au fil de l'eau, rien de bloquant.
 - **Restent : T5 à T9** (voir §4).
 - **Rien de la vague SP2 n'est publié** : c'est voulu (le dépôt pacman publié ne doit pas référencer un meta dont les plugins n'existent pas). La publication est l'affaire de T6.
 
