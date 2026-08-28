@@ -45,7 +45,7 @@ Quatre paquets `arch=(any)`, mêmes conventions que le Socle (LICENSE symlink, d
 
 ## 5. Flux de session
 
-`greetd` (preset enable) → auto-login utilisateur → session `eschaton` (entrée Wayland packagée) → `Hyprland -c ~/.config/hypr/hyprland.lua` → autostart DMS (`dms run` via la config) → barre + Control Center + plugins chargés depuis `/etc/xdg/quickshell/dms-plugins/`. Aucune étape terminal.
+`greetd` (preset enable) → auto-login utilisateur → session `eschaton` (entrée Wayland packagée) → `start-hyprland -- -c ~/.config/hypr/hyprland.lua` (§4.1) → autostart DMS (`dms run` via la config) → barre + Control Center + plugins chargés depuis `/etc/xdg/quickshell/dms-plugins/`. Aucune étape terminal.
 
 ## 6. Vérification — définition de « Bureau terminé »
 
