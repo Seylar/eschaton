@@ -1,7 +1,7 @@
 # Eschaton — Spec de conception : le Bureau
 
 - **Date** : 2026-08-28
-- **Statut** : rédigée sur passe de veille datée ([rapport](../../veille/2026-08-28-sp2-bureau.md)) — publiée pour relecture, exécution autorisée par la directive du 2026-08-28
+- **Statut** : **implémentée sur `bureau`, validée en VM le 2026-08-28 — revue Claude requise avant tag et fusion**
 - **Sous-projet** : 2/5 (Bureau)
 - **Amont** : [Spec du Socle](2026-08-27-socle-design.md), [ADR 0001](../../decisions/0001-shell-du-bureau.md) (+ addendum), [ADR 0002](../../decisions/0002-veille-avant-spec.md)
 
@@ -31,12 +31,12 @@ Quatre paquets `arch=(any)`, mêmes conventions que le Socle (LICENSE symlink, d
 
 | Paquet | Rôle | Contenu principal |
 |---|---|---|
-| `eschaton-desktop` | Meta | Dépend : `hyprland`, `dms-shell-hyprland` (tire dms-shell, quickshell, dgop ; le compositeur reste substituable — `dms-shell-niri` fournit le même virtuel `dms-shell-compositor`), `pipewire`, `wireplumber`, `xdg-desktop-portal-hyprland`, `greetd`, `polkit`, **`btrfs-assistant`** (rollback graphique disponible dès le jour 1 — dette assumée : retiré quand le plugin natif §3 le remplace, condition de sortie explicite per ADR 0002), polices (`ttf-jetbrains-mono-nerd`, `noto-fonts`), `eschaton-desktop-config`, les deux plugins. |
+| `eschaton-desktop` | Meta | Dépend : `hyprland`, `dms-shell-hyprland`, `pipewire` + `pipewire-pulse` + `wireplumber`, portails Hyprland **et GTK** (FileChooser), `greetd`, `polkit`, polices (`ttf-jetbrains-mono-nerd`, `noto-fonts`), `eschaton-desktop-config`, les deux plugins. **`btrfs-assistant` a été retiré** : le plugin natif remplit sa condition de sortie et son rollback a été prouvé en VM. |
 | `eschaton-desktop-config` | Configs | Config Hyprland **en Lua** (voir §4), entrée de session Wayland, config greetd (auto-login → session Hyprland), `/etc/skel/.config/hypr/hyprland.lua` d'amorçage, drop-in preset (`greetd.service`). |
-| `eschaton-dms-plugin-update` | Plugin DMS | `/etc/xdg/quickshell/dms-plugins/eschaton-update/` — QML + manifest, permission `process` (exécute `eschaton-update`), vérification périodique (`checkupdates`-équivalent en lecture seule). |
-| `eschaton-dms-plugin-rollback` | Plugin DMS | `/etc/xdg/quickshell/dms-plugins/eschaton-rollback/` — QML + manifest. **Liste** des snapshots (date, description) : lecture seule via **snapperd D-Bus** (`org.opensuse.Snapper`), sans privilège. **Restauration** : le plugin orchestre la **méthode « replace »** — la logique d'`eschaton-rollback` ([Socle §6](2026-08-27-socle-design.md), amendé le 2026-08-28) — derrière polkit, puis invite au reboot. `snapper rollback` est **écarté** : réfuté par la Task 10 (« Cannot detect ambit » sur la disposition Arch), et snapperd n'expose de toute façon aucun rollback sur D-Bus. La surface privilégiée exacte — helper dédié, `pkexec`, ou service D-Bus maison — se tranche en tâche dédiée (§7, risque 5). Pas de sudo interactif, pas de terminal. |
+| `eschaton-dms-plugin-update` | Plugin DMS | `/etc/xdg/quickshell/dms-plugins/eschatonUpdate/` — QML + manifest, badge via `checkupdates`, rafraîchissement périodique et à l'ouverture, lancement visible de `eschaton-update --yes` dans Foot. `fakeroot` est une dépendance explicite de `checkupdates`. |
+| `eschaton-dms-plugin-rollback` | Plugin DMS | `/etc/xdg/quickshell/dms-plugins/eschatonRollback/` — QML + manifest. **Liste** via le client `snapper --jsonout` (lecture autorisée au groupe `wheel` par la config Snapper). **Restauration** : `pkexec /usr/bin/eschaton-rollback --yes NUMÉRO`, autorisé uniquement pour une session locale active du groupe `wheel` par l'action `org.eschaton.rollback`; le helper applique la méthode **replace**. `snapper rollback` reste écarté. Confirmation en deux gestes, puis invitation au reboot. |
 
-`eschaton-branding` (Socle) gagne : un fond d'écran Eschaton + la valeur de thème DMS par défaut. `eschaton-base` ne change pas ; `eschaton-desktop` s'installe par-dessus un Socle existant (`pacman -S eschaton-desktop`) — c'est aussi le test d'upgrade du modèle fat packages.
+`eschaton-branding` (Socle) gagne un fond d'écran Eschaton. Le provisioning initial le pose par l'IPC officiel DMS seulement si aucun choix utilisateur n'existe. `eschaton-base` gagne les interfaces non interactives strictes des helpers ; `eschaton-desktop` s'installe par-dessus un Socle existant (`pacman -S eschaton-desktop`) — c'est aussi le test d'upgrade du modèle fat packages.
 
 ## 4. Les deux pièges de configuration (veille §3, invariants)
 
@@ -55,6 +55,23 @@ Quatre paquets `arch=(any)`, mêmes conventions que le Socle (LICENSE symlink, d
 4. L'invariant Lua tient : `hyprctl version` + preuve que la config chargée est le Lua ; suppression volontaire du `-c` → constat que la config serait ignorée (documenté).
 5. CI verte (paquets `any` publiés, installables des deux architectures).
 6. Zéro terminal pour : régler réseau/audio/affichage, mettre à jour, restaurer.
+
+### 6.1 Résultat de la validation VM du 2026-08-28
+
+| Critère | Verdict | Preuve synthétique |
+|---|---|---|
+| 1. Rendu virtio-gpu | **OK** | DMS 1.5.3 et Hyprland rendent sans artefact bloquant ; captures 1280×800. `LIBGL_ALWAYS_SOFTWARE=1` reste un réglage de cette VM seulement. |
+| 2. Installation et reboot | **OK** | `pacman -S eschaton-desktop`, reboot, auto-login greetd sur `seat0`; `dms.service` actif. |
+| 3. Update + rollback réels | **OK** | Update depuis le widget : `pacman -Syu --noconfirm`, snapshots 32/33 et entrées Limine. Rollback depuis le widget vers 33 : `cowsay` absent après reboot, marqueur `/home` conservé, racine `/dev/vda2[/@]`. |
+| 4. Lua | **OK** | Session lancée par `eschaton-session`; l'accroche Eschaton vit dans `dms/binds-user.lua`, résiste à `dms setup`; la disposition française vient de l'environnement XKB de session. |
+| 5. CI bi-architecture | **OK** | Builds et publication x86_64/aarch64 verts sur `bureau`; les archives de même version sont désormais immuables. |
+| 6. Zéro terminal | **OK pour update/rollback et surfaces DMS ; réserve matérielle audio** | Les parcours update/rollback ont été faits à la souris. Réseau et affichage sont exposés dans le Control Center. La VM est lancée avec `-audio none` : elle ne peut pas prouver le réglage d'un périphérique audio réel, seulement la présence de PipeWire/WirePlumber et de l'interface. |
+
+Le tag `v0.2.0` n'est volontairement **pas créé** à ce stade : le demandeur a
+exigé une revue Claude de la branche complète avant publication finale. Tagger
+avant cette revue donnerait un faux signal d'immutabilité et compliquerait une
+correction éventuelle. La fusion vers `main` et le tag appartiennent donc à la
+revue finale, pas à cette exécution.
 
 ## 7. Risques (table datée du 2026-08-28)
 

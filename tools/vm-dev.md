@@ -2437,3 +2437,173 @@ tools/vm-serial run "base64 -d /tmp/paquet.b64 > /tmp/paquet.pkg.tar.xz; sha256s
 
 8 Kio (24 morceaux) passent en une vingtaine de secondes, empreinte vérifiée
 des deux côtés.
+
+## 14. Plugins DMS Eschaton (SP2, Tasks 5–6)
+
+### 14.1 Motifs amont retenus
+
+L'étude a été faite contre DMS **1.5.3**, sa documentation versionnée et ses
+plugins first-party, pas contre `master`. Le squelette utile est : imports
+`Quickshell.Io` et `qs.Common`/`qs.Services`/`qs.Widgets`/`qs.Modules.Plugins`,
+racine `PluginComponent`, commandes par `Process` + `StdioCollector`, widget de
+barre déclaré par la capability `dankbar-widget`. Les plugins système vivent
+sous `/etc/xdg/quickshell/dms-plugins/<id>/`.
+
+La présence du répertoire ne vaut ni activation ni placement. Le provisioning
+initial utilise donc l'IPC DMS pour activer `eschatonUpdate` et
+`eschatonRollback`, matérialise `barConfigs[0]`, puis ajoute les deux ids à
+`rightWidgets` sans déplacer ni dupliquer les widgets existants. Le service est
+tiré **après** `dms.service` par un drop-in du service DMS ; le premier montage
+sur `graphical-session.target` fabriquait un cycle réel et a été supprimé.
+
+Le chargement et le hot reload ont été prouvés dans la VM :
+
+```console
+$ dms ipc call plugins reload eschatonUpdate
+PLUGIN_RELOAD_SUCCESS: eschatonUpdate
+
+$ journalctl --user -u dms | grep 'Plugin loaded: eschaton'
+DankBar: Plugin loaded: eschatonUpdate
+DankBar: Plugin loaded: eschatonRollback
+```
+
+### 14.2 Update
+
+Le widget compte les lignes de `checkupdates`, affiche un badge, et ouvre Foot
+pour exécuter `/usr/bin/eschaton-update --yes` avec une sortie visible. Deux
+défauts n'apparaissaient qu'en conditions réelles :
+
+- `checkupdates` exige `fakeroot`, qui n'est pas une dépendance dure de
+  `pacman-contrib` sur cette image ; le plugin le déclare désormais ;
+- le badge pouvait rester périmé jusqu'au prochain timer ; ouvrir le popout
+  déclenche désormais une nouvelle lecture.
+
+### 14.3 Rollback et privilèges
+
+Le widget lit `snapper --jsonout --config root list`, trie les numéros du plus
+récent au plus ancien, demande deux clics, puis lance exactement :
+
+```text
+pkexec /usr/bin/eschaton-rollback --yes NUMÉRO
+```
+
+La règle ne donne pas un blanc-seing Snapper : elle n'autorise que l'action
+`org.eschaton.rollback`, l'exécutable exact ci-dessus, pour un sujet local,
+actif et membre de `wheel`. Snapper n'a pas d'actions polkit propres à ouvrir ;
+sa lecture passe par ses réglages `ALLOW_GROUPS`. La liste étant conservée en
+mémoire par le plugin, elle pouvait devenir périmée ; chaque ouverture relit
+maintenant Snapper.
+
+## 15. Installation réelle du Bureau (SP2, Task 7)
+
+Installation effectuée depuis le dépôt Pages sur la VM Socle existante :
+
+```console
+$ sudo pacman -Syu --noconfirm
+$ sudo pacman -S --noconfirm eschaton-desktop
+$ sudo reboot
+
+$ loginctl list-sessions --no-legend
+1 1000 seylar seat0 ... user tty1 ...
+
+$ systemctl --user is-active dms.service eschaton-dms-provision.service
+active
+active
+```
+
+Le premier essai du provisioning a révélé un cycle
+`graphical-session.target → eschaton-dms-provision → dms.service →
+graphical-session.target`. Après passage au drop-in `dms.service.d`, le reboot
+rend le helper `active (exited)` avec `status=0/SUCCESS`, sans commande manuelle.
+
+Arbitrages écran en main :
+
+- **wallpaper** : `dms ipc call wallpaper get` est vide quand DMS montre son
+  repli interne. Le helper pose alors
+  `/usr/share/backgrounds/eschaton/default.png` par l'IPC officiel. Toute valeur
+  utilisateur non vide est préservée ; le dégradé ne montre pas de banding
+  gênant sur la capture 1280×800 ;
+- **FileChooser** : la VM n'avait que `hyprland.portal`, qui ne déclare que
+  Screenshot, ScreenCast, GlobalShortcuts et InputCapture. Le meta ajoute
+  `xdg-desktop-portal-gtk` pour les interfaces génériques manquantes ;
+- **emoji** : aucune glyphe tofu observée, donc `noto-fonts-emoji` reste absent ;
+- **audio** : PipeWire, WirePlumber et le socket Pulse sont actifs. La VM a été
+  créée avec `-audio none`, donc l'absence de périphérique ne permet pas un test
+  matériel et ne justifie pas de prétendre le contraire ;
+- **clavier Lua** : `hyprctl getoption input:kb_layout` reste vide parce que la
+  valeur française est injectée par `XKB_DEFAULT_LAYOUT=fr` dans l'environnement
+  du processus Hyprland. L'exemple du plan qui attendait littéralement `fr` dans
+  `getoption` était donc faux ; la config Lua et la disposition effective sont
+  néanmoins bien celles attendues.
+
+## 16. Tests réels Update et Rollback (SP2, Task 8)
+
+### 16.1 Mise à jour depuis le widget
+
+Une version ancienne de `eschaton-base` a d'abord été installée pour provoquer
+une mise à jour. Elle contenait précisément l'ancien bug qui transmettait
+`--yes` à Pacman et ne pouvait donc pas s'auto-réparer. Le test honnête a consisté
+à remettre le helper corrigé, puis à laisser `eschaton-desktop-config 3 → 4`
+comme mise à jour réelle. Depuis le bouton **Installer** :
+
+```console
+$ pgrep -af 'pacman -Syu'
+5282 sudo pacman -Syu --noconfirm
+
+$ pacman -Q eschaton-base eschaton-desktop-config
+eschaton-base 0.1.0-12
+eschaton-desktop-config 0.1.0-4
+
+$ snapper -c root list | tail -n 2
+32 │ pre  │ ... │ pacman -Syu --noconfirm
+33 │ post │ 32  │ ... │ eschaton-desktop-config
+```
+
+`/boot/limine.conf` contient également les entrées 32 et 33, avec
+`rootflags=subvol=/@snapshots/<n>/snapshot` et les copies de kernel historisées.
+
+Ce test a trouvé un défaut du dépôt : la CI reconstruisait et republiait des
+octets différents sous le même `pkgrel`, invalidant les caches Pacman. Le build
+charge désormais l'index public, vérifie les SHA-256 et réutilise octet pour
+octet toute archive dont le nom de version existe déjà. Un bump reste nécessaire
+pour publier un contenu différent.
+
+### 16.2 Rollback depuis le widget
+
+Après l'update :
+
+```console
+$ touch ~/MARQUEUR-AVANT
+$ sudo pacman -S --noconfirm cowsay
+# snapshots 34 (pre) et 35 (post)
+```
+
+Le widget a été actualisé, le snapshot **33** sélectionné, puis le bouton
+**Confirmer le rollback 33** actionné. Polkit a autorisé l'action sans demande
+redondante et l'ancien état a été conservé sous
+`@.avant-rollback-20260828-132747`. Après reboot :
+
+```console
+$ pacman -Q cowsay
+erreur : le paquet « cowsay » n'a pas été trouvé
+$ test -f ~/MARQUEUR-AVANT && echo HOME_MARKER_PRESENT
+HOME_MARKER_PRESENT
+$ findmnt -no SOURCE /
+/dev/vda2[/@]
+```
+
+Le rollback système, l'exclusion de `/home`, le redémarrage sur la racine
+normale et la conservation récupérable de l'ancien sous-volume sont donc tous
+prouvés par le parcours du widget.
+
+## 17. État de clôture SP2 (Task 9)
+
+Les six critères de la spec Bureau §6 sont déroulés dans sa table §6.1. La
+réserve honnête est matérielle : une VM sans périphérique audio ne peut pas
+prouver la sélection d'une sortie réelle. Elle prouve la pile et l'interface,
+pas le matériel. Les parcours différenciants update et rollback, eux, ont été
+faits à la souris et vérifiés côté système.
+
+La branche de livraison reste `bureau`. Ni fusion vers `main` ni tag `v0.2.0`
+ne sont faits avant la revue Claude demandée ; les créer maintenant transformerait
+un jalon de review en fausse release finale.
