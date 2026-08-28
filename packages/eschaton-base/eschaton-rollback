@@ -88,6 +88,27 @@ fi
 # Les kernels vivent sur l'ESP, hors des snapshots : revenir avant une mise à
 # jour du kernel laisserait /boot en avance sur les modules de la racine
 # restaurée. limine-snapper-sync garde une copie de chaque kernel par snapshot.
+#
+# Contrat vérifié le 2026-08-28 sur les sources du paquet que nous construisons
+# (limine-snapper-sync tag 1.31.0, gitlab.com/Zesko/limine-snapper-sync — cf.
+# packages/vendor/limine-snapper-sync/PKGBUILD `#tag=${pkgver}`) :
+#   - l'argument EST lu : Main.java:43-52 consomme le jeton suivant tant qu'il ne
+#     commence pas par « -- », et le script /usr/bin/limine-snapper-sync le
+#     transmet inchangé au binaire natif (`ARGS+=("$arg")`, ligne 227) ;
+#   - il EST honoré : Main.java:83 → preRestoreKernels(…, snapshotID) →
+#     SnapshotManager.java:307-324, qui exige un entier présent dans
+#     snapshots.json (sinon « Invalid ID … must be numeric » ou « Snapshot ID …
+#     not found in Limine snapshots », et le programme s'arrête). Les kernels de
+#     CE snapshot sont ensuite recopiés depuis
+#     <ESP>/<machine-id>/limine_history/<nom>_sha256_<empreinte> vers leur
+#     emplacement d'origine (/boot/Image, /boot/initramfs-linux.img) ;
+#   - sans argument il ÉCHOUE bruyamment : Main.java:84-85,
+#     « --restore-kernels requires snapshot ID. » — jamais un silence.
+# Le script enveloppe ne peut pas non plus bloquer sur son invite « Reboot now? » :
+# elle exige que /run/lock/limine-snapper-restore.lock contienne « restored », que
+# seul `--restore` écrit (Main.java:447-452), jamais `--restore-kernels`.
+# La preuve DYNAMIQUE (rollback à travers un vrai changement de kernel) reste à
+# faire — voir tools/vm-dev.md §9.10.
 if ! sudo limine-snapper-sync --restore-kernels "$num"; then
   echo "eschaton-rollback : la remise en place des kernels de /boot a échoué." >&2
   echo "  Le sous-volume racine EST restauré. Si le kernel a changé depuis le" >&2

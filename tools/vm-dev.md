@@ -1036,3 +1036,40 @@ de démarrage, `default_entry` sur l'entrée nominale.
 > sous-volume 266 et non plus 256, et `/var/lib/machines` comme
 > `/var/lib/portables` y sont des répertoires ordinaires. C'est la trace normale
 > d'un rollback par `replace`, pas un dommage.
+
+### 9.10 Reste à prouver : le rollback à travers un changement de kernel
+
+**À exécuter à la première mise à jour de kernel ALARM.** C'est le seul morceau
+du filet que la Task 10 n'a pas pu exercer : les snapshots 1 à 7 partagent tous
+le même `Image_sha256_f65ff2e7…`, donc l'appel à
+`limine-snapper-sync --restore-kernels` a bien réussi mais **n'a eu aucun
+fichier à remettre en place**. Or c'est précisément le cas pour lequel cet appel
+existe.
+
+Le contrat de la commande a été vérifié **statiquement** le 2026-08-28, sur les
+sources du tag 1.31.0 que `packages/vendor/limine-snapper-sync/PKGBUILD`
+construit (`#tag=${pkgver}`) — le détail et les références de lignes sont en
+commentaire dans `packages/eschaton-base/eschaton-rollback`, à l'appel. Résumé :
+l'argument est lu, exigé entier et présent dans `snapshots.json`, et il
+sélectionne bien les kernels recopiés depuis `limine_history/` vers `/boot` ;
+sans argument la commande s'arrête sur une erreur explicite. La preuve
+dynamique, elle, reste due.
+
+Le protocole, quand un nouveau kernel arrivera :
+
+```bash
+uname -r                                  # noter la version AVANT
+sudo eschaton-update                      # snapshots pre/post encadrent la MAJ
+sudo reboot && uname -r                   # nouvelle version, nouveau Image_sha256_
+eschaton-rollback                         # revenir au snapshot « pre »
+sudo reboot
+```
+
+Ce qu'il faut alors constater, et qui n'a **pas** encore été vu :
+
+- `uname -r` rend de nouveau l'ancienne version ;
+- `/boot/Image` a repris l'empreinte de l'ancien kernel (deux
+  `Image_sha256_…` distincts existent désormais dans `limine_history/`) ;
+- `ls /usr/lib/modules/$(uname -r)` existe — c'est le test qui compte : kernel
+  et modules de nouveau d'accord, ce qui est tout l'objet de l'appel ;
+- aucune unité en échec.
