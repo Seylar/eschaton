@@ -92,6 +92,6 @@ Vérification de non-régression bi-architecture (recommandation de veille) : un
 
 ## 8. Ce que le Bureau prépare
 
-- **SP3 (Assistant IA)** : l'assistant naît plugin DMS (`composite` + permission `process`), les types de plugins couvrent le besoin initial (veille §2) ; s'il en déborde, c'est le critère 1 de l'ADR 0001 §4 qui se déclenche — en connaissance de cause.
+- **SP3 (Assistant IA)** : l'assistant naît plugin DMS de type **`daemon`** (surface plein écran via `DankSlideout` + `Variants`, veille SP3 §3.2). *(Corrigé le 2026-08-28 : la mention initiale « `composite` + permission `process` » était doublement fausse — le bon type est `daemon`, et surtout les `permissions` du `plugin.json` ne sont appliquées NULLE PART par DMS (parsées, jamais consultées) : elles se déclarent par honnêteté documentaire mais ne constituent pas un mécanisme de sécurité. Les frontières réelles : catalogue d'outils fermé + portes polkit existantes — voir la spec SP3.)*
 - **SP4** : greeter graphique, verrouillage, thème clair, gestionnaire de paquets graphique complet s'il s'avère nécessaire (le plugin update v1 n'en est volontairement pas un).
 - Les briques GUI tierces recensées par la veille (btrfs-assistant, pamac…) restent des replis d'intégration si un plugin natif s'avérait trop coûteux — décision par plugin, tracée.
