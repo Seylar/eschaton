@@ -140,7 +140,7 @@ shopt -u nullglob
 #   2. le nom est dans notre espace de noms `eschaton-*` — couvre les paquets
 #      DÉCLARÉS mais pas encore écrits, et `eschaton-desktop` en a deux au
 #      moment où ceci s'écrit (`eschaton-dms-plugin-update` et
-#      `-rollback`, Tasks 4 et 5 du Bureau). Sans cette règle la garde
+#      `-rollback`, Tasks 5 et 6 du Bureau). Sans cette règle la garde
 #      exigerait d'eux qu'ils existent en amont : faux rouge garanti.
 est_a_nous() {
 	local n
