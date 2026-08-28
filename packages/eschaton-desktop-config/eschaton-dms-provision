@@ -59,6 +59,22 @@ ensure_plugin_loaded() { # $1=dms $2=plugin $3=essais (défaut 15) $4=délai (d�
   return 1
 }
 
+dms_bar_has_eschaton_widgets() { # $1=dms
+  "$1" ipc call settings get barConfigs 2>/dev/null \
+    | jq -e '
+      .[0].rightWidgets as $widgets
+      | ($widgets | index("eschatonUpdate")) != null
+        and ($widgets | index("eschatonRollback")) != null
+    ' >/dev/null
+}
+
+request_dms_recompose() { # $1=systemctl
+  # Le provisioning est ordonné après dms.service. Attendre ici un restart
+  # créerait un deadlock avec cet ordre ; --no-block laisse systemd redémarrer
+  # DMS dès que le oneshot courant a rendu la main.
+  "$1" --user --no-block restart dms.service
+}
+
 add_eschaton_widgets() { # $1=settings.json
   local settings=$1 config_dir tmp mode
   config_dir=$(dirname "$settings")
@@ -80,13 +96,14 @@ add_eschaton_widgets() { # $1=settings.json
 }
 
 main() {
-  local config_dir settings stamp dms_bin position current_wallpaper
+  local config_dir settings stamp dms_bin systemctl_bin position current_wallpaper
   local eschaton_wallpaper=/usr/share/backgrounds/eschaton/default.png
   local ready=false
   config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/DankMaterialShell"
   settings="$config_dir/settings.json"
   stamp="$config_dir/.eschaton-plugins-provisioned"
   dms_bin="${ESCHATON_DMS_BIN:-/usr/bin/dms}"
+  systemctl_bin="${ESCHATON_SYSTEMCTL_BIN:-/usr/bin/systemctl}"
 
   [[ ! -e "$stamp" ]] || return 0
   [[ -r "$settings" ]] || {
@@ -145,6 +162,25 @@ main() {
       done
 
       : > "$stamp"
+
+      # settings.json n'est pas rechargé à chaud par DMS 1.5.3. Le fichier
+      # contient donc nos IDs tandis que le barConfig en mémoire conserve la
+      # liste antérieure ; un reload des plugins ne peut pas créer des
+      # WidgetHost absents. L'IPC settings refuse les tableaux, donc aucune API
+      # officielle ne permet de mettre rightWidgets à jour en mémoire. Rejouer
+      # DMS une seule fois après avoir persisté widgets ET activation recompose
+      # la barre depuis l'état complet. Si une version amont apprend un jour à
+      # recharger le tableau, le test IPC ci-dessous évitera ce restart.
+      if ! dms_bar_has_eschaton_widgets "$dms_bin"; then
+        if ! request_dms_recompose "$systemctl_bin"; then
+          rm -f "$stamp"
+          log "recomposition de la barre DMS impossible"
+          return 1
+        fi
+        log "plugins activés ; redémarrage DMS demandé pour recomposer la barre"
+        return 0
+      fi
+
       log "plugins Eschaton activés et ajoutés à la barre"
       return 0
     fi

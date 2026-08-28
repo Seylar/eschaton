@@ -85,3 +85,34 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(< "$count")" = 3 ]
 }
+
+@test "la barre mémoire doit contenir les deux widgets Eschaton" {
+  fake_dms="$BATS_TEST_TMPDIR/dms-settings"
+  cat > "$fake_dms" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "${DMS_BAR_CONFIGS}"
+EOF
+  chmod +x "$fake_dms"
+
+  export DMS_BAR_CONFIGS='[{"rightWidgets":["systemTray","eschatonUpdate","eschatonRollback"]}]'
+  run dms_bar_has_eschaton_widgets "$fake_dms"
+  [ "$status" -eq 0 ]
+
+  export DMS_BAR_CONFIGS='[{"rightWidgets":["systemTray"]}]'
+  run dms_bar_has_eschaton_widgets "$fake_dms"
+  [ "$status" -eq 1 ]
+}
+
+@test "la recomposition DMS est demandée sans bloquer le oneshot" {
+  calls="$BATS_TEST_TMPDIR/systemctl-calls"
+  fake_systemctl="$BATS_TEST_TMPDIR/systemctl"
+  cat > "$fake_systemctl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "${BATS_TEST_TMPDIR}/systemctl-calls"
+EOF
+  chmod +x "$fake_systemctl"
+
+  run request_dms_recompose "$fake_systemctl"
+  [ "$status" -eq 0 ]
+  [ "$(< "$calls")" = "--user --no-block restart dms.service" ]
+}
