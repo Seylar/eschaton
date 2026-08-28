@@ -132,6 +132,7 @@ PluginComponent {
 
     popoutContent: Component {
         PopoutComponent {
+            id: updatePopout
             headerText: "Mises à jour Eschaton"
             detailsText: root.checkError
                 ? root.checkError
@@ -139,6 +140,17 @@ PluginComponent {
                    : (root.updateCount > 0 ? root.updateCount + " mise(s) à jour disponible(s)"
                                            : "Le système est à jour"))
             showCloseButton: true
+
+            // Le badge est périodique, mais ouvrir le popout exprime une demande
+            // immédiate. Sans cette relecture, il peut encore annoncer une
+            // mise à jour déjà installée pendant tout l'intervalle du Timer.
+            Connections {
+                target: updatePopout.parentPopout
+                function onShouldBeVisibleChanged() {
+                    if (updatePopout.parentPopout?.shouldBeVisible)
+                        Qt.callLater(root.refresh);
+                }
+            }
 
             Column {
                 width: parent.width
