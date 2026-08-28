@@ -630,3 +630,359 @@ pose pas sur aarch64** : `limine-update` (limine-entry-tool) s'y arrête sur
 « The system is not x86_64 » et ne génère donc jamais rien. `limine.conf` y a une
 seule source, l'installeur. La réserve reste entière côté x86_64, où l'outil
 fonctionne — c'est à la Task 11 de la lever.
+
+---
+
+## 9. Test de casse et rollback (spec §7.2)
+
+Déroulé le 2026-08-28 sur l'installation du §8, **sans jamais la réinstaller**,
+entièrement par la console série. C'est le test qui valide la définition de
+terminé §7.2 : sabotage réel, restauration par snapshot, et démarrage sur un
+snapshot depuis Limine.
+
+Il a trouvé **quatre défauts**, dont un bloquant : `eschaton-rollback` ne
+fonctionnait pas du tout. Rien dans l'état du système ne le laissait présager —
+aucune unité en échec, aucun avertissement, `eschaton-update` rendait 0. Il a
+fallu casser pour de vrai.
+
+### 9.1 Durées réelles
+
+| Étape | Durée |
+|---|---|
+| Ouverture de session série (login + mot de passe) | ~5 s |
+| `snapper create` d'un snapshot manuel | < 1 s |
+| Remplacement du sous-volume par `eschaton-rollback` | ~2 s |
+| `reboot` → invite de connexion | **~19 s** (mesuré trois fois) |
+| `eschaton-update` d'un seul petit paquet, hooks snapper compris | ~25 s |
+
+Le cycle complet « je casse, je restaure, je vérifie » tient en **moins de deux
+minutes**. Trois redémarrages ont été nécessaires en tout.
+
+### 9.2 Pilotage : `tools/vm-serial`
+
+Le motif démon/client du §5.3 vit maintenant dans le dépôt
+(`tools/vm-serial`). Une session type :
+
+```bash
+UTMCTL=/Applications/UTM.app/Contents/MacOS/utmctl
+$UTMCTL attach eschaton-dev                     # → PTTY: /dev/ttysNNN
+W=/tmp/eschaton-console && mkdir -p "$W"
+nohup tools/vm-serial daemon /dev/ttysNNN "$W" &
+
+export VM_SERIAL_WORK=$W
+tools/vm-serial send "seylar"                   # invite de connexion
+tools/vm-serial send "eschaton"                 # « Mot de passe : »
+tools/vm-serial run "stty cols 200 rows 60"     # sinon les lignes se replient
+```
+
+> **`sudo` redemande le mot de passe, et ce n'est pas scriptable en une
+> commande.** Le motif qui marche : `send "sudo -v"` puis `send "eschaton"` une
+> fois, ensuite `run "sudo -n …"` tant que l'horodatage est valide. **Le cache
+> est perdu à chaque redémarrage** — le refaire après chaque `reboot`. Sans
+> `-n`, un cache expiré transforme la commande suivante en invite de mot de
+> passe silencieuse et le pilotage se désynchronise.
+
+### 9.3 Étape 1 — le sabotage
+
+```console
+$ sudo snapper --config root create --description 'avant-sabotage'
+3 │ single │ │ ven. 28 août 2026 01:41:52 │ root │ │ avant-sabotage │
+
+$ findmnt -no OPTIONS / | tr ',' '\n' | grep subvol
+subvolid=256
+subvol=/@
+
+$ sudo rm /usr/bin/ls
+$ ls / || echo SABOTAGE_EFFECTIF
+-bash: /usr/bin/ls: Aucun fichier ou dossier de ce nom
+SABOTAGE_EFFECTIF
+
+$ sudo pacman -Qkk coreutils
+avertissement : coreutils: /usr/bin/ls (Aucun fichier ou dossier de ce nom)
+coreutils : 444 fichiers au total, 1 fichier modifié
+```
+
+Le veilleur avait déjà généré l'entrée de démarrage du snapshot 3 sans qu'on lui
+demande quoi que ce soit (`comment: 3 snapshots` dans `limine.conf`).
+
+### 9.4 Étape 2 — le rollback, et le défaut qu'il a révélé
+
+**`snapper rollback` ne fonctionne pas sur la disposition d'Eschaton.** La spec
+§6 le nommait ; la réalité le refuse :
+
+```console
+Numéro du snapshot vers lequel revenir (vide pour annuler) : 3
+Impossible de détecter le contexte car le sous-volume par défaut est inconnu.
+Cela peut arriver si le système n'a pas été configuré pour le retour à l'état initial.
+Le contexte peut être spécifié manuellement à l'aide de l'option --ambit.
+
+$ LANG=C sudo snapper --config root rollback 3 2>&1; echo rc=$?
+Cannot detect ambit since default subvolume is unknown.
+This can happen if the system was not set up for rollback.
+The ambit can be specified manually using the --ambit option.
+rc=1
+```
+
+La cause tient en deux lignes :
+
+```console
+$ sudo btrfs subvolume get-default /
+ID 5 (FS_TREE)
+$ cat /proc/cmdline
+root=LABEL=eschaton rootflags=subvol=@ rw quiet
+```
+
+`snapper rollback` suppose la disposition openSUSE — le système tourne sur le
+sous-volume **par défaut** de btrfs, et restaurer consiste à en désigner un
+autre. Eschaton suit la disposition Arch : la racine est épinglée par
+`rootflags=subvol=@` et le sous-volume par défaut est resté `FS_TREE`. Forcer
+`--ambit classic` n'aurait rien sauvé : la commande aurait changé le sous-volume
+par défaut, **dont le démarrage ne tient aucun compte**. On aurait obtenu un
+rollback qui rend 0 et ne restaure rien — la panne muette du §8.4, encore.
+
+Le README de `limine-snapper-sync` le dit d'ailleurs noir sur blanc : la méthode
+`opensuse` « requires an OpenSUSE-style layout », et la recommandation pour les
+installations Arch est `replace` ou `rsync`.
+
+`eschaton-rollback` applique donc désormais **`replace`** : le sous-volume `@`
+est renommé de côté, puis recréé comme instantané inscriptible du snapshot
+choisi. Le **nom** `@` ne bouge pas — ni la ligne de commande du kernel, ni
+`fstab`, ni `limine.conf` n'ont à être réécrits.
+
+```console
+==> Restauration du snapshot 3 dans le sous-volume « @ » de /dev/vda2.
+    L'état actuel n'est pas détruit : il est mis de côté sous « @.avant-rollback-20260828-014936 ».
+Confirmer ? [oui/N] oui
+Create snapshot of '/run/eschaton-rollback.dPvCcp/@snapshots/3/snapshot' in '/run/eschaton-rollback.dPvCcp/@'
+Saved: /boot/d30aa44e2b314902a0b5f864dac156f3/limine_history/snapshots.json
+Updated: /boot/limine.conf
+==> Rollback appliqué. Redémarre pour démarrer sur l'état restauré (sudo reboot).
+```
+
+**Avant / après**, sur le même disque et le même nom de sous-volume :
+
+```console
+# avant le rollback
+/dev/vda2[/@]  …,subvolid=256,subvol=/@
+
+# après le rollback, AVANT redémarrage — le renommage est visible à chaud
+/dev/vda2[/@.avant-rollback-20260828-014936]  …,subvolid=256,subvol=/@.avant-rollback-20260828-014936
+
+# après redémarrage
+/dev/vda2[/@]  …,subvolid=266,subvol=/@
+```
+
+Le **numéro** de sous-volume change (256 → 266), le **nom** non. C'est la
+signature de la méthode `replace`.
+
+```console
+$ ls / && echo ROLLBACK_OK
+bin  boot  dev  etc  home  lib  mnt  opt  proc  root  run  sbin  srv  sys  tmp  usr  var
+ROLLBACK_OK
+
+$ sudo pacman -Qkk coreutils
+coreutils : 444 fichiers au total, 0 fichier modifié
+$ systemctl --failed --no-legend
+(vide)
+```
+
+> **Renommer un sous-volume monté est licite en btrfs.** Seul son nom dans
+> l'arbre racine change ; le système qui tourne dessus continue sans rien
+> remarquer — `findmnt` reflète le nouveau nom à chaud, comme ci-dessus.
+
+### 9.5 Étape 3 — démarrer sur un snapshot, sans toucher au menu
+
+**Le menu Limine s'affiche sur la console série** — contrairement à ce qu'on
+croyait. Le menu et son compte à rebours arrivent bien sur `ttyAMA0`, à chaque
+démarrage :
+
+```
+Limine 12.6.1 (aarch64, UEFI)
+[-] Eschaton
+ |--> linux-aarch64
+ `[+] Snapshots
+ARROWS Select  ENTER Boot  E Edit  S Firmware Setup  B Blank Entry
+Booting automatically in 3...
+```
+
+La navigation au clavier est donc possible. Elle reste néanmoins **le mauvais
+outil pour un test scripté** : trois secondes de `timeout`, des touches à
+envoyer à l'aveugle, aucun moyen de vérifier ce qui est sélectionné avant de
+valider. La méthode déterministe consiste à **piloter `default_entry`**.
+
+```bash
+# 1. lire le nom exact de l'entrée de snapshot générée par limine-snapper-sync
+entry=$(grep -m1 -E "^ +///" /boot/limine.conf | sed "s|^ *///||")
+#    → 3 │ 2026-08-28 01:41:52          (le séparateur est U+2502, pas un pipe)
+
+# 2. sauvegarder la valeur d'origine HORS de l'ESP (limine-snapper-sync y écrit)
+cp /boot/limine.conf ~/limine.conf.avant-t10
+
+# 3. viser l'entrée de snapshot, par son chemin complet
+sudo sed -i "s|^default_entry:.*|default_entry: Eschaton/Snapshots/$entry/linux-aarch64|" /boot/limine.conf
+sudo reboot
+```
+
+Limine suit le chemin sans broncher — espaces et caractère semi-graphique
+compris — déplie le sous-menu et démarre l'entrée :
+
+```
+`[-] Snapshots
+ |[-] 3 ? 2026-08-28 01:41:52
+ | `--> linux-aarch64
+linux: Loading kernel `boot():/…/limine_history/Image_sha256_f65ff2e7…`...
+[FAILED] Failed to listen on GnuPG network …ent daemon for /etc/pacman.d/gnupg.
+      (5 autres sockets GnuPG, même cause)
+eschaton login:
+```
+
+Le système démarre **sur le snapshot**, en lecture seule :
+
+```console
+$ findmnt -no SOURCE,OPTIONS /
+/dev/vda2[/@snapshots/3/snapshot] rw,noatime,…,subvolid=265,subvol=/@snapshots/3/snapshot
+
+$ cat /proc/cmdline
+root=LABEL=eschaton rootflags=subvol=/@snapshots/3/snapshot rw quiet
+
+$ sudo btrfs property get -ts /
+ro=true
+
+$ touch /ecriture-test
+touch: impossible de faire un touch '/ecriture-test': Système de fichiers accessible en lecture seulement
+```
+
+> **Piège de vérification : `findmnt` affiche `rw` sur un snapshot en lecture
+> seule.** La ligne de commande du kernel demande `rw`, le noyau l'inscrit dans
+> les options de montage — mais le sous-volume porte le drapeau `ro` de btrfs et
+> toute écriture échoue. Ne pas conclure « la racine est inscriptible » depuis
+> `findmnt` : la preuve, c'est `btrfs property get -ts /` ou une tentative
+> d'écriture.
+
+Les **six unités socket GnuPG en échec** sont la conséquence attendue de la
+racine en lecture seule (elles créent des sockets sous `/etc/pacman.d/gnupg`).
+Aucune ne gêne le travail de récupération.
+
+**L'ESP reste inscriptible depuis le snapshot** — c'est ce qui rend la
+récupération possible :
+
+```console
+$ findmnt -no SOURCE,OPTIONS /boot
+/dev/vda1 rw,relatime,fmask=0022,…
+$ sudo sed -i "s|^default_entry:.*|default_entry: Eschaton/linux-aarch64|" /boot/limine.conf
+$ sha256sum /boot/limine.conf ~/limine.conf.avant-t10
+c36d72750db81b683115bb0acce6a487832039787f6962be7738d743935e6aae  /boot/limine.conf
+c36d72750db81b683115bb0acce6a487832039787f6962be7738d743935e6aae  /home/seylar/limine.conf.avant-t10
+```
+
+Retour nominal au redémarrage suivant :
+
+```console
+$ findmnt -no SOURCE,OPTIONS /
+/dev/vda2[/@] rw,noatime,…,subvolid=266,subvol=/@
+$ cat /proc/cmdline
+root=LABEL=eschaton rootflags=subvol=@ rw quiet
+$ ls /usr/bin/ls && echo NOMINAL_OK
+/usr/bin/ls
+NOMINAL_OK
+$ systemctl --failed --no-legend
+(vide)
+```
+
+> **`default_entry` survit aux réécritures de limine-snapper-sync.** L'outil a
+> réécrit `limine.conf` deux fois pendant le test (une fois pendant le rollback,
+> une fois au redémarrage suivant) sans jamais toucher à la ligne, y compris
+> quand elle pointait sur une entrée de snapshot. Le service se déclenche sur
+> événement — création ou suppression de snapshot —, pas en continu : entre deux
+> transactions pacman, la fenêtre est grande ouverte.
+
+> **La restauration « depuis le snapshot » est l'affaire de l'amont.** Une fois
+> démarré sur un snapshot, `limine-snapper-restore` (paquet limine-snapper-sync)
+> rend l'état permanent — c'est le second chemin de la spec §6.
+> `limine-snapper-sync --restore` ne prend **aucun numéro** : il restaure le
+> snapshot sur lequel on a démarré, et rien d'autre. D'où deux outils bien
+> distincts : `eschaton-rollback` depuis le système qui marche,
+> `limine-snapper-restore` depuis le snapshot quand il ne marche plus.
+
+### 9.6 Rétention (constat, sans rien forcer)
+
+```console
+$ grep -E 'NUMBER|TIMELINE' /etc/snapper/configs/root
+TIMELINE_CREATE="no"
+NUMBER_CLEANUP="yes"
+NUMBER_MIN_AGE="1800"
+NUMBER_LIMIT="10"
+NUMBER_LIMIT_IMPORTANT="5"
+```
+
+Après le test : **deux paires pre/post automatiques** (1-2, 4-5) et un snapshot
+manuel (3). On est loin des 10 paires de `NUMBER_LIMIT` — `snapper-cleanup` n'a
+donc encore rien eu à tailler, et le comportement de la borne reste à observer
+sur une VM plus ancienne. L'ESP tient largement : `255 Mo utilisés sur 4,0 Go`
+(7 %) avec 5 snapshots, parce que limine-snapper-sync déduplique les kernels par
+empreinte (`Image_sha256_…`) — les 5 entrées partagent le même fichier de 44 Mo.
+
+### 9.7 Les trois autres défauts
+
+Les deux premiers découverts en **exécutant** ce que le socle affiche, pas en le
+lisant ; le troisième en relisant le correctif.
+
+| # | Symptôme | Cause | Correctif |
+|---|---|---|---|
+| 1 | `eschaton-rollback` refuse tout : « Cannot detect ambit… » | `snapper rollback` exige la disposition openSUSE | méthode `replace` dans `eschaton-rollback` |
+| 2 | `avertissement : les permissions pour /etc/sudoers.d/ sont différentes` à chaque transaction | `install -D` crée le parent en 755, `sudo` le livre en 750 | `install -d -m750` dans le PKGBUILD |
+| 3 | Le nettoyage indiqué en fin de rollback échoue | `btrfs subvolume delete` n'est pas récursif | `--recursive` dans le message |
+| 4 | `eschaton-rollback` lancé depuis un snapshot démarré abîmerait le magasin | la racine est alors `@snapshots/<N>/snapshot` | garde + renvoi vers `limine-snapper-restore` |
+
+Le n°2 mérite un mot : ce n'est qu'un avertissement, mais il rend
+`pacman -Qkk eschaton-base` bruyant **pour toujours** (« 1 fichier modifié »).
+Un contrôle d'intégrité qui crie en permanence est un contrôle qu'on cesse de
+lire — c'est ainsi qu'une vraie altération passe inaperçue.
+
+Le n°3 se lit bien :
+
+```console
+$ sudo btrfs subvolume delete /mnt/@.avant-rollback-20260828-014936
+Delete subvolume 256 (no-commit): '/mnt/@.avant-rollback-20260828-014936'
+ERROR: Could not destroy subvolume/snapshot: Directory not empty
+
+$ sudo btrfs subvolume delete --recursive /mnt/@.avant-rollback-20260828-014936
+Delete subvolume 261 (no-commit): '…/var/lib/portables'
+Delete subvolume 262 (no-commit): '…/var/lib/machines'
+Delete subvolume 256 (no-commit): '…/@.avant-rollback-20260828-014936'
+```
+
+systemd crée `var/lib/machines` et `var/lib/portables` comme sous-volumes
+imbriqués. Corollaire à connaître : **la racine restaurée ne les a plus comme
+sous-volumes**, seulement comme répertoires ordinaires — `btrfs subvolume
+snapshot` ne descend pas dans les sous-volumes imbriqués. Sans conséquence
+pratique (systemd les recrée au besoin), et `snapper rollback` se comporte
+pareil.
+
+Un quatrième défaut a été trouvé **en relisant le correctif**, pas en
+l'exécutant — et son scénario est précisément celui de la spec §6 : le système
+ne démarre plus, on démarre une entrée « Snapshots », et on lance là le premier
+outil de restauration qui vient. La racine étant alors `@snapshots/<N>/snapshot`,
+`eschaton-rollback` aurait renommé **ce** sous-volume et créé un snapshot neuf à
+sa place : magasin de snapshots abîmé, et `@` — le seul à réparer — intact.
+L'outil détecte désormais le cas et renvoie vers `limine-snapper-restore`.
+
+### 9.8 Vérification de bout en bout du correctif
+
+Le correctif a été livré **par le dépôt**, pas posé à la main dans la VM : après
+CI verte, `eschaton-update` l'a installé et les empreintes concordent avec les
+fichiers du dépôt.
+
+```console
+$ eschaton-update --noconfirm
+Paquets (1) eschaton-base-0.1.0-7
+(1/2) Performing snapper pre snapshots…   ==> root: 4
+(2/2) Waiting for limine-snapper-sync to finish...
+(2/2) Performing snapper post snapshots…  ==> root: 5
+
+$ sha256sum /usr/bin/eschaton-rollback
+3bce78f0253f86acd6c81defcf30b3d570ec6ed4594b3ecd042f98b9c510a362   # = celui du dépôt
+```
+
+Le filet fonctionne toujours après le rollback : la transaction a produit ses
+deux snapshots, et `limine.conf` porte les cinq entrées correspondantes.
