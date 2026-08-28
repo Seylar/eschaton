@@ -61,7 +61,7 @@ Le b2sum a été vérifié et correspond à l'amont.
 | Variante | RAM pour booter | Réseau | Cache de paquets |
 |---|---|---|---|
 | `…-aarch64.iso` (retenue) | 750 Mo | DHCP au boot | non |
-| `…-latest-aarch64.iso` | 2300 Mo | serveur DHCP local requis | ≥ 3200 Mo de RAM |
+| `…-latest-aarch64.iso` | 2300 Mo | serveur DHCP local requis | oui, mais seulement si la VM a ≥ 3200 Mo de RAM |
 | `…-local-aarch64.iso` | 3200 Mo | hors-ligne | oui |
 
 ## 3. Création de la VM (scriptée, sans GUI)
@@ -1363,7 +1363,7 @@ x86_64, tous des **simplifications** :
 | §8.2 (aarch64 / archboot) | x86_64 / ISO Arch officielle |
 |---|---|
 | attendre `Hit ENTER … or CTRL-C for bash prompt`, envoyer **`Ctrl-C`** (`raw 03`) | **pas de danse `Ctrl-C`** : l'ISO rend une invite `archiso login:` — envoyer `root`, sans mot de passe |
-| `pacman -Sy --noconfirm arch-install-scripts gptfdisk btrfs-progs dosfstools` | **inutile** : `pacstrap`, `arch-chroot`, `genfstab`, `sgdisk`, `mkfs.btrfs`, `mkfs.vfat` sont **tous déjà là** (§10.7, point 9) |
+| `pacman -Sy --noconfirm arch-install-scripts gptfdisk btrfs-progs dosfstools` | **inutile** : `pacstrap`, `arch-chroot`, `genfstab`, `sgdisk`, `mkfs.btrfs`, `mkfs.vfat` sont **tous déjà là** (inventaire du live : table du §10.1) |
 | `stty cols 200 rows 60` | identique — toujours nécessaire |
 | `umount -R /mnt && reboot` | **précédé du `sed` de l'étape (b)** ci-dessus, sinon le système démarre invisible |
 
@@ -1670,7 +1670,10 @@ Consolidé le **2026-08-28**, à la clôture du Socle (`v0.1.0`).
 | **7.3** Cible x86_64 prouvée (VM émulée) | **Prouvé** le 2026-08-28 | §10, §10.6, §10.7 | `task-11-report.md` | `035fe92` |
 | **7.4** CI verte, dépôt publié et installable | **Re-vérifié en direct** le 2026-08-28 | §11.4 | `task-8-report.md` | `fa34322` |
 
-Les rapports vivent dans `.superpowers/sdd/2026-08-27-socle/`.
+Les rapports de tâche nommés dans cette table sont des **archives de session,
+non versionnées** : elles vivent sous `.superpowers/`, gitignoré, donc absentes
+d'un clone du dépôt. Ce ne sont pas les preuves. **Les preuves durables sont les
+sections de ce document et les commits cités** — eux seuls survivent au clone.
 
 Aucun des quatre n'est un constat sur le papier : chacun renvoie à des sorties
 console lues sur une VM, ou à une exécution de CI horodatée.
@@ -1823,9 +1826,9 @@ aurait fait disparaître tous les paquets d'un `pacman -Syu`).
 le runner ARM — c'est la seule source connue d'échec intermittent de la CI, sur
 les deux paquets vendorés. Elle n'a pas rejoué depuis.
 
-> Le run déclenché par le commit qui porte cette section est suivi jusqu'à son
-> terme au moment de la clôture ; son numéro et son résultat sont consignés dans
-> `task-12-report.md`.
+> **Run de clôture** : le run déclenché par le commit qui porte cette section
+> (`1395680`) est allé à son terme — run **`33142693443`**, ses quatre jobs
+> verts (`lint`, `build-x86_64`, `build-aarch64`, `publish`).
 
 ### 11.5 Ce que « Socle terminé » ne dit pas
 

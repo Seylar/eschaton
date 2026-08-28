@@ -62,7 +62,7 @@ Consommé par : `depends` de `eschaton-base`.
   `https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-25.0.2/graalvm-community-jdk-25.0.2_linux-{aarch64,x64}_bin.tar.gz`.
 - **3 sommes sha256 réelles, aucun `SKIP`** — y compris pour la source git, que
   pacman 7 vérifie par hachage de contenu : le `#tag=`, référence mutable en soi,
-  est donc adossé à une somme. Les 4 sommes ont été **validées à l'exécution**
+  est donc adossé à une somme. Les 3 sommes ont été **validées à l'exécution**
   lors de la construction (`Validating source files with sha256sums... Passed`).
 - `.SRCINFO` **concorde exactement** avec le PKGBUILD (le piège du `.SRCINFO`
   divergent est écarté).
