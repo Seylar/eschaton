@@ -2517,13 +2517,43 @@ graphical-session.target`. Après passage au drop-in `dms.service.d`, le reboot
 rend le helper `active (exited)` avec `status=0/SUCCESS`, sans commande manuelle.
 
 Un test final plus strict a ensuite retiré le stamp, désactivé les deux plugins
-et ôté leurs ids de la barre avant reboot. Il a révélé une seconde course :
-`plugins list` répond avant que la cible IPC `bar` n'existe, et DMS rend alors
-`Target not found.` avec un code de sortie nul. Depuis `desktop-config` pkgrel 6,
-le helper n'utilise plus la disponibilité des plugins comme proxy : il attend
-une position de barre valide (`top|bottom|left|right`), puis la cible wallpaper,
-avec des délais bornés. Un test Bats simule expressément la réponse trompeuse du
-premier appel.
+et ôté leurs ids de la barre avant reboot. Il a révélé deux courses successives :
+
+1. `plugins list` répond avant que la cible IPC `bar` n'existe, et DMS rend alors
+   `Target not found.` avec un code de sortie nul. Depuis `desktop-config`
+   pkgrel 6, le helper attend une position valide
+   (`top|bottom|left|right`), puis la cible wallpaper, avec des délais bornés ;
+2. `plugins enable` peut lui aussi rendre un succès pendant l'initialisation,
+   puis le chargement tardif de `plugin_settings.json` rétablit `false`. Le
+   pkgrel 7 active donc les plugins seulement après matérialisation de la barre
+   et n'écrit le stamp qu'après deux observations `loaded` consécutives pour
+   chacun.
+
+Les deux réponses trompeuses ont un test Bats dédié. La validation décisive a
+été rejouée avec le **pkgrel 7 réellement publié** par la CI `33169926022`, pas
+avec l'archive locale : plugins à `false`, widgets retirés, stamp absent, puis
+reboot complet. Résultat :
+
+```console
+$ pacman -Q eschaton-desktop-config
+eschaton-desktop-config 0.1.0-7
+
+$ # assertions groupées après le reboot
+service=active
+update_status=loaded
+rollback_status=loaded
+plugin_settings=true,true
+widget_counts=1,1
+stamp=present
+wallpaper=/usr/share/backgrounds/eschaton/default.png
+
+$ # nouvelle lecture 15 s après la fin du oneshot
+delayed_status=loaded,loaded
+delayed_settings=[true,true]
+```
+
+Le journal borne aussi le comportement : démarrage du provisioning à
+14:19:17, succès à 14:19:24, sans intervention manuelle.
 
 Arbitrages écran en main :
 

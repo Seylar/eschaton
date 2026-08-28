@@ -38,7 +38,10 @@ Preuves de référence :
 - provisioning DMS automatique des plugins et du wallpaper, sans écraser les
   choix utilisateur ; cycle systemd initial supprimé par un drop-in de
   `dms.service`. Le helper attend séparément la cible IPC `bar` : `plugins list`
-  peut réussir plusieurs secondes avant elle et `Target not found.` rend rc=0 ;
+  peut réussir plusieurs secondes avant elle et `Target not found.` rend rc=0.
+  Il active ensuite les plugins et exige deux états `loaded` consécutifs avant
+  de poser son marqueur : un `plugins enable` accepté trop tôt était sinon
+  annulé par le chargement tardif de `plugin_settings.json` ;
 - `xdg-desktop-portal-gtk` ajouté : le backend Hyprland ne fournit pas
   FileChooser ;
 - listes update/rollback rafraîchies à l'ouverture des popouts ;
@@ -87,7 +90,12 @@ ancien état → @.avant-rollback-20260828-132747
 ```
 
 Le service de provisioning après reboot est `active (exited)` avec
-`status=0/SUCCESS`; `dms.service` est `active (running)`.
+`status=0/SUCCESS`; `dms.service` est `active (running)`. Le test frais final a
+installé `eschaton-desktop-config 0.1.0-7` depuis Pages, forcé plugins à
+`false`, widgets absents et stamp absent, puis rebooté. Les assertions donnent
+`loaded,loaded`, `[true,true]`, un exemplaire de chaque widget et un stamp
+présent ; une seconde lecture 15 s plus tard donne encore le même état. Code :
+`840d0fc`; CI bi-architecture et publication : `33169926022`.
 
 ## 5. Réserves honnêtes
 
