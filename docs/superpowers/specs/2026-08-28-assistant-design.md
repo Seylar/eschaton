@@ -1,7 +1,7 @@
 # Eschaton — Spec de conception : l'Assistant
 
 - **Date** : 2026-08-28
-- **Statut** : rédigée sur passe de veille datée ([rapport](../../veille/2026-08-28-sp3-assistant.md)) — publiée pour relecture ; exécution par Codex (handoff), gates de revue par Claude
+- **Statut** : **implémentée sur `assistant` le 2026-08-29**, DoD §6 prouvé en VM et CI bi-architecture verte — en attente de la revue finale, du tag `v0.3.0` et de la fusion par Claude
 - **Sous-projet** : 3/5 (Assistant IA)
 - **Amont** : [Spec du Socle](2026-08-27-socle-design.md) §1 (note SP3), [Spec du Bureau](2026-08-28-bureau-design.md) (§8 corrigé), [ADR 0001](../../decisions/0001-shell-du-bureau.md) (+ addenda), [ADR 0002](../../decisions/0002-veille-avant-spec.md)
 

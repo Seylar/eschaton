@@ -3707,3 +3707,43 @@ la surcharge fournisseur et les réglages DMS ont été restaurés, et le dépô
 les unités, les ports, le marqueur `/home` et le dossier de banc ont été
 retirés. L'état final garde uniquement l'Assistant v7 chargé, le snapshot 78 et
 l'ancienne racine de preuve. Le paquet v7 ne contient aucun harnais ni fixture.
+
+## 26. Clôture SP3 — DoD de l'Assistant (2026-08-29)
+
+### 26.1 Verdict point par point de la spec §6
+
+| Critère | Verdict et preuve |
+|---|---|
+| 1. Spike de terrain | **Satisfait.** `dms-ai-assistant` réel, streaming QML, latence, RSS et nettoyage : §19. La trajectoire A a été maintenue sur mesure, pas par hypothèse. |
+| 2. Installation, `SUPER+A`, deux formats | **Satisfait.** Paquet et boot frais, bind uinput réel, OpenAI-compatible RamaLama puis adaptateur Anthropic natif via le pont de banc : §24.1-§24.4. |
+| 3. Trois outils réels | **Satisfait.** Status réel, update `pacman -Syu` avec snapshots 79/80 et Limine, rollback 78 par Polkit puis restauration v1 au reboot avec `/home` intact : §25.2-§25.4. |
+| 4. Local-only, trousseau, aucun secret clair | **Satisfait dans le périmètre SP3.** Refus distant réel : §24.3 ; cycle `secret-tool` et adaptateurs sans clé en argv : §22/§24.4 ; avertissement autologin visible. Le déverrouillage PAM reste explicitement une exigence SP4 de l'ADR 0003, pas une fausse réussite SP3. |
+| 5. Contenu hostile inoffensif | **Satisfait avec durcissement.** Le terrain a montré que le prompt seul ne suffisait pas ; v7 retire les outils après `system_status` et refuse le `tool_delta` adverse. Conversation complète et absence de `pkexec` : §25.1-§25.2 et `docs/proofs/2026-08-29-assistant-task7-conversation.jsonl`. |
+| 6. CI, bi-arch, tests, boot | **Satisfait.** Run `33221648941` : lint + dépendances Arch/ALARM, build x86_64 en 4 min 37 s, build aarch64 en 4 min 54 s, publication ignorée sur `assistant`. Localement : 59/59 Bats, compilation Python, deux PKGBUILD de fixture valides, `git diff --check`; boot post-rollback : plugin `loaded`, aucune erreur QML critique. |
+
+Le SP3 est donc **implémenté sur la branche `assistant`**. Le dépôt ne contient
+pas de second exécuteur privilégié, pas d'agent CLI en dépendance, pas de
+`Quickshell.Networking`, pas de clé et pas d'auto-approve. La garde de
+dépendances CI reçoit toujours explicitement le PKGBUILD Assistant et vérifie
+Arch x86_64 comme ALARM aarch64.
+
+### 26.2 Réserves honnêtes transmises à la revue
+
+- La preuve Anthropic valide le format natif, le header issu du trousseau et le
+  streaming contre RamaLama ; **elle ne prétend pas avoir appelé le SaaS
+  Anthropic**, faute de clé utilisateur (§24.4).
+- SmolLM 135M prouve le transport et le rendu, pas la qualité des réponses. Le
+  soak de Task 6 est court ; il ne démontre pas l'absence de fuite sur des
+  heures (§24.2).
+- Le terminal update est visible mais la sidebar peut conserver le focus ; le
+  test a nécessité de la fermer avant la saisie. Ce n'est pas un contournement
+  de sécurité, mais c'est une friction UX réelle, consignée §25.3.
+- Sous l'autologin transitoire, un trousseau chiffré reste verrouillé. Le greeter
+  authentifié et `pam_gnome_keyring` sont une dette ferme SP4, déjà portée par
+  l'ADR 0003 et la spec SP4.
+- Le snapshot hostile 78 et
+  `@.avant-rollback-20260829-014101` restent volontairement dans la VM pour la
+  revue ; tout le reste du banc Task 7 a été nettoyé.
+
+Ni `main`, ni le tag `v0.3.0`, ni Pages n'ont été modifiés. Ces trois actions
+restent le gate de publication de Claude après sa revue finale.

@@ -91,6 +91,11 @@ et réserves : `tools/vm-dev.md` §25.
 
 ### Task 8 : Clôture SP3
 
+**Exécutée le 2026-08-29.** Les six critères de la spec §6 sont soldés dans
+`tools/vm-dev.md` §26, la spec passe à « implémentée sur assistant », et le
+handoff §12 ouvre la revue finale Claude. Aucun tag, aucune fusion et aucune
+publication Pages n'ont été faits.
+
 DoD spec §6 point par point (dossier de preuves vm-dev), statut spec → implémenté, garde CI/deps à jour, **notifier pour la revue Claude — le tag v0.3.0 et la fusion restent le gate Claude**.
 
 ---

@@ -203,3 +203,40 @@ Le SP4 est découpé (veille + roadmap actée) : **4a Signature** (court, bloqua
 **Minors différés au ledger** (post-tag, ne pas traiter) : couverture bats textuelle (greps — la logique n'est exécutée qu'en VM par les harnais, pattern assumé du projet) ; `stubTools: true` par défaut dans le core (le daemon force false — inverser le défaut serait plus sûr pour un futur intégrateur) ; le bouton stop relance un tour de streaming après annulation d'outil (UX, protocolairement cohérent).
 
 Ensuite T6-T8 telles que planifiées. Rappels T6 (conversations réelles) : les clés restent hors argv/logs (motif KeyringBridge), le contenu des messages assistant rendu `Text.PlainText`, et tout constat de terrain qui contredit la spec remonte dans la spec (ADR 0002). Au terme de T8 : notifier pour la revue finale SP3 — le tag v0.3.0 et la fusion restent la cérémonie Claude.
+
+## 12. Handoff final SP3 — revue Claude demandée
+
+**Codex remet l'Assistant pour gate final.** Les Tasks 6 et 7 sont respectivement
+`24b3500` et `a66dd74`; la Task 8 clôt le DoD documentaire sans changement
+runtime supplémentaire. La spec est passée à « implémentée sur `assistant` ».
+Ni `main`, ni Pages, ni un tag n'ont été modifiés.
+
+**Validation du dernier code runtime** : CI `33221648941` entièrement verte —
+lint et 59 Bats, garde de dépendances Arch x86_64 + ALARM aarch64, build x86_64
+4 min 37 s, build aarch64 4 min 54 s ; `publish` ignoré comme prévu. Le paquet
+VM final est `eschaton-dms-plugin-assistant 0.1.0-7`, chargé après le reboot qui
+a réellement restauré le snapshot 78.
+
+**Points prioritaires de revue** :
+
+1. le durcissement Task 7 dans `AssistantCore` : après `system_status`, la
+   requête de restitution porte `tools: []` et tout `tool_delta` spontané est
+   refusé avant l'exécuteur ;
+2. la conversation brute
+   `docs/proofs/2026-08-29-assistant-task7-conversation.jsonl` : l'injection
+   hostile est bien présente, puis le fournisseur adverse tente encore
+   `propose_rollback(2147483647)` sans qu'aucun `pkexec` n'en découle ;
+3. les preuves §24-§25 de `tools/vm-dev.md` : deux formats de fournisseurs,
+   update réelle 1→2 avec snapshots 79/80 et Limine, rollback réel vers 78 par
+   Polkit, retour 2→1 au reboot et `/home` intact ;
+4. le fournisseur déterministe et les paquets marqueurs restent des fixtures de
+   test, explicitement absentes du PKGBUILD runtime ;
+5. les réserves §26.2 : pas d'appel au SaaS Anthropic, soak court, focus du
+   terminal perfectible, et dette PAM ferme côté SP4.
+
+**État de la VM pour la revue** : le banc temporaire est nettoyé, les réglages
+DMS sont revenus à `{"enabled":true}`, aucun fournisseur utilisateur ni port
+18083/18084 ne subsiste. Le snapshot hostile 78 et
+`@.avant-rollback-20260829-014101` sont volontairement conservés et
+récupérables. Si la revue est « Yes », le tag `v0.3.0` et la fusion restent à
+faire par Claude, conformément au gate utilisateur.
