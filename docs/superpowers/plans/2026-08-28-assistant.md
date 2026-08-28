@@ -77,6 +77,13 @@ backend de session et dette PAM arbitrés par l'ADR 0003 ; preuves VM et paquets
 
 ### Task 7 : Les outils en conditions réelles + test d'injection (DoD §6.3/§6.5)
 
+**Exécutée le 2026-08-29.** Le status, l'update et le rollback ont traversé le
+vrai plugin et les portes système dans la VM ; le reboot a restauré la racine
+sans toucher `/home`. La description hostile a provoqué un appel d'outil SSE
+volontairement illégal, refusé structurellement avant l'exécuteur. Conversation
+complète : `docs/proofs/2026-08-29-assistant-task7-conversation.jsonl` ; preuves
+et réserves : `tools/vm-dev.md` §25.
+
 1. Status lu et restitué correctement par l'assistant.
 2. Une update RÉELLE déclenchée par l'assistant (terminal visible, snapshot pre/post, entrées limine).
 3. Un rollback RÉEL proposé par l'assistant → modale polkit → authentification → restauration vérifiée au reboot (marqueur /home intact).

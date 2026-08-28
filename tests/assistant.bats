@@ -130,6 +130,12 @@ setup() {
   [ "$status" -eq 0 ]
   run grep -E 'systemPrompt.*(description|package|_status)' "$assistant_dir/AssistantCore.qml"
   [ "$status" -eq 1 ]
+  run grep -F '_requestAllowsTools ? toolCatalog : []' \
+    "$assistant_dir/AssistantCore.qml"
+  [ "$status" -eq 0 ]
+  run grep -F "Appel d'outil refusé après des données système hostiles" \
+    "$assistant_dir/AssistantCore.qml"
+  [ "$status" -eq 0 ]
 }
 
 @test "rollback exige l'intention visible puis polkit sans auto-approve" {
@@ -264,6 +270,8 @@ setup() {
     [[ " ${source[*]} " != *" DmsToolHarness.qml "* ]]
     [[ " ${source[*]} " != *" dms-tool-harness-plugin.json "* ]]
     [[ " ${source[*]} " != *" mock-openai-server.py "* ]]
+    [[ " ${source[*]} " != *" tool-scenario-server.py "* ]]
+    [[ " ${source[*]} " != *" task7-marker "* ]]
     [[ " ${source[*]} " != *" tests/fixtures "* ]]
     [[ " ${source[*]} " == *" providers.json "* ]]
     [[ " ${source[*]} " == *" AnthropicAdapter.js "* ]]
@@ -298,4 +306,37 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"remplace le plugin système"* ]]
   [[ "$(< "$calls")" == notify\ Assistant\ Eschaton\ remplacé* ]]
+}
+
+@test "le fournisseur de preuve Task 7 ne recycle aucun ancien tour outil" {
+  run python3 - "$assistant_dir/tests/tool-scenario-server.py" <<'PY'
+import importlib.util
+import json
+import sys
+
+spec = importlib.util.spec_from_file_location("task7_scenario", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+tool = {
+    "role": "tool",
+    "tool_call_id": "task7-update",
+    "content": json.dumps({"launched": True}),
+}
+assert module.scenario_from([{"role": "user", "content": "UPDATE_TASK7"}]) == "UPDATE_TASK7"
+assert module.tool_result([{"role": "user", "content": "UPDATE_TASK7"}, tool]) == (
+    "task7-update", {"launched": True}
+)
+history = [
+    {"role": "user", "content": "UPDATE_TASK7"},
+    tool,
+    {"role": "assistant", "content": "Terminal ouvert."},
+    {"role": "user", "content": "nouveau tour sans scénario"},
+]
+assert module.scenario_from(history) == "UNKNOWN"
+assert module.tool_result(history) is None
+print("TASK7_SCENARIO_ROUTING_OK")
+PY
+  [ "$status" -eq 0 ]
+  [ "$output" = "TASK7_SCENARIO_ROUTING_OK" ]
 }
