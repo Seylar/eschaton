@@ -183,3 +183,10 @@ Ordre impératif : finir le §7 (rendu pastilles) → revue Claude → [Claude :
 **Minor à intégrer en T5 au fil de l'eau** (autorisé) : garde-fou sur l'`index` d'outil OpenAI manquant dans des chunks séparés (`OpenAIAdapter.js:128`). **Minors différés au ledger** (post-tag) : contrat UI réel plus large que §3 à documenter (messages/busy/cancel/clear — et ne plus passer l'objet core entier au Panel, `apiKey` accessible) ; `refreshCredentials` sans retry si trousseau occupé ; arithmétique vm-dev §20.2 (170,97 t/s) ; dropdown désynchronisé après refus busy ; timeout ProviderCatalog.
 
 Ensuite, la Task 5 telle que planifiée — rappels : catalogue FERMÉ, refus loggé de tout outil inconnu, contenu système = données étiquetées jamais concaténées au prompt système, `pkexec eschaton-rollback --yes N` seulement après affichage de l'intention, JAMAIS d'auto-approve.
+
+## 10. File d'attente Codex après le SP3 — SP4a Signature & keyring
+
+Le SP4 est découpé (veille + roadmap actée) : **4a Signature** (court, bloquant, indépendant) → 4b Première vraie machine → 4c Première ouverture de session. Dès que le SP3 est clos (ou pendant une attente de revue) : **SP4a**.
+- Spec (autorité, sa séquence §3.3 EST l'architecture) : `docs/superpowers/specs/2026-08-28-signature-design.md`
+- Plan (6 tâches) : `docs/superpowers/plans/2026-08-28-signature.md`
+- ⚠️ Task 1 contient un **point utilisateur obligatoire** (garde de la clé privée : sauvegarde chiffrée + passphrase remises à l'utilisateur AVANT tout secret GitHub) et deux décisions restent **à veto utilisateur** (threat model clé-en-CI, spec §3.1 ; requalification de l'atomique, roadmap Socle §1.2) — les signaler au lancement.
