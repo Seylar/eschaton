@@ -1131,6 +1131,19 @@ tell application "UTM"
 end tell
 ```
 
+> **`isoPath` désigne la copie PATCHÉE de l'ISO (§10.3 a), pas l'originale — et
+> la VM en dépend durablement.** UTM ne recopie pas l'image dans le bundle : il
+> range le `source:` sous forme de *security-scoped bookmark* vers ce chemin
+> exact (§3.2). Le fichier
+> `~/Downloads/archlinux-2026.08.01-x86_64-serial.iso` doit donc **rester en
+> place** aussi longtemps que la VM existe : un nettoyage du dossier
+> `Downloads` casse le lecteur CD **en silence** — le `config.plist` n'affiche
+> aucun chemin, et la panne ne se voit qu'au démarrage suivant, quand l'UEFI ne
+> trouve plus de média amorçable. Contrairement à la VM aarch64, on ne peut pas
+> s'en affranchir par l'astuce du §3.3 (copier l'ISO dans le bundle et poser
+> `ImageName`) : cette astuce passe par le `config.plist`, que UTM ignore quand
+> il tourne. Pour rendre la VM autonome, il faut la recréer (§10.4).
+
 Quatre écarts avec la recette aarch64 du §3.1, tous nécessaires :
 
 1. **`hypervisor:false`** — HVF n'accélère que l'architecture de l'hôte. Sur
@@ -1168,6 +1181,11 @@ Quatre écarts avec la recette aarch64 du §3.1, tous nécessaires :
 > création. Il *perd* en revanche la source du CD (`ImageName` retombe à
 > `None`). Le §3.2 disait déjà de s'en méfier : c'est confirmé.
 
+**Suite : l'installation elle-même.** Elle suit la procédure du §8.2 sans rien
+changer à l'installeur ; ses ajustements x86_64 sont au **§10.3 c**, après la
+console série du §10.3 — qui en est le préalable, puisque sans elle rien n'est
+pilotable.
+
 ### 10.3 Le vrai piège : il n'y a pas de console série sur x86
 
 C'est le point qui coûte le plus cher si on l'ignore, et il n'a **aucun
@@ -1181,13 +1199,7 @@ et pour le système installé.
 **a) Côté ISO** — l'entrée systemd-boot de l'ISO officielle porte seulement
 `options archisobasedir=arch archisosearchuuid=…`. On travaille donc sur une
 **copie** de l'ISO (l'originale reste intacte et vérifiable) dont on modifie
-l'entrée. Le fichier `loader/entries/01-archiso-linux.conf` existe en **deux
-exemplaires** — un dans l'arbre ISO9660, un dans l'image FAT de l'ESP —, et
-selon la façon dont le firmware amorce le média c'est l'un ou l'autre qui fait
-foi : patcher les deux. La **taille du fichier doit être conservée** (elle est
-inscrite dans les métadonnées ISO9660 et dans l'entrée de répertoire FAT), la
-place se prend sur la ligne `title` et sur `sort-key` (superflue :
-`loader.conf` désigne l'entrée par défaut par son nom de fichier).
+l'entrée, pour obtenir :
 
 ```
 options  archisobasedir=arch archisosearchuuid=… console=tty0 console=ttyS0,115200
@@ -1196,6 +1208,123 @@ options  archisobasedir=arch archisosearchuuid=… console=tty0 console=ttyS0,11
 `console=ttyS0` **en dernier** : le dernier `console=` de la ligne devient
 `/dev/console`, celui que `systemd-getty-generator` instancie et sur lequel
 arrivent les messages d'amorçage.
+
+Trois contraintes commandent la méthode :
+
+1. Le fichier `loader/entries/01-archiso-linux.conf` existe en **deux
+   exemplaires** — un dans l'arbre ISO9660, un dans l'image FAT de l'ESP
+   (partition `0xEF` de l'hybride). Selon la façon dont le firmware amorce le
+   média, c'est l'un ou l'autre qui fait foi : **patcher les deux**.
+2. **macOS ne sait pas monter cette ESP en écriture.** `mount -t msdos` (sans
+   `-r`) rend `Permission denied`, et `hdiutil attach` sans `-nomount` rend
+   « aucun système de fichiers montable ». L'édition se fait donc **directement
+   dans l'image**, à l'octet.
+3. La **taille du fichier doit être conservée** : elle est inscrite dans les
+   métadonnées ISO9660 et dans l'entrée de répertoire FAT, qu'on ne touche pas.
+   La place se prend sur la ligne `title` et sur `sort-key` — superflue, car
+   `loader.conf` désigne l'entrée par défaut par son **nom de fichier**.
+
+**Cloner puis patcher** (`cp -c` = clone APFS : instantané, sans coût disque) :
+
+```bash
+cd ~/Downloads
+cp -c archlinux-2026.08.01-x86_64.iso archlinux-2026.08.01-x86_64-serial.iso
+python3 patch-iso-serial.py archlinux-2026.08.01-x86_64-serial.iso
+```
+
+> Honnêteté sur l'ordre réellement suivi : lors du smoke test, la copie a
+> d'abord été patchée **dans le bundle de la VM**
+> (`…/eschaton-x86-smoke.utm/Data/archlinux.iso`, tentative de suivre le §3.3),
+> puis clonée vers `~/Downloads/…-serial.iso`. Le résultat est identique — le
+> script ne dépend que du contenu du fichier — mais l'ordre ci-dessus est le
+> chemin direct, et c'est lui qu'il faut rejouer.
+
+Le script, tel qu'exécuté :
+
+```python
+#!/usr/bin/env python3
+"""Ajoute une console serie a l'entree systemd-boot de l'ISO Arch (copie)."""
+import sys
+
+path = sys.argv[1]
+
+OLD = (
+    b"title    Arch Linux install medium (x86_64, UEFI)\n"
+    b"sort-key 01\n"
+    b"linux    /arch/boot/x86_64/vmlinuz-linux\n"
+    b"initrd   /arch/boot/x86_64/initramfs-linux.img\n"
+    b"options  archisobasedir=arch archisosearchuuid=2026-08-01-14-10-23-00\n"
+)
+
+NEW = (
+    b"title    Arch Linux (serie)\n"
+    b"linux    /arch/boot/x86_64/vmlinuz-linux\n"
+    b"initrd   /arch/boot/x86_64/initramfs-linux.img\n"
+    b"options  archisobasedir=arch archisosearchuuid=2026-08-01-14-10-23-00"
+    b" console=tty0 console=ttyS0,115200\n"
+)
+
+NEW += b"\n" * (len(OLD) - len(NEW))   # meme taille exacte, comble par des lignes vides
+assert len(NEW) == len(OLD), f"taille {len(NEW)} != {len(OLD)}"
+
+with open(path, "r+b") as f:
+    data = f.read()
+    hits = []
+    off = data.find(OLD)
+    while off != -1:
+        hits.append(off)
+        off = data.find(OLD, off + 1)
+    if not hits:
+        sys.exit("motif introuvable — l'ISO n'est pas celle attendue")
+    for off in hits:
+        f.seek(off)
+        f.write(NEW)
+    print(f"{len(hits)} exemplaire(s) patche(s) aux offsets " +
+          ", ".join(hex(o) for o in hits))
+    print(f"taille inchangee : {len(OLD)} octets")
+```
+
+```console
+$ python3 patch-iso-serial.py archlinux-2026.08.01-x86_64-serial.iso
+2 exemplaire(s) patche(s) aux offsets 0x4ef3f000, 0x4f54e400
+taille inchangee : 220 octets
+```
+
+> **Les offsets ne se recopient pas d'une release à l'autre** — ceux ci-dessus
+> valent pour l'ISO 2026.08.01. Le script les **retrouve seul** en cherchant le
+> motif ; c'est bien ainsi qu'il faut le rejouer. Il refuse de travailler
+> (« motif introuvable ») si l'entrée amont a changé — auquel cas il faut relire
+> le fichier réel (commandes de vérification ci-dessous) et réajuster `OLD` et
+> `NEW`, en gardant `len(NEW) == len(OLD)`.
+
+**Vérifier le patch avant de démarrer** — remonter les deux systèmes de fichiers
+de l'image et relire le fichier dans chacun :
+
+```bash
+hdiutil attach -nomount -readonly ~/Downloads/archlinux-2026.08.01-x86_64-serial.iso
+#   /dev/disk20          FDisk_partition_scheme
+#   /dev/disk20s2        0xEF
+mkdir -p /tmp/iso /tmp/esp
+mount -t cd9660 -r /dev/disk20   /tmp/iso    # l'arbre ISO9660
+mount -t msdos  -r /dev/disk20s2 /tmp/esp    # l'image FAT de l'ESP
+cat /tmp/iso/loader/entries/01-archiso-linux.conf
+cat /tmp/esp/loader/entries/01-archiso-linux.conf
+umount /tmp/iso /tmp/esp && hdiutil detach /dev/disk20
+```
+
+Les deux doivent rendre exactement :
+
+```
+title    Arch Linux (serie)
+linux    /arch/boot/x86_64/vmlinuz-linux
+initrd   /arch/boot/x86_64/initramfs-linux.img
+options  archisobasedir=arch archisosearchuuid=2026-08-01-14-10-23-00 console=tty0 console=ttyS0,115200
+```
+
+> **Détacher l'image avant de démarrer la VM.** Une image encore attachée à
+> l'hôte reste accessible, mais autant ne pas la laisser montée pendant que QEMU
+> la lit. Le numéro de `disk` change à chaque `hdiutil attach` : relire la sortie
+> plutôt que recopier `disk20`.
 
 **b) Côté système installé** — `eschaton-install` écrit
 `cmdline: root=LABEL=eschaton rootflags=subvol=@ rw quiet`, sans `console=`. Et
@@ -1224,6 +1353,44 @@ umount -R /mnt && reboot
 > la console UEFI** — à l'inverse d'aarch64 (§9.5) où il n'y a pas de VGA. Entre
 > la fin du firmware et le premier message du noyau, il est donc normal de ne
 > rien voir.
+
+**c) Le déroulé d'installation** — c'est **celui du §8.2**, à l'installeur près
+de rien : mêmes `curl`, même comparaison d'empreintes, même
+`./eschaton-install --disk /dev/vda --user seylar`, mêmes deux invites `passwd`.
+Le pilotage par `tools/vm-serial` (§5.3, §9.2) est identique. Quatre ajustements
+x86_64, tous des **simplifications** :
+
+| §8.2 (aarch64 / archboot) | x86_64 / ISO Arch officielle |
+|---|---|
+| attendre `Hit ENTER … or CTRL-C for bash prompt`, envoyer **`Ctrl-C`** (`raw 03`) | **pas de danse `Ctrl-C`** : l'ISO rend une invite `archiso login:` — envoyer `root`, sans mot de passe |
+| `pacman -Sy --noconfirm arch-install-scripts gptfdisk btrfs-progs dosfstools` | **inutile** : `pacstrap`, `arch-chroot`, `genfstab`, `sgdisk`, `mkfs.btrfs`, `mkfs.vfat` sont **tous déjà là** (§10.7, point 9) |
+| `stty cols 200 rows 60` | identique — toujours nécessaire |
+| `umount -R /mnt && reboot` | **précédé du `sed` de l'étape (b)** ci-dessus, sinon le système démarre invisible |
+
+```bash
+# console série obtenue (§10.3 a), au prompt `archiso login:`
+tools/vm-serial send "root"                     # aucun mot de passe sur l'ISO Arch
+tools/vm-serial run "stty cols 200 rows 60"
+
+# identique au §8.2 à partir d'ici
+tools/vm-serial run "cd /root && curl -fsSLO https://raw.githubusercontent.com/Seylar/eschaton/socle/installer/eschaton-install \
+  && curl -fsSLO https://raw.githubusercontent.com/Seylar/eschaton/socle/installer/lib.sh \
+  && chmod +x eschaton-install && sha256sum eschaton-install lib.sh"
+#   à comparer au dépôt : raw.githubusercontent met en cache
+
+tools/vm-serial send 'cd /root && ./eschaton-install --disk /dev/vda --user seylar; echo INSTALL_RC=$?'
+#   ~8 min plus tard : « New password: » puis « Retype new password: »
+#   -> `send "eschaton"` deux fois ; attendre `INSTALL_RC=0`
+
+tools/vm-serial run "sed -i 's|rw quiet|rw console=tty0 console=ttyS0,115200|' /mnt/boot/limine.conf"
+tools/vm-serial send "umount -R /mnt && reboot"
+```
+
+> **Lancer l'installeur par `send`, pas par `run`.** Les deux invites `passwd`
+> sont interactives : `run` attend un marqueur de fin qui n'arrivera jamais et
+> se désynchronise. D'où le `echo INSTALL_RC=$?` — et, quand on guette ce
+> marqueur, chercher `INSTALL_RC=[0-9]` et non `INSTALL_RC=`, sinon on tombe sur
+> l'écho de la commande qu'on vient de taper.
 
 ### 10.4 Rattraper un système installé qu'on ne voit pas
 
@@ -1445,6 +1612,14 @@ de `/etc/os-release`. Le motd s'affiche à l'ouverture de session :
 
 ### 10.8 Pièges propres à ce smoke test
 
+- **Ne pas supprimer `~/Downloads/archlinux-2026.08.01-x86_64-serial.iso`.** La
+  VM ne contient pas l'ISO : elle la référence par *bookmark* vers ce chemin
+  (§10.2). Un nettoyage du dossier `Downloads` casse le lecteur CD **sans aucun
+  message** — le `config.plist` n'affiche pas le chemin, et la panne n'apparaît
+  qu'au démarrage suivant, sous la forme d'un UEFI qui ne trouve plus de média.
+  Le fichier fait 1,5 Gio mais c'est un clone APFS de l'ISO d'origine : il ne
+  coûte que les 220 octets réécrits. Garder **les deux** ISO — l'originale reste
+  la pièce vérifiable (SHA-256 amont), la patchée est celle qui démarre.
 - **Ne pas confondre les deux VM sur le réseau.** Les deux s'appellent
   `eschaton` et vivent en `192.168.64.x`. Le bail se lit dans
   `/var/db/dhcpd_leases` sur le Mac ; **identifier par l'adresse MAC**, pas par
