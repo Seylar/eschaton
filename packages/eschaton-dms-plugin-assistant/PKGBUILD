@@ -1,6 +1,6 @@
 pkgname=eschaton-dms-plugin-assistant
 pkgver=0.1.0
-pkgrel=5
+pkgrel=6
 pkgdesc="Plugin DMS Eschaton : assistant système à catalogue d'outils fermé"
 arch=(any)
 license=(MIT)

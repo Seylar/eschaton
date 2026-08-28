@@ -156,7 +156,7 @@ Item {
 
     function positiveInteger(value) {
         return typeof value === "number" && isFinite(value) && value >= 1
-            && value <= 9007199254740991 && Math.floor(value) === value ? value : -1;
+            && value <= 2147483647 && Math.floor(value) === value ? value : -1;
     }
 
     function acceptsNoArguments(toolName) {
@@ -754,6 +754,11 @@ Item {
             root.stopStatusSource("snapshots");
             root.stopStatusSource("system");
             root.stopStatusSource("memory");
+            root.finishCurrent({
+                ok: false,
+                tool: "system_status",
+                error: "collecte interrompue : délai dépassé"
+            });
         }
     }
 

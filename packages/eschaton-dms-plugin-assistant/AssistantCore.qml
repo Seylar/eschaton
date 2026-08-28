@@ -171,6 +171,12 @@ Item {
         let result = String(resultJson || "");
         if (!result)
             result = JSON.stringify({ ok: false, error: "résultat d'outil vide" });
+        if (result.length > maxToolPayloadChars) {
+            result = JSON.stringify({
+                ok: false,
+                error: "résultat d'outil refusé : limite dépassée"
+            });
+        }
         appendConversation({ role: "tool", tool_call_id: id, content: result });
 
         const next = Object.assign({}, _pendingTools);

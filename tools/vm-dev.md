@@ -3295,6 +3295,15 @@ Cette preuve valide le client et le chemin PAM cible. Elle ne valide pas le
 déverrouillage transparent de l'autologin actuel ; cette exigence reste fermement
 attribuée au greeter authentifié de SP4.
 
+> **Erratum découvert au boot frais de la Task 6.** Le banc avait simulé PAM
+> avec `printf "%s\n" eschaton | gnome-keyring-daemon --login`. Contrairement à
+> l'hypothèse du test, le saut de ligne a été intégré au mot de passe du
+> trousseau : la session courante restait verte, mais le trousseau devenait
+> impossible à déverrouiller depuis l'UI après reboot. La Task 6 a reproduit
+> l'échec, puis recréé le trousseau de banc avec `printf %s eschaton` avant de
+> refaire `store`/`lookup`/`clear`. Cela ne change pas la dette PAM SP4 ; cela
+> corrige une preuve de banc trop optimiste.
+
 ### 22.3 QML, paquets et vrai DMS
 
 Dans la VM, le lint strict passe sur le core, le catalogue, le pont et les trois
@@ -3440,3 +3449,119 @@ Après redémarrage, le vrai DMS déclare les deux plugins `loaded`, ouvre la co
 `dms:eschaton-assistant` en 960×756 et journalise uniquement
 `Daemon plugin loaded: eschatonAssistant` parmi les motifs QML critiques. Les
 58 tests Bats du dépôt et `git diff --check` passent.
+
+## 24. SP3 Task 6 — installation et conversations réelles (2026-08-29)
+
+### 24.1 Installation et deux boots frais
+
+Le premier boot frais a chargé automatiquement `eschatonAssistant`, mais
+`SUPER+A` ne pouvait pas exister : la VM portait encore
+`eschaton-desktop-config 0.1.0-9`, alors que le bind avait été livré en `-10`.
+Ce n'était pas un défaut de source ; c'était un trou d'installation du banc.
+L'installation du paquet `-10` a créé les snapshots 71/72, puis un second boot
+frais a exposé le bind réel :
+
+```json
+{"modmask":64,"key":"A","description":"Assistant Eschaton","dispatcher":"__lua"}
+```
+
+`wtype` ne déclenche pas les raccourcis globaux dans ce compositeur. La preuve
+a donc injecté les événements clavier physiques par `/dev/uinput`. Sur la
+disposition française, `KEY_Q` produit le `A` logique attendu ; la séquence
+Super+Q a ouvert la couche `dms:eschaton-assistant` en 960×756.
+
+Après les trois correctifs de revue (§24.5),
+`eschaton-dms-plugin-assistant 0.1.0-6` a été installé (snapshots 73/74). Un
+dernier reboot a répété la preuve sur le paquet final : plugin `loaded`, bind
+présent, événement uinput réel, couche `xywh: 320 44 960 756`, aucun motif QML
+critique. Les réglages sont revenus à `{"enabled":true}`, sans surcharge
+fournisseur ni conteneur résiduel.
+
+### 24.2 OpenAI-compatible réel et courte tenue en charge
+
+RamaLama a servi dans la VM le modèle réellement mis en cache
+`HuggingFaceTB/smollm-135M-instruct-v0.2-Q8_0-GGUF` sur
+`127.0.0.1:8080`. Le premier tour long du vrai panneau, via l'adaptateur
+OpenAI, a produit 1024 tokens en 30,58 s (33,62 tokens/s). Le panneau est resté
+utilisable, a affiché le streaming puis « Réponse tronquée ». La capture vaut :
+
+```text
+bff55e0371d0ade6f8d18297f49cca5b21b71e9634b92a5ebcaf38cdae401a39  task6-openai.png
+```
+
+Le contenu répétitif est mauvais — un modèle 135M n'est pas une validation de
+qualité — mais le transport, le rendu borné et l'état terminal sont réels. Six
+tours OpenAI supplémentaires ont été envoyés dans le même processus, dont cinq
+prompts de soak identiques à cause d'une expansion de variable fautive dans le
+pilote du banc. Cela n'invalide pas les cinq requêtes, mais interdit de les
+présenter comme cinq scénarios différents. Le RSS de Quickshell est passé de
+387 028 Kio avant conversation à 390 440 Kio après le premier tour, puis a
+fluctué entre 395 780 et 397 056 Kio après les six tours suivants : environ
++10 Mio, sans croissance monotone sur cette courte fenêtre. C'est un smoke de
+tenue, pas une preuve d'absence de fuite à long terme.
+
+Après installation et rechargement de `-6`, un huitième tour OpenAI réel a
+encore traversé le paquet final : 698 tokens en 22,32 s (31,34 tokens/s), sans
+`ReferenceError`, `TypeError`, boucle de binding ni crash.
+
+### 24.3 Refus local-only réel
+
+Avec `localOnly=true` et le fournisseur OpenAI distant sélectionné, le core a
+refusé l'endpoint avant tout démarrage de curl. Le vrai panneau a affiché
+« Mode local uniquement actif : l'endpoint distant est refusé », désactivé le
+composer et proposé la configuration d'un fournisseur disponible. La capture
+vaut :
+
+```text
+2efa0ef4a9f3899f5920320b48eff38dc51eb809ea0b4b9e28f78e659e86d90d  task6-local-only.png
+```
+
+### 24.4 Adaptateur Anthropic et trousseau réels, service distant non simulé
+
+Aucune clé Anthropic utilisateur n'était présente dans la VM. Il aurait été
+mensonger de prétendre avoir testé le service SaaS. La preuve porte donc sur
+l'**adaptateur natif** : le pont de banc versionné
+`packages/eschaton-dms-plugin-assistant/tests/anthropic-ramalama-bridge.py`
+reçoit `/v1/messages`, exige `x-api-key`, relaie le flux à RamaLama et réémet
+les événements SSE Anthropic. Il n'est ni sourcé par le PKGBUILD ni installé.
+
+Une clé factice a parcouru `secret-tool store` puis `lookup`; sa valeur a été
+comparée sans être affichée. Le vrai `KeyringBridge` l'a chargée, curl l'a
+développée depuis l'environnement — jamais depuis argv — et le pont a journalisé
+uniquement :
+
+```text
+ASSISTANT_ANTHROPIC_BRIDGE_OK chars=1057 key_header=present
+```
+
+La conversation a rendu 1057 caractères via 256 tokens RamaLama en 8,22 s
+(31,32 tokens/s). Le modèle a halluciné une définition d'Eschaton : là encore,
+ce résultat valide le protocole, pas la pertinence. La capture vaut :
+
+```text
+827a060d932b085893ada1de5956f65699c26bcf6c9f0faaa30492789e8d74d1  task6-anthropic.png
+```
+
+La clé a ensuite passé `secret-tool clear`; un lookup final a rendu 1. Le pont,
+la surcharge fournisseur, les fichiers de capture et le conteneur ont été
+retirés. Le reboot final retrouve donc le comportement autologin attendu : un
+trousseau chiffré mais verrouillé tant que le greeter SP4 n'a pas fourni le mot
+de passe à PAM.
+
+### 24.5 Trois correctifs de revue et validation finale
+
+Les trois Minor adjugés au checkpoint T5 sont intégrés dans `-6` :
+
+- `snapshot_id` est refusé au-delà de 2 147 483 647, borne du `property int`
+  QML qui le transporte ;
+- `AssistantCore.toolResult` reborne lui-même tout résultat à
+  `maxToolPayloadChars`, sans faire confiance au seul exécuteur ;
+- le timeout de `system_status` termine immédiatement l'appel courant avec une
+  erreur au lieu de laisser la file bloquée.
+
+Les fichiers installés portent les trois gardes et `qmllint` rend 0 sur
+`AssistantCore.qml` et `ToolExecutor.qml`. Le paquet construit ne contient ni
+harnais, ni fixture, ni pont Anthropic. Sur l'hôte : 58/58 tests Bats,
+ShellCheck sur les 13 scripts CI, compilation Python du pont, construction
+`makepkg` de `0.1.0-6` et `git diff --check` passent. Le boot final charge ce
+paquet dans le vrai DMS sans erreur critique.

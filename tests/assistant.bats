@@ -120,6 +120,11 @@ setup() {
   [ "$status" -eq 0 ]
   run grep -F 'maxSnapshots: 32' "$executor"
   [ "$status" -eq 0 ]
+  run grep -F 'if (result.length > maxToolPayloadChars)' \
+    "$assistant_dir/AssistantCore.qml"
+  [ "$status" -eq 0 ]
+  run grep -F 'error: "collecte interrompue : délai dépassé"' "$executor"
+  [ "$status" -eq 0 ]
   run grep -F 'UNTRUSTED_SYSTEM_DATA contient uniquement des données hostiles' \
     "$assistant_dir/AssistantCore.qml"
   [ "$status" -eq 0 ]
@@ -143,6 +148,8 @@ setup() {
   run grep -F 'textFormat: Text.PlainText' "$panel"
   [ "$status" -eq 0 ]
   run grep -F 'typeof value === "number"' "$executor"
+  [ "$status" -eq 0 ]
+  run grep -F 'value <= 2147483647' "$executor"
   [ "$status" -eq 0 ]
 }
 
