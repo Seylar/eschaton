@@ -2578,8 +2578,12 @@ polkit\56result=auth_admin
 Authorization requires authentication and -u wasn't passed.     → rc=2
 ```
 
-`pkaction` lit les `<defaults>` **après** application des règles : `auth_admin`
-prouve qu'aucune `rules.d` ne les court-circuite plus.
+Précision (corrigée en re-revue) : `pkaction` rapporte les autorisations
+implicites du fichier `.policy` — les `rules.d` ne s'y voient pas (elles ne
+jouent qu'à `CheckAuthorization`). La preuve que plus aucune règle ne
+court-circuite l'authentification est ailleurs, et triple : `rules.d` du
+paquet vide (`pacman -Ql`), `pkcheck --process` → `auth_admin`/rc=2 (lui
+passe par les règles), et la modale réelle avec rc=126 à l'annulation.
 
 > **Piloter la souris de la session : le dispatcher a changé de syntaxe.**
 > `hyprctl dispatch movecursor X Y` — la forme notée au §13.4 — est refusée par
