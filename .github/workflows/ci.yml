@@ -14,11 +14,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: sudo apt-get update && sudo apt-get install -y shellcheck bats
+      # curl et jq sont préinstallés sur ubuntu-latest ; on les demande quand même
+      # pour que la dépendance de `tools/check-desktop-deps` soit lisible ici.
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck bats curl jq
       - name: shellcheck
         run: |
           shellcheck \
             tools/sandbox tools/build-pkg tools/provision-gradle \
+            tools/check-desktop-deps \
             repo/build-repo \
             installer/lib.sh installer/eschaton-install \
             packages/eschaton-base/lib.sh \
@@ -30,6 +33,14 @@ jobs:
         run: python3 -m py_compile tools/vm-serial
       - name: bats
         run: bats tests/
+      # En dernier : seule étape du job qui sorte sur le réseau. `eschaton-desktop`
+      # est un meta `arch=(any)` — les deux jobs de build le construisent à
+      # l'identique et ne prouvent RIEN sur la disponibilité de ce qu'il déclare.
+      # Une dépendance présente côté Arch x86_64 mais absente d'ALARM aarch64
+      # passerait toute la CI pour n'échouer qu'à l'installation sur la machine
+      # ARM ; cette garde la rattrape ici.
+      - name: dépendances du bureau (Arch x86_64 + ALARM aarch64)
+        run: tools/check-desktop-deps
 
   # Un job de build PAR ARCHITECTURE (spec §5.3) : les deux paquets vendorés
   # sont des binaires natifs compilés par GraalVM, pas des paquets `any`. Chaque
