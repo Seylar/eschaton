@@ -2604,7 +2604,7 @@ passe par les règles), et la modale réelle avec rc=126 à l'annulation.
 > n'étaient pas rendues après un démarrage frais.** Au démarrage du 14:19, le
 > service de provisioning était
 > `active (exited)`, `dms ipc call plugins status` rend `loaded` pour les deux
-> plugins, `plugin_settings.json` porte `true,true` et `barConfigs[0].rightWidgets`
+> plugins, `plugin_settings.json` porte `true,true` et `barConfigs[0].rightWidgets` (dans `settings.json` — l'état FICHIER ; l'IPC mémoire, lui, ne les portait pas, cf. §14.5)
 > contient bien `eschatonUpdate` et `eschatonRollback` — mais la capture d'écran
 > prise à 15:04, soit 45 minutes après le démarrage, ne montre que les sept
 > pastilles first-party : aucune des deux pastilles Eschaton. Un
