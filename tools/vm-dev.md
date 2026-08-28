@@ -2228,6 +2228,21 @@ est en 0.56.2) : le risque n° 7 de la spec est réel mais sans effet ici.
 ajouté aux `depends` d'`eschaton-desktop`. `hyprlang` est encore là malgré la
 config Lua.
 
+> **Amendement du 2026-08-28 (Task 3) : cet inventaire est INCOMPLET côté audio.**
+> Le paquet `pipewire` ne livre aucun greffon SPA audio — son
+> `/usr/lib/spa-0.2/` ne contient que `control`, `support`, `v4l2`,
+> `videoconvert` et `videotestsrc`. `libspa-alsa.so` et les codecs bluez5 sont
+> dans **`pipewire-audio`**, que ni `pipewire` ni `wireplumber` ne tirent
+> (relevé dans les index des deux dépôts, `pacman -Fl`). La pile du spike était
+> donc **dépourvue de tout back-end de périphérique audio** : « Aucun appareil de
+> sortie » n'est pas seulement le `-audio none` de QEMU (§12.9, §13.3), c'est
+> aussi — et de façon certaine, elle, puisqu'elle vaut sur toute machine — le jeu
+> de paquets. `eschaton-desktop` ajoute `pipewire-pulse`, qui tire
+> `pipewire-audio` en dépendance dure et fournit en plus le serveur d'API
+> PulseAudio des applications ordinaires (le Control Center de DMS, lui, parle le
+> protocole PipeWire natif par Quickshell). Reste à vérifier sur matériel réel
+> (Task 7) : la VM ne peut pas trancher, elle n'a pas de carte son.
+
 ### 12.9 Ce que le spike n'a pas prouvé
 
 - **Cinq « Quickshell Features » manquent au build `extra` — dont `Polkit`.**
@@ -2370,8 +2385,11 @@ seylar     19410 qs
 - **PipeWire démarre.** La réserve du §12.9 tombe : dans une vraie session
   utilisateur, `pipewire.service` et `wireplumber.service` sont `running` sans
   qu'aucun préset d'Eschaton n'ait à s'en mêler. Le Control Center affiche
-  toujours « Aucun appareil de sortie », mais c'est le matériel de la VM
-  (`-audio none` côté QEMU), pas la configuration.
+  toujours « Aucun appareil de sortie » — attribué ici au matériel de la VM
+  (`-audio none` côté QEMU). *(Amendé le 2026-08-28, Task 3 : ce n'est pas la
+  seule cause, ni même la cause suffisante — la pile installée n'avait aucun
+  back-end de périphérique audio, `pipewire-audio` n'étant tiré ni par
+  `pipewire` ni par `wireplumber`. Voir l'amendement du §12.8.)*
 - **`dms.service` est supervisé.** `hyprland-session.target` (livré par
   `eschaton-desktop-config`, absent du paquet `hyprland`) tire
   `graphical-session.target`, qui tire `dms.service`.

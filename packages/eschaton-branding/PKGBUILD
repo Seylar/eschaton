@@ -1,18 +1,27 @@
 pkgname=eschaton-branding
 pkgver=0.1.0
-pkgrel=1
-pkgdesc="Identité Eschaton : os-release, message d'accueil"
+pkgrel=2
+pkgdesc="Identité Eschaton : os-release, message d'accueil, fond d'écran"
 arch=(any)
 license=(MIT)
 # LICENSE est un lien symbolique vers le LICENSE partagé à la racine du dépôt :
 # makepkg réduit toute entrée locale de source=() à son basename, donc un chemin
 # relatif ("../../LICENSE") n'est pas résoluble — cf. get_filename() dans
 # /usr/share/makepkg/util/source.sh. Le lien conserve une licence unique.
-source=(os-release 10-eschaton.motd LICENSE)
-sha256sums=(SKIP SKIP SKIP)
+source=(os-release 10-eschaton.motd wallpaper-default.png LICENSE)
+sha256sums=(SKIP SKIP SKIP SKIP)
 
 package() {
   install -Dm644 os-release "$pkgdir/usr/share/eschaton/os-release"
   install -Dm644 10-eschaton.motd "$pkgdir/usr/lib/motd.d/10-eschaton"
+  # Fond d'écran par défaut — dégradé sombre 2560×1440, régénérable à l'identique :
+  #   magick -size 2560x1440 gradient:"#0d0b1a-#2a1e4d" -strip wallpaper-default.png
+  # `-strip` n'est pas cosmétique : sans lui ImageMagick écrit trois chunks tEXt
+  # portant l'horodatage de fabrication, et le binaire versionné changerait à
+  # chaque régénération. Avec, la sortie est déterministe (sha256 identique d'un
+  # passage à l'autre, vérifié).
+  # Le fichier est livré ici ; son BRANCHEMENT dans DMS (quelle clé de
+  # configuration, quel chemin) se règle en Task 7, sur constat du mécanisme réel.
+  install -Dm644 wallpaper-default.png "$pkgdir/usr/share/backgrounds/eschaton/default.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
