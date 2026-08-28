@@ -197,7 +197,11 @@ def cmd_run(argv):
     tag = uuid.uuid4().hex[:8]
     begin, end = f"@B{tag}@", f"@E{tag}@"
     off = size()
-    put(f"echo {begin}; {command}; echo {end}$?\n".encode())
+    # Le `echo` nu avant le marqueur de fin n'est pas décoratif : une sortie
+    # sans saut de ligne final collerait le marqueur à la dernière ligne utile
+    # (`…failed to create screen@Eabc123@0`), et le rc deviendrait illisible.
+    # Le rc est capturé AVANT cet echo, sinon c'est l'echo qu'on rapporterait.
+    put(f"echo {begin}; {command}; __vms_rc=$?; echo; echo {end}$__vms_rc\n".encode())
     ok, txt = wait_for(re.escape(end) + r"\d+\s*\n", timeout, off)
     out, cap, rc = [], False, None
     for ln in txt.split("\n"):
