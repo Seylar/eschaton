@@ -172,3 +172,14 @@ Le sous-projet 3 est spécifié et planifié :
 - **Veille (autorité factuelle, ses §7.2 interdits sont contraignants)** : `docs/veille/2026-08-28-sp3-assistant.md`.
 
 Ordre impératif : finir le §7 (rendu pastilles) → revue Claude → [Claude : fusion + tag v0.2.0] → SP3 Task 1. Mêmes règles que toujours : pousser sur **`assistant`** (créée depuis main post-fusion v0.2.0 — c'est TA branche de travail SP3), CI verte à chaque vague, preuves vm-dev, jamais de tag/fusion.
+
+## 9. Checkpoint vague SP3 T1-4 — verdict Claude et ouverture de la Task 5
+
+**Verdict : « With fixes » — Task 5 autorisée, à condition d'ouvrir par ces deux correctifs** (findings Important de la revue de vague, qui a rejoué 52/52 bats, 69/69 assertions fixtures et 42 attaques local-only — toutes refusées ; les 3 amendements ADR 0003 sont conformes) :
+
+1. **[Important] Body JSON en argv → E2BIG garanti** — `providers/OpenAIAdapter.js:70` et `AnthropicAdapter.js:148` passent le body en un argument ; Linux borne chaque argument à 131 072 octets, or `maxResponseChars` (262 144) + l'historique le dépassent (démontré : 262 266 o → execve échoue). La Task 5 aggrave (résultats d'outils 64 Kio réinjectés). **Correctif : body par stdin (`--data-binary @-`, motif `stdinEnabled` déjà maîtrisé dans KeyringBridge)** — avec un test qui envoie un body > 131 072 o et prouve que curl démarre.
+2. **[Important + ruling] `toolCall` n'émet pas `callId`** — `AssistantCore.qml:68` : `signal toolCall(string name, string argsJson)` alors que `toolResult(callId, …)` l'exige : contrat inopérant pour un exécuteur externe, la trajectoire B serait une réécriture. **Ruling contrôleur : la signature devient `toolCall(callId, name, argsJson)`** — la spec §3 est déjà amendée ; adapte le signal, les stubs et les tests.
+
+**Minor à intégrer en T5 au fil de l'eau** (autorisé) : garde-fou sur l'`index` d'outil OpenAI manquant dans des chunks séparés (`OpenAIAdapter.js:128`). **Minors différés au ledger** (post-tag) : contrat UI réel plus large que §3 à documenter (messages/busy/cancel/clear — et ne plus passer l'objet core entier au Panel, `apiKey` accessible) ; `refreshCredentials` sans retry si trousseau occupé ; arithmétique vm-dev §20.2 (170,97 t/s) ; dropdown désynchronisé après refus busy ; timeout ProviderCatalog.
+
+Ensuite, la Task 5 telle que planifiée — rappels : catalogue FERMÉ, refus loggé de tout outil inconnu, contenu système = données étiquetées jamais concaténées au prompt système, `pkexec eschaton-rollback --yes N` seulement après affichage de l'intention, JAMAIS d'auto-approve.
