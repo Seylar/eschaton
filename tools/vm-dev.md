@@ -1856,3 +1856,381 @@ et non bloquants pour `v0.1.0` :
 - la **vérification elle-même**, qui reste une checklist manuelle en v0 : son
   automatisation sous QEMU est un chantier ultérieur, nommé par la spec §7.
 
+---
+
+## 12. Spike rendu bureau — Quickshell/DMS sous virtio-gpu (SP2, Task 1)
+
+Déroulé le 2026-08-28 sur la VM `eschaton-dev` (Socle 0.1.0-11), entièrement par
+la console série. Répond au risque n° 1 de la [spec Bureau](../docs/superpowers/specs/2026-08-28-bureau-design.md)
+et à son critère §6.1.
+
+### 12.1 Décision : **rendu OK, par repli logiciel côté compositeur seulement**
+
+| | |
+|---|---|
+| Hyprland 0.56.1 | démarre et tient, **à condition de `LIBGL_ALWAYS_SOFTWARE=1`** |
+| Quickshell 0.3.1 / DMS 1.5.3 | rend **sans aucune variable d'environnement** — Qt prend l'OpenGL de Mesa, qui retombe seul en logiciel |
+| Qualité | barre, Control Center, lanceur, fond d'écran, icônes SVG, texte antialiasé, traduction `fr` — **aucun artefact** |
+| Coût | 0 % de CPU au repos ; ~620 Mio de RSS pour le bureau (Hyprland 256 + `qs` 363) |
+
+Le repli du risque n° 1 de la spec est donc **partiellement nécessaire, et son
+nom est faux** (§12.6). Les tâches 7–9 peuvent tabler sur un bureau qui rend.
+
+### 12.2 Le fait qui explique tout : pas de virgl
+
+UTM n'expose **aucune accélération 3D** sur son `virtio-gpu-pci`. C'est visible
+dès le `dmesg` de l'invité, avant toute installation :
+
+```
+[drm] pci: virtio-gpu-pci detected at 0000:00:02.0
+[drm] features: -virgl +edid -resource_blob -host_visible
+[drm] number of cap sets: 0
+[drm] Initialized virtio_gpu 0.1.0 for 0000:00:02.0 on minor 0
+```
+
+`-virgl` + `cap sets: 0` = le noyau donne un KMS complet (modes, EDID, tampons
+« dumb ») mais **aucun contexte GL**. Mesa a bien `/usr/lib/dri/virtio_gpu_dri.so`,
+il ne peut simplement pas créer d'écran DRI dessus. Tout le reste en découle.
+
+### 12.3 La séquence qui marche (et les deux échecs qui la précèdent)
+
+**Échec 1 — depuis la console série, pas de siège.** Une session série n'a pas
+de VT, donc pas de *seat* logind :
+
+```console
+$ loginctl show-session … -p Type -p Seat -p VTNr
+VTNr=0
+Seat=
+Type=tty
+
+$ Hyprland -c ~/.config/hypr/hyprland.lua
+…
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  CBackend::create() failed!            → rc 134 (core dumped)
+```
+
+**Le contournement est `seatd`** — déjà installé (dépendance d'`aquamarine`,
+elle-même dépendance d'`hyprland`), lancé à la main, **sans rien modifier dans
+`/etc`** :
+
+```console
+$ sudo seatd -g wheel -l info &
+[INFO] [seatd/seat.c:48] Created VT-bound seat seat0
+[INFO] [seatd/seatd.c:194] seatd started
+$ ls -l /run/seatd.sock
+srwxrwx--- 1 root wheel 0 /run/seatd.sock          (seylar est dans wheel)
+```
+
+**Échec 2 — siège obtenu, mais EGL refuse.** `LIBSEAT_BACKEND=seatd Hyprland …`
+va bien plus loin (connecteur trouvé, allocateurs GBM et dumb créés) puis meurt
+sur EGL :
+
+```console
+DEBUG from aquamarine ]: drm: Description Red Hat, Inc. QEMU Monitor  (Virtual-1)
+DEBUG from aquamarine ]: drm: gpu /dev/dri/card0 becomes primary drm
+DEBUG from aquamarine ]: DRM Dumb: created a dumb allocator
+DEBUG from aquamarine ]: Created a GBM allocator with drm fd 25
+ERR   from aquamarine ]: [EGL] Command eglInitialize errored out with
+                         EGL_NOT_INITIALIZED (0x12289): DRI2: failed to create screen
+ERR   from aquamarine ]: [EGL] … DRI2: failed to load driver
+ERR   from aquamarine ]: CDRMRenderer: fail, eglInitialize failed
+ERR   from aquamarine ]: drm: onReady: no renderer for gl formats
+                                                 → rc 134 (core dumped)
+```
+
+**La séquence complète qui marche :**
+
+```bash
+sudo seatd -g wheel -l info &                     # une fois par démarrage
+LIBSEAT_BACKEND=seatd LIBGL_ALWAYS_SOFTWARE=1 \
+  Hyprland -c ~/.config/hypr/hyprland.lua &       # le compositeur
+export WAYLAND_DISPLAY=wayland-1 \
+       HYPRLAND_INSTANCE_SIGNATURE=$(basename $(ls -td /run/user/1000/hypr/*/ | head -1)) \
+       XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=Hyprland
+dms run &                                          # le shell — aucune variable GL
+```
+
+```console
+$ hyprctl monitors
+Monitor Virtual-1 (ID 0):
+	1280x800@74.99400 at 0x0
+	description: Red Hat Inc. QEMU Monitor
+	currentFormat: XRGB8888
+	directScanoutBlockedBy: user settings,software renders/cursors,missing candidate
+
+$ hyprctl layers
+	Layer level 0 (background):
+		Layer …: xywh: 0 0 1280 800, a: 1, namespace: quickshell, pid: 2866
+	Layer level 2 (top):
+		Layer …: xywh: 0 0 1280 64,  a: 1, namespace: dms:bar,   pid: 2866
+```
+
+Les deux surfaces layer-shell **portent un tampon** (`a: 1`) : Quickshell a bien
+peint, le compositeur affiche.
+
+> **Le repli n'est nécessaire que pour le compositeur.** Vérifié dans
+> `/proc/<pid>/environ` : `Hyprland` porte `LIBGL_ALWAYS_SOFTWARE=1`, `qs` ne
+> porte que le `QSG_USE_SIMPLE_ANIMATION_DRIVER=1` que DMS se met tout seul.
+> Les deux ont chargé `libgallium-26.2.1`. La raison est connue : sur une
+> plateforme GBM, Mesa **ne retombe pas** seul en logiciel ; sur la plateforme
+> Wayland d'un client, si.
+
+> **Bruit résiduel, non fatal.** Même en mode logiciel, aquamarine réessaie son
+> `CDRMRenderer` à chaque commit et échoue : `Can't create renderer, no matching
+> devices found` / `drm: initMgpu: no renderer` / `Failed to update renderer
+> state for Virtual-1 on applyCommit`. Le rendu, lui, passe par le renderer
+> OpenGL propre à Hyprland. Ne pas lire ces lignes comme une panne.
+
+### 12.4 Vie et stabilité (critères §6.1 de la spec Bureau)
+
+```console
+$ ps -eo pid,etime,%cpu,rss,comm | grep -E 'Hyprland|qs$|seatd'
+   2605       15:56  0.0    3748 seatd
+   2767       12:36  3.6  256104 Hyprland
+   4996       05:06  1.3  363516 qs
+
+$ top -bn2 -d 2                       → Hyprland 0,0 %  qs 0,0 %  (2e échantillon)
+                                        %Cpu(s): 99,8 id
+$ systemctl --failed --no-legend      → (vide)
+$ coredumpctl list --since '…09:30'   → No coredumps found.
+```
+
+Relevé à nouveau à la clôture du spike : `seatd 20:29`, `Hyprland 17:09`,
+`qs 09:39`, toujours aucun coredump et aucune unité en échec. Le critère
+« stable ≥ 5 min » est tenu trois fois plutôt qu'une. Les seuls coredumps du
+journal sont les **deux échecs de démarrage** du §12.3, à 09:22 et 09:28.
+
+> **Le processus s'appelle `qs`, pas `quickshell`.** `pgrep -a quickshell` ne
+> rend rien alors que le shell tourne — c'est `qs -p /usr/share/quickshell/dms`.
+> Piège de vérification pour les tâches 7–9.
+
+L'IPC répond (la commande du brief, `dms ipc call mpris getall`, n'existe pas —
+la bonne est `mpris list`) :
+
+```console
+$ dms ipc call control-center status   → hidden
+$ dms ipc call control-center open     → CONTROL_CENTER_OPEN_SUCCESS
+$ dms ipc call spotlight open          → SPOTLIGHT_OPEN_SUCCESS
+$ dms ipc                              → 30+ cibles : audio, bar, control-center,
+                                         dock, launcher, lock, night, systemupdater,
+                                         theme, tray, wallpaper, widget, …
+```
+
+> **DMS a déjà une cible IPC `systemupdater`** (`close, open, toggle,
+> updatestatus`). À examiner avant d'écrire `eschaton-dms-plugin-update` : le
+> plugin doit s'y brancher ou assumer de la doubler.
+
+### 12.5 Preuve visuelle et méthode de capture
+
+**La méthode retenue est la capture *dans l'invité*, pas depuis le Mac.** Elle
+ne demande aucune permission de l'hôte, produit exactement ce que le
+compositeur affiche, et se vérifie par empreinte :
+
+```bash
+# dans la VM (session Wayland exportée, cf. §12.3)
+dms screenshot output -o Virtual-1 -d ~ --filename spike.png \
+    --no-clipboard --no-notify
+sha256sum ~/spike.png
+
+# depuis le Mac — la ligne série suffit, l'image passe en base64
+tools/vm-serial run --timeout 300 "base64 -w 200 /home/seylar/spike.png" > b64.raw
+sed -e '1d' -e '$d' b64.raw | tr -d '\n ' | base64 -d > spike.png
+shasum -a 256 spike.png        # doit égaler le sha256sum de l'invité
+```
+
+Vérifié : 79 110 octets, `PNG image data, 1280 x 800`, empreinte identique des
+deux côtés (`dfcf2db8a16c…`). Une capture de ~80 Kio passe en quelques secondes.
+
+Ce que montrent les captures : barre supérieure (grille d'applications, pastille
+d'espace de travail, horloge, météo, tray, CPU/RAM, notifications, batterie,
+réseau, volume) ; Control Center complet (avatar, uptime, verrouillage/extinction/
+réglages, curseurs volume et luminosité, tuiles Ethernet « Connecté » / Bluetooth
+« Aucun adaptateur », bascules Mode nuit / Mode sombre) ; lanceur avec champ de
+recherche, liste d'applications avec icônes SVG, onglets *Tous / Applis /
+Fichiers / **Plugins*** ; fond d'écran DMS. Coins arrondis, translucidité,
+antialiasing et localisation `fr` corrects.
+
+**La capture de la fenêtre UTM depuis le Mac** est possible mais **exige une
+permission que l'agent ne peut pas s'accorder** :
+
+```bash
+osascript -e 'tell application "UTM" to activate' \
+          -e 'tell application "System Events" to tell process "UTM" to \
+              perform action "AXRaise" of window "eschaton-dev"'
+osascript -e 'tell application "System Events" to tell process "UTM" to \
+              get {position, size} of window "eschaton-dev"'
+#   → 140, 53, 1280, 840      (840 = 800 + la barre de titre)
+screencapture -x -R140,53,1280,840 utm-window.png
+#   → could not create image from rect
+```
+
+Le nom de la fenêtre est le nom de la VM (`window "eschaton-dev"` — attention,
+`window 1` échoue, UTM en ouvre plusieurs). `screencapture` échoue tant que
+**Réglages Système → Confidentialité et sécurité → Enregistrement de l'écran**
+n'autorise pas le terminal ; c'est un réglage de sécurité à accorder à la main.
+En pratique, la méthode de l'invité rend celle-ci inutile.
+
+### 12.6 Ce que le spike corrige dans la spec Bureau
+
+1. **`QSG_RHI_BACKEND=software` (risque n° 1) n'existe pas.** Qt 6.11 le refuse :
+
+   ```console
+   WARN: Unknown key "software" for QSG_RHI_BACKEND, falling back to default backend.
+   ```
+
+   La variable ne nomme que des back-ends RHI (`vulkan`, `metal`, `d3d11`,
+   `d3d12`, `opengl`, `null`) : aucun n'est un rendu logiciel. Le vrai repli
+   logiciel de Qt Quick est **`QT_QUICK_BACKEND=software`**
+   — testé, il démarre et rend barre et Control Center, **mais perd l'image du
+   fond d'écran** (le rendu logiciel ne fait pas les effets). C'est un repli
+   dégradé, pas l'égal du chemin nominal.
+
+   Chemin nominal mesuré (`QSG_INFO=1`, sans aucune variable) :
+
+   ```console
+   qt.scenegraph.general: Creating QRhi with backend OpenGL for window …
+     Prefer software device: 0
+   ```
+
+2. **`dms setup` possède `hyprland.lua`, pas seulement `~/.config/hypr/dms/`**
+   (risque n° 4 et règle de propriété §4.2). Mesuré en plantant des marqueurs
+   puis en relançant `dms setup` avec les mêmes réponses :
+
+   | Fichier | Sort |
+   |---|---|
+   | `~/.config/hypr/hyprland.lua` | **régénéré** — la ligne ajoutée a disparu ; l'ancien est sauvé sous `~/.config/hypr/.dms-backups/<horodatage>/hyprland.lua`, et l'outil annonce « Successfully merged existing monitor sections » |
+   | `~/.config/hypr/dms/binds.lua` | **« Updated »** — réécrit sans condition |
+   | les six autres `dms/*.lua` | **« Skipping … (already exists) »** — le marqueur survit |
+   | `~/.config/hypr/eschaton.lua` (fichier étranger, hors `dms/`) | **intact** |
+
+   Conséquence pour la Task 3 : le `hyprland.lua` « de 3 lignes » posé par
+   `/etc/skel` **ne survit pas** à un `dms setup` ultérieur. Soit Eschaton ne
+   fait jamais tourner `dms setup` complet après le premier démarrage (et déploie
+   l'arbre `dms/` par les sous-commandes `dms setup binds|colors|layout|…`), soit
+   il assume que l'utilisateur qui le lance perd son point d'entrée — sauvegarde
+   à l'appui.
+
+3. **`start-hyprland` est le lanceur amont, et il sait passer `-c`.** Hyprland
+   avertit à chaque démarrage direct (« Hyprland is being launched without
+   start-hyprland. This is highly advised against »), et l'entrée de session
+   packagée (`/usr/share/wayland-sessions/hyprland.desktop`) lance
+   `/usr/bin/start-hyprland`. L'invariant §4.1 s'écrit donc
+   **`start-hyprland -- -c <chemin du lua>`** (« Any arguments after -- are
+   passed to Hyprland »). Au passage, l'invariant est confirmé côté Hyprland :
+   `[cfg] Config is lua, loading lua mgr`.
+
+4. **`dms doctor` ne reconnaît pas Eschaton** : `Operating System ····· Eschaton
+   (not supported by dms setup)`. Conséquence directe de l'`ID=eschaton`
+   d'`eschaton-branding`. Le déploiement des configs a fonctionné quand même,
+   mais l'amont ne le garantit pas.
+
+### 12.7 Ce que `dms setup` crée exactement (interface des Tasks 2 et 3)
+
+`dms setup` est **interactif** et demande, dans l'ordre : outil d'élévation
+(`sudo` / `run0` — court-circuitable par `DMS_PRIVESC=`), compositeur
+(Niri / Hyprland / Mango / None), terminal (Ghostty / Kitty / Alacritty / None),
+gestion de session systemd (oui / non), puis confirmation. Il **ajoute d'office
+l'utilisateur au groupe `input`** (« for Caps Lock OSD support »), et **déploie
+une configuration Ghostty même quand on répond « None »** au terminal.
+
+Sur un `$HOME` vierge, il crée exactement :
+
+```
+~/.config/hypr/hyprland.lua          2990 o, 90 l.  point d'entrée, généré par DMS
+~/.config/hypr/dms/binds.lua         9762 o, 171 l. réécrit à chaque setup
+~/.config/hypr/dms/binds-user.lua      85 o         surcharges utilisateur (préservé)
+~/.config/hypr/dms/colors.lua         614 o         « Auto-generated … do not edit »
+~/.config/hypr/dms/cursor.lua          71 o
+~/.config/hypr/dms/layout.lua         170 o         « Auto-generated by DMS »
+~/.config/hypr/dms/outputs.lua        215 o         hl.monitor({ output = "", mode = "preferred", … })
+~/.config/hypr/dms/windowrules.lua     66 o
+~/.config/ghostty/config                            (même si terminal = None)
+~/.config/ghostty/themes/dankcolors
+~/.config/hypr/.dms-backups/<horodatage>/           (créé seulement au 2e passage)
+```
+
+`hyprland.lua` n'est **pas** un fichier de 3 lignes : c'est la configuration DMS
+complète (entrées, général, décoration, animations, règles de fenêtres), encadrée
+par des marqueurs `-- DMS_STARTUP_BEGIN` / `-- DMS_STARTUP_END` autour du bloc
+d'amorçage, et terminée par les `require` :
+
+```lua
+hl.config({ autogenerated = false })
+-- DMS_STARTUP_BEGIN
+hl.on("hyprland.start", function()
+	hl.exec_cmd("dbus-update-activation-environment --systemd --all")
+	hl.exec_cmd("systemctl --user start hyprland-session.target")
+end)
+-- DMS_STARTUP_END
+…
+require("dms.colors") ; require("dms.outputs") ; require("dms.layout")
+require("dms.cursor") ; require("dms.binds")   ; require("dms.binds-user")
+require("dms.windowrules")
+```
+
+La racine des `require` est `~/.config/hypr/` (`dms.colors` → `dms/colors.lua`).
+
+Côté systemd, `dms-shell` fournit `/usr/lib/systemd/user/dms.service` :
+`Type=dbus`, `BusName=org.freedesktop.Notifications`,
+`ExecStart=/usr/bin/dms run --session`, `WantedBy=graphical-session.target`,
+`Requisite=graphical-session.target`. Il est **désactivé** par défaut
+(`dms doctor` : `dms.service ·········· Disabled`) — c'est à
+`eschaton-desktop-config` de le mettre au préset. `dms-shell-hyprland` est un
+méta-paquet **sans aucun fichier**.
+
+### 12.8 Inventaire réellement installé (Task 3 : depends à figer)
+
+Installation : `pacman -S --noconfirm hyprland dms-shell-hyprland pipewire
+wireplumber xdg-desktop-portal-hyprland ttf-jetbrains-mono-nerd noto-fonts`
+→ **112 paquets, 230,47 Mio téléchargés, 1 165,86 Mio installés, en moins de
+45 s** (snapshots snapper pre/post compris).
+
+```
+hyprland 0.56.1-3                 dms-shell 1.5.3-1
+dms-shell-hyprland 1.5.3-1        quickshell 0.3.1-1
+dgop 0.2.3-1                      pipewire 1:1.6.8-1
+wireplumber 0.5.15-1              xdg-desktop-portal-hyprland 1.4.1-1
+xdg-desktop-portal 1.22.1-2       ttf-jetbrains-mono-nerd 3.5.1-2
+noto-fonts 1:2026.08.01-1         mesa 1:26.2.1-1
+qt6-base 6.11.2-2                 qt6-declarative 6.11.2-1
+qt6-wayland 6.11.2-1              qt6-svg 6.11.2-1
+seatd 0.9.3-1                     aquamarine 0.14.0-2
+wayland 1.26.0-1                  libinput 1.31.3-1
+hyprlang 0.6.8-5                  hyprutils 0.14.1-1
+hyprgraphics 0.5.1-4              hyprcursor 0.1.13-7
+xorg-xwayland 24.1.13-1           llvm-libs 22.1.8-2
+```
+
+Tout vient de `extra` d'ALARM, en binaires natifs aarch64 — la veille est
+confirmée, aucun vendoring. `hyprland` est bien en **0.56.1** côté ALARM (Arch
+est en 0.56.2) : le risque n° 7 de la spec est réel mais sans effet ici.
+`seatd` arrive par `aquamarine` (dépendance d'`hyprland`), il n'a pas à être
+ajouté aux `depends` d'`eschaton-desktop`. `hyprlang` est encore là malgré la
+config Lua.
+
+### 12.9 Ce que le spike n'a pas prouvé
+
+- **Le chemin de session réel.** Le spike démarre le compositeur depuis la
+  console série avec `seatd` lancé à la main. Le produit passera par
+  `greetd` + auto-login sur une VT, donc par le *seat* de logind : la question
+  du siège disparaît, mais `LIBGL_ALWAYS_SOFTWARE=1` devra être posé dans
+  l'entrée de session (Task 3). Rien ici ne dit *où* le poser.
+- **Le rendu sur le vrai balayage écran.** Toutes les preuves passent par
+  `wlr-screencopy` (`dms screenshot`), pas par une photo du framebuffer. Le
+  scan-out direct est de toute façon désactivé (`directScanoutBlockedBy:
+  software renders/cursors`).
+- **PipeWire.** `ERROR quickshell.service.pipewire.loop: Failed to connect
+  pipewire context. Errno: 112` — les unités utilisateur de PipeWire ne sont pas
+  démarrées. Le Control Center affiche « Aucun appareil de sortie ». À traiter
+  par le préset d'`eschaton-desktop-config`, pas un problème de rendu.
+- **La fluidité au sens strict.** Aucun compteur d'images mesuré : le constat est
+  « 0 % de CPU au repos, ouverture du Control Center et du lanceur immédiates,
+  aucun artefact sur les captures ».
+- **Le matériel réel.** Sur une machine avec un GPU, `LIBGL_ALWAYS_SOFTWARE=1`
+  serait une régression. Ce n'est pas un réglage à mettre dans le paquet — c'est
+  un réglage de la **VM**.
+- **La VM n'est pas nettoyée** (choix assumé du brief) : la pile est installée à
+  la main, `seatd` tourne hors systemd, `~/.config/hypr` contient l'arbre de
+  `dms setup` et un `eschaton.lua` de test. La Task 7 réinstallera par paquets
+  par-dessus.
+
