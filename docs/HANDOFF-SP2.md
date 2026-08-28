@@ -63,8 +63,14 @@ DMS → pkexec /usr/bin/eschaton-rollback --yes NUMÉRO
     → remplacement btrfs de @ par un snapshot inscriptible
 ```
 
-La règle Polkit exige un sujet local, actif et membre de `wheel`, et compare
-l'exécutable exact. L'état précédent est conservé dans un sous-volume
+L'action est annotée sur l'exécutable exact et ne porte que ses `<defaults>` :
+`allow_any=no`, `allow_inactive=no`, `allow_active=auth_admin`. Une restauration
+demande donc une **authentification** à chaque fois, servie par la modale de
+l'agent polkit de DMS. *(Amendé le 2026-08-28 par la revue de vague : la version
+0.1.0-2 livrait en plus une règle `rules.d` rendant `YES` — sans mot de passe —
+pour un sujet `wheel` local et actif ; elle est supprimée en 0.1.0-3. Voir
+l'en-tête de `org.eschaton.rollback.policy`.)* L'état précédent est conservé
+dans un sous-volume
 `@.avant-rollback-*`. La lecture de la liste passe par `snapper --jsonout` et la
 configuration Snapper `ALLOW_GROUPS=wheel` ; aucune action polkit Snapper
 imaginaire n'a été ajoutée.

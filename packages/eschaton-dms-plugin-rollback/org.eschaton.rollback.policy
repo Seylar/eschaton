@@ -2,6 +2,39 @@
 <!DOCTYPE policyconfig PUBLIC
   "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
   "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Pourquoi ce paquet ne livre AUCUNE règle polkit (`/usr/share/polkit-1/rules.d/`).
+
+  La version 0.1.0-2 en posait une, qui rendait `polkit.Result.YES` — donc
+  aucune authentification — pour un sujet local, actif et membre de `wheel`.
+  Elle a été supprimée le 2026-08-28 (revue de vague Bureau, avant le tag
+  v0.2.0). Trois raisons, dans l'ordre de poids :
+
+  1. POSTURE DU SOCLE. Sur Eschaton, `sudo` demande le mot de passe (aucun
+     NOPASSWD dans les sudoers livrés) et le widget de mise à jour hérite donc
+     d'une demande de mot de passe. Une règle YES faisait de la RESTAURATION
+     — remplacement du sous-volume racine, l'opération la plus destructive du
+     système — la SEULE action privilégiée du bureau à ne rien demander. Cette
+     asymétrie n'était ni voulue ni tracée.
+
+  2. LES `<defaults>` CI-DESSOUS SUFFISENT. `allow_active=auth_admin` (sans
+     `_keep` : rien n'est mémorisé d'une fois sur l'autre) donne exactement le
+     comportement voulu pour une session locale active, et `no/no` ferment le
+     reste — une session série ou distante n'a même pas de chemin
+     d'authentification. Aucune règle n'est nécessaire pour obtenir cela.
+
+  3. LA MODALE EXISTE ET EST PROUVÉE. L'agent d'authentification de DMS
+     s'enregistre auprès de `polkitd` et affiche sa modale dans la session
+     Wayland ; la matrice `pkcheck` mesurée en Task 2 le démontre
+     (tools/vm-dev.md §12.9). L'utilisateur n'est donc jamais bloqué sans
+     surface graphique — le « zéro terminal » de la spec §6 tient.
+
+  Desserrer plus tard (ajouter une règle `YES` ou `auth_admin_keep`) est un
+  ajout de fichier ; resserrer après coup sur des machines déjà installées ne
+  l'est pas. On part donc fermé.
+
+  Conséquence assumée : un rollback coûte une saisie de mot de passe.
+-->
 <policyconfig>
   <vendor>Eschaton</vendor>
   <vendor_url>https://github.com/seylar/eschaton</vendor_url>

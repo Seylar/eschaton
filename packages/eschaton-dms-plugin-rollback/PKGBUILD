@@ -1,13 +1,16 @@
 pkgname=eschaton-dms-plugin-rollback
 pkgver=0.1.0
-pkgrel=2
+pkgrel=3
 pkgdesc="Plugin DMS Eschaton : liste des snapshots et restauration système"
 arch=(any)
 license=(MIT)
 depends=(dms-shell eschaton-base snapper polkit)
+# Aucune règle polkit (`rules.d`) n'est livrée : les `<defaults>` de l'action
+# suffisent et exigent une authentification. Justification dans l'en-tête de
+# org.eschaton.rollback.policy.
 source=(plugin.json EschatonRollbackWidget.qml EschatonRollbackSettings.qml
-        org.eschaton.rollback.policy 50-eschaton-rollback.rules LICENSE)
-sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP)
+        org.eschaton.rollback.policy LICENSE)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP)
 
 package() {
   local plugin_dir="$pkgdir/etc/xdg/quickshell/dms-plugins/eschatonRollback"
@@ -16,7 +19,5 @@ package() {
   install -Dm644 EschatonRollbackSettings.qml "$plugin_dir/EschatonRollbackSettings.qml"
   install -Dm644 org.eschaton.rollback.policy \
     "$pkgdir/usr/share/polkit-1/actions/org.eschaton.rollback.policy"
-  install -Dm644 50-eschaton-rollback.rules \
-    "$pkgdir/usr/share/polkit-1/rules.d/50-eschaton-rollback.rules"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

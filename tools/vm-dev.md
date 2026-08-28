@@ -2487,12 +2487,22 @@ récent au plus ancien, demande deux clics, puis lance exactement :
 pkexec /usr/bin/eschaton-rollback --yes NUMÉRO
 ```
 
-La règle ne donne pas un blanc-seing Snapper : elle n'autorise que l'action
-`org.eschaton.rollback`, l'exécutable exact ci-dessus, pour un sujet local,
-actif et membre de `wheel`. Snapper n'a pas d'actions polkit propres à ouvrir ;
-sa lecture passe par ses réglages `ALLOW_GROUPS`. La liste étant conservée en
-mémoire par le plugin, elle pouvait devenir périmée ; chaque ouverture relit
-maintenant Snapper.
+La surface privilégiée se réduit à une action, `org.eschaton.rollback`, annotée
+sur l'exécutable exact ci-dessus. Snapper n'a aucune action polkit propre à
+ouvrir : sa lecture passe par ses réglages `ALLOW_GROUPS`. La liste étant
+conservée en mémoire par le plugin, elle pouvait devenir périmée ; chaque
+ouverture relit maintenant Snapper.
+
+**Amendement du 2026-08-28 (revue de vague, `eschaton-dms-plugin-rollback`
+0.1.0-3) : la règle `rules.d` est supprimée.** Les versions 0.1.0-1 et -2
+livraient `/usr/share/polkit-1/rules.d/50-eschaton-rollback.rules`, qui rendait
+`polkit.Result.YES` — donc **aucune authentification** — pour un sujet local,
+actif et membre de `wheel`. Deux objections l'ont emporté : le reste d'Eschaton
+demande le mot de passe (les sudoers livrés n'ont pas de `NOPASSWD`, et le
+widget de mise à jour hérite de cette invite), et l'opération sans invite était
+justement la plus destructive des deux. Le paquet ne livre plus que l'action ;
+ce sont ses `<defaults>` (`allow_any=no`, `allow_inactive=no`,
+`allow_active=auth_admin`, sans `_keep`) qui décident.
 
 ## 15. Installation réelle du Bureau (SP2, Task 7)
 

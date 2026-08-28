@@ -10,6 +10,6 @@
   "component": "./EschatonRollbackWidget.qml",
   "settings": "./EschatonRollbackSettings.qml",
   "icon": "history",
-  "permissions": ["process", "settings_read", "settings_write"],
+  "permissions": ["process", "settings_read"],
   "requires_dms": ">=1.5.0"
 }
