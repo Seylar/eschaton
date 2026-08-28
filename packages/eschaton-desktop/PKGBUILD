@@ -36,13 +36,37 @@ depends=(
   # (il fournit le virtuel `pipewire-session-manager`), simple optdepend de
   # `pipewire` en amont, et `running` sous greetd sans rien ajouter (vm-dev §13.3).
   # À confirmer sur matériel réel en Task 7 : la VM n'a pas de carte son.
+  # ATTENTION À QUI TOUCHERA CETTE LISTE : `pipewire-audio` n'est pas re-déclaré
+  # parce que `pipewire-pulse` le tire en dépendance dure — si `pipewire-pulse`
+  # sort un jour de la liste, `pipewire-audio` doit y entrer, sans quoi l'audio
+  # disparaît en silence.
   pipewire
   pipewire-pulse
   wireplumber
 
   # --- Portails XDG -----------------------------------------------------------
-  # Partage d'écran, sélecteurs de fichiers. Tire xdg-desktop-portal. Simple
-  # optdepend d'`hyprland` en amont ; requis chez nous.
+  # Tire xdg-desktop-portal. Simple optdepend d'`hyprland` en amont ; requis chez
+  # nous. Ce back-end implémente EXACTEMENT quatre interfaces, et il les déclare
+  # lui-même dans /usr/share/xdg-desktop-portal/portals/hyprland.portal :
+  #   Interfaces=org.freedesktop.impl.portal.Screenshot;…ScreenCast;
+  #              …GlobalShortcuts;…InputCapture;
+  # Donc : capture d'écran, partage d'écran, raccourcis globaux, capture d'entrée.
+  # PAS de sélecteur de fichiers — `org.freedesktop.impl.portal.FileChooser` n'est
+  # pas dans cette liste.
+  #
+  # TROU CONNU, NON COMBLÉ ICI. Dans la pile déclarée par ce meta, AUCUN back-end
+  # ne fournit FileChooser : `portals/` ne contient que `hyprland.portal`. Et il
+  # n'y a même pas de repli déclaré — contrairement à ce que fait l'amont dans son
+  # dépôt, le paquet Arch/ALARM de xdg-desktop-portal-hyprland ne livre AUCUN
+  # fichier .conf (`pacman -Ql` : rien), et `xdg-desktop-portal` n'en livre pas non
+  # plus (rien qu'une page de manuel portals.conf(5)). Le candidat naturel est
+  # `xdg-desktop-portal-gtk` (1.15.3-1 des deux côtés), qui déclare bien
+  # `Interfaces=org.freedesktop.impl.portal.FileChooser` — mais il tire GTK dans
+  # une session qui n'en a pas, et l'effet réel du trou dépend des applications
+  # qu'on y met : une application GTK ou Qt non confinée ouvre sa propre boîte de
+  # dialogue sans passer par le portail. C'est donc un arbitrage à faire ÉCRAN EN
+  # MAIN, pas par précaution — il est inscrit à ce titre dans les arbitrages de la
+  # Task 7 (rapport Task 3 §6).
   xdg-desktop-portal-hyprland
 
   # --- Session ----------------------------------------------------------------
