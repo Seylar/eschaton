@@ -2000,6 +2000,26 @@ Relevé à nouveau à la clôture du spike : `seatd 20:29`, `Hyprland 17:09`,
 « stable ≥ 5 min » est tenu trois fois plutôt qu'une. Les seuls coredumps du
 journal sont les **deux échecs de démarrage** du §12.3, à 09:22 et 09:28.
 
+Puis la session a **encaissé une suspension/reprise de l'hôte** sans rien
+perdre — voir l'encadré ci-dessous — et se relevait à `Hyprland 22:30`, les deux
+surfaces layer-shell toujours pourvues d'un tampon, l'IPC toujours répondante et
+une nouvelle capture 1280×800 produite après la reprise.
+
+> **Piège d'exploitation : UTM dit `stopped` pour une VM seulement suspendue.**
+> Constaté ici : `utmctl status` a rendu `stopped` alors que l'invité n'avait
+> jamais redémarré. `utmctl start` l'a **reprise**, pas rebootée — même pty,
+> même shell, même répertoire courant, mêmes PID, `who -b` inchangé
+> (`démarrage système 2026-08-28 06:21`, `uptime` continu). Corollaires :
+> - la règle du §5.3 (« seul un `utmctl stop`/`start` renumérote le pty ») ne
+>   vaut pas pour ce cas-là — le pty était identique après la reprise ;
+> - la console reste **muette** après la reprise tant qu'on ne lui envoie rien :
+>   il n'y a ni bannière ni invite de connexion à attendre. Un `wait "…login:"`
+>   expire pour de bon (rc 124). Envoyer un `raw 0a` et lire le `tail` est la
+>   façon de savoir où l'on est ;
+> - le démon série, lui, voit un EOF franc au moment de la suspension. C'est
+>   exactement le cas que le durcissement de `tools/vm-serial` traite : il l'a
+>   journalisé et s'est arrêté seul en 10 s au lieu de tourner à vide.
+
 > **Le processus s'appelle `qs`, pas `quickshell`.** `pgrep -a quickshell` ne
 > rend rien alors que le shell tourne — c'est `qs -p /usr/share/quickshell/dms`.
 > Piège de vérification pour les tâches 7–9.
