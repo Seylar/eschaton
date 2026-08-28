@@ -69,7 +69,7 @@ Quatre paquets `arch=(any)`, mêmes conventions que le Socle (LICENSE symlink, d
 | 7 | Retard `hyprland` sur ALARM (0.56.1 vs 0.56.2) — critique si ALARM traîne quand 0.57 supprimera hyprlang | Intégré à la surveillance ALARM instaurée par le Socle §8 risque 2. |
 | 8 | Night mode DMS inopérant en VM (gamma matériel, issue upstream #2061) | Hors critères d'acceptation SP2 tant que le test réel n'a pas tranché. |
 | 9 | Bus factor Quickshell = 1 (`outfoxxed`) | Surveillance ; atténué par l'empaquetage `extra` et le couplage humain avec DMS (lead DMS = contributeur n°2 de Quickshell). Déclencheur le plus probable du critère 4 de l'ADR 0001. |
-| 10 | **Build `extra` de quickshell sans 5 Quickshell Features, dont Polkit** (constat spike Task 1, vm-dev §12.9) | Peut priver DMS d'un agent polkit de session — impact potentiel sur le plugin rollback « derrière polkit » (§3). La Task 2 tranche sur pièces : agent polkit externe packagé (ex. `polkit-gnome`/`hyprpolkitagent`) ou réévaluation de la surface ; la politique « jamais `-git` » (risque 2) reste non négociable. |
+| 10 | ~~Build `extra` de quickshell sans le module Polkit~~ | **Levé le 2026-08-28** (Task 2, investigation C) : « Not available » était un faux négatif de `dms doctor` — le greffon est lié dans le `qs` d'extra, la modale DMS fonctionne et l'élévation aboutit (matrice pkcheck mesurée). Aucun agent polkit externe requis ; `polkit` seul suffit au meta. |
 
 Vérification de non-régression bi-architecture (recommandation de veille) : un script CI léger interroge les deux index de dépôts (API Arch + index miroir ALARM) et échoue si une dépendance d'`eschaton-desktop` manque d'un côté — le pendant SP2 du smoke test x86_64 du Socle.
 
