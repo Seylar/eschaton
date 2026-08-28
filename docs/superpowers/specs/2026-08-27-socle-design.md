@@ -188,7 +188,7 @@ Les meta-paquets et paquets de configs sont `arch=(any)` : un seul build sert aa
 ## 6. Mises à jour et retour arrière
 
 - **`eschaton-update`** : vérifie l'espace disque disponible → `pacman -Syu` (dépôts Arch + `[eschaton]`) → signale clairement si un redémarrage est nécessaire (changement de kernel). Le snapshot « avant » est automatique (`snap-pac` sur chaque transaction pacman).
-- **`eschaton-rollback`** : liste les snapshots avec date et cause, restauration au choix (`snapper rollback` + redémarrage).
+- **`eschaton-rollback`** : liste les snapshots avec date et cause, restauration au choix + redémarrage. *(Amendé le 2026-08-28, constat Task 10 : `snapper rollback` exige la disposition de sous-volumes d'openSUSE et échoue sur notre layout plat Arch — la restauration s'implémente par la méthode « replace » : snapshot en lecture-écriture du snapshot cible substitué au subvolume `@` par défaut. Même garantie, mécanique différente.)*
 - **Système qui ne démarre plus** : menu Limine → entrées de snapshots (générées par `limine-snapper-sync`) → boot sur un état antérieur, puis rollback définitif depuis le système restauré. La mécanique exacte de conservation des kernels par snapshot est celle de `limine-snapper-sync` (éprouvée par CachyOS et Omarchy) ; ses réglages précis sont fixés à l'implémentation.
 - **Rétention** : bornée pour tenir dans un disque de VM (~64 Gio) — de l'ordre de 10 paires pre/post automatiques plus les snapshots manuels ; valeur exacte fixée à l'implémentation dans la config snapper livrée par `eschaton-base`.
 
