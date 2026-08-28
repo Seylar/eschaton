@@ -1073,3 +1073,405 @@ Ce qu'il faut alors constater, et qui n'a **pas** encore été vu :
 - `ls /usr/lib/modules/$(uname -r)` existe — c'est le test qui compte : kernel
   et modules de nouveau d'accord, ce qui est tout l'objet de l'appel ;
 - aucune unité en échec.
+
+---
+
+## 10. Smoke test x86_64 émulé — VM `eschaton-x86-smoke` (spec §7.3)
+
+Déroulé le 2026-08-28. C'est le critère n° 3 de la spec §7 : **le même
+`eschaton-install`, sans une ligne de modification, produit un système x86_64
+qui démarre.** Il est passé — et il a répondu à la réserve que la Task 9 avait
+laissée ouverte sur `limine-entry-tool` (§8.6), qui ne s'exerce que sur x86_64.
+
+**Résultat : aucun défaut trouvé.** Contrairement aux Tasks 9 et 10, ce test n'a
+produit aucun correctif au dépôt. Tout ce qui suit décrit donc l'outillage
+(la VM) et les constats, pas des réparations.
+
+### 10.1 Ce que le x86_64 change, en une table
+
+| | aarch64 `eschaton-dev` (§1-§9) | x86_64 `eschaton-x86-smoke` |
+|---|---|---|
+| Backend | QEMU + HVF (`hypervisor:true`) | QEMU **TCG**, `hypervisor:false` — émulation |
+| Machine | `virt` | `q35` |
+| ISO | archboot 462 Mio | Arch officielle 1,5 Gio |
+| CPU dans le live env | **1** (`nr_cpus=1` imposé par archboot) | **4**, aucune bride |
+| `sgdisk` dans le live env | absent, à installer | **présent** |
+| Console série du live env | gratuite (`console=ttyAMA0` dans l'ISO) | **à ajouter soi-même** (§10.3) |
+| Console série du système installé | gratuite (sur `virt`, la console noyau par défaut *est* l'UART) | **à ajouter soi-même** (§10.3) |
+| Menu du bootloader sur la série | oui (Limine passe par la console UEFI) | **non** (Limine écrit sur la console VGA) |
+| `limine-update` (limine-entry-tool) | s'arrête sur « The system is not x86_64 » | **s'exécute** (§10.6) |
+| Microcode | sans objet | `intel-ucode` seul, détecté (§10.5) |
+
+### 10.2 ISO et création de la VM
+
+**ISO Arch officielle**, somme vérifiée contre celle publiée par archlinux.org
+elle-même (page `/download/`), pas seulement contre le `sha256sums.txt` du
+miroir :
+
+| | |
+|---|---|
+| Fichier | `archlinux-2026.08.01-x86_64.iso` |
+| Taille | 1 597 014 016 octets (1,49 Gio) |
+| SHA-256 | `4e82dced1c4fd3e498b22a853f8db2a4d262d32b97e7e07d97390d9e425ffe5e` |
+| Téléchargement | 43 s (~35 Mo/s) depuis `geo.mirror.pkgbuild.com` |
+
+```bash
+curl -fL -C - --retry 3 -o ~/Downloads/archlinux-2026.08.01-x86_64.iso \
+  https://geo.mirror.pkgbuild.com/iso/2026.08.01/archlinux-2026.08.01-x86_64.iso
+shasum -a 256 ~/Downloads/archlinux-2026.08.01-x86_64.iso   # = la valeur ci-dessus
+```
+
+**Création — tout se pose à la création, il n'y a pas d'équivalent du §3.3.**
+
+```applescript
+tell application "UTM"
+	set isoPath to POSIX file "/Users/<vous>/Downloads/archlinux-2026.08.01-x86_64-serial.iso"
+	set vm to make new virtual machine with properties {backend:qemu, configuration:{name:"eschaton-x86-smoke", architecture:"x86_64", machine:"q35", memory:4096, cpu cores:4, hypervisor:false, uefi:true, drives:{{removable:false, interface:VirtIO, guest size:40960}, {removable:true, interface:IDE, source:isoPath}}, network interfaces:{{mode:shared, hardware:"virtio-net-pci"}}, displays:{{hardware:"virtio-vga"}}, «class SrPt»:{{interface:ptty}}}}
+	return id of vm
+end tell
+```
+
+Quatre écarts avec la recette aarch64 du §3.1, tous nécessaires :
+
+1. **`hypervisor:false`** — HVF n'accélère que l'architecture de l'hôte. Sur
+   Apple Silicon, un invité x86_64 est *émulé* (TCG).
+2. **Le disque est le PREMIER de la liste `drives`.** L'ordre de la liste donne
+   le `bootindex` : disque en tête ⇒ `bootindex=0` dès la création, et la
+   chirurgie du `config.plist` du §3.3 devient inutile. L'UEFI tente le disque,
+   retombe sur le CD tant qu'il n'est pas amorçable.
+3. **CD sur `IDE`, surtout pas `USB`.** Avec le lecteur en USB (le choix du
+   §3.1), le firmware n'arrive pas à lire l'ISO en émulation et abandonne :
+   ```
+   ../systemd/src/boot/boot.c:2999@call_image_start: Error opening root path: Time out
+   BdsDxe: failed to start Boot0001 "UEFI QEMU QEMU USB HARDDRIVE …": Time out
+   ```
+   Le menu de systemd-boot s'affiche, le compte à rebours va à son terme, puis
+   le chargement du kernel expire et l'UEFI tombe dans son shell interne. Sur
+   `q35`, `IDE` est câblé sur le contrôleur AHCI — l'ISO apparaît alors en
+   `Boot0001 … /Sata(0,65535,0)` et se lit sans peine.
+4. **`hardware:"virtio-net-pci"`** — UTM pose `e1000` par défaut sur x86_64.
+   Émulé, il est nettement plus lent, et `pacstrap` est dominé par le réseau.
+
+> **Le `config.plist` n'est PAS la source de vérité quand UTM tourne.** Éditer
+> le fichier puis lancer la VM ne change rien : `utmctl start` démarre depuis la
+> configuration **en mémoire** de UTM. La recette du §3.3 ne fonctionne que
+> parce qu'elle quitte UTM d'abord. Ici on ne le peut pas (cela arrêterait
+> `eschaton-dev`) — d'où le choix de tout poser à la création.
+
+> **`update configuration … with {displays:{}}` fait planter UTM 4.7.5**
+> (`EXC_BREAKPOINT` au démarrage suivant, piège Swift sur une liste vide), et le
+> plantage emporte **toutes les VM en cours**. Ne pas vider la liste des écrans ;
+> pour changer de configuration, supprimer et recréer la VM (§10.4).
+
+> **`update configuration` ne réordonne pas les lecteurs.** Il les apparie par
+> `id` et conserve leurs positions ; l'ordre de démarrage est figé à la
+> création. Il *perd* en revanche la source du CD (`ImageName` retombe à
+> `None`). Le §3.2 disait déjà de s'en méfier : c'est confirmé.
+
+### 10.3 Le vrai piège : il n'y a pas de console série sur x86
+
+C'est le point qui coûte le plus cher si on l'ignore, et il n'a **aucun
+équivalent côté aarch64**, où tout arrive gratuitement sur `ttyAMA0`.
+
+Sur `q35`, la console par défaut du noyau est `tty0` (l'écran). Sans
+`console=ttyS0` sur la ligne de commande, **rien** ne sort sur le port série :
+ni les messages d'amorçage, ni le getty. Et cela vaut **deux fois** — pour l'ISO
+et pour le système installé.
+
+**a) Côté ISO** — l'entrée systemd-boot de l'ISO officielle porte seulement
+`options archisobasedir=arch archisosearchuuid=…`. On travaille donc sur une
+**copie** de l'ISO (l'originale reste intacte et vérifiable) dont on modifie
+l'entrée. Le fichier `loader/entries/01-archiso-linux.conf` existe en **deux
+exemplaires** — un dans l'arbre ISO9660, un dans l'image FAT de l'ESP —, et
+selon la façon dont le firmware amorce le média c'est l'un ou l'autre qui fait
+foi : patcher les deux. La **taille du fichier doit être conservée** (elle est
+inscrite dans les métadonnées ISO9660 et dans l'entrée de répertoire FAT), la
+place se prend sur la ligne `title` et sur `sort-key` (superflue :
+`loader.conf` désigne l'entrée par défaut par son nom de fichier).
+
+```
+options  archisobasedir=arch archisosearchuuid=… console=tty0 console=ttyS0,115200
+```
+
+`console=ttyS0` **en dernier** : le dernier `console=` de la ligne devient
+`/dev/console`, celui que `systemd-getty-generator` instancie et sur lequel
+arrivent les messages d'amorçage.
+
+**b) Côté système installé** — `eschaton-install` écrit
+`cmdline: root=LABEL=eschaton rootflags=subvol=@ rw quiet`, sans `console=`. Et
+c'est très bien ainsi : une console série est un besoin de VM de développement,
+pas de matériel réel. **C'est donc une étape de la procédure de smoke test, à
+faire depuis le live env juste après l'installation et avant le premier
+redémarrage** — sans quoi le système démarre parfaitement et on n'en voit
+strictement rien :
+
+```bash
+# encore dans le live env, /mnt/boot toujours monté
+sed -i 's|rw quiet|rw console=tty0 console=ttyS0,115200|' /mnt/boot/limine.conf
+umount -R /mnt && reboot
+```
+
+> **Ne pas compter sur SSH pour remplacer la série.** `sshd` est bien activé et
+> actif, l'invité obtient bien un bail DHCP — mais **l'hôte ne peut pas ouvrir
+> de connexion TCP vers l'invité** à travers le `vmnet-shared` de UTM :
+> `No route to host`, y compris vers la VM aarch64 (vérifié sur les deux). C'est
+> la même limite d'hôte que l'ICMP du §6. Le trafic ne va que dans le sens
+> invité → extérieur.
+
+> **Le silence sur la série n'est pas une panne.** OVMF n'écrit rien quand le
+> démarrage réussit (ses lignes `BdsDxe: failed to…` ne sortent qu'en cas
+> d'échec), et **Limine, sur x86, dessine son menu sur la console VGA, pas sur
+> la console UEFI** — à l'inverse d'aarch64 (§9.5) où il n'y a pas de VGA. Entre
+> la fin du firmware et le premier message du noyau, il est donc normal de ne
+> rien voir.
+
+### 10.4 Rattraper un système installé qu'on ne voit pas
+
+Si l'étape (b) du §10.3 a été oubliée, le disque est amorçable et l'UEFI ne
+retombe plus sur l'ISO : on ne peut plus entrer nulle part. La sortie est de
+**recréer la VM avec le CD en premier** — l'ordre étant figé à la création
+(§10.2), c'est le seul levier — en réinjectant le disque déjà installé :
+
+```bash
+VM="$HOME/Library/Containers/com.utmapp.UTM/Data/Documents/eschaton-x86-smoke.utm"
+/Applications/UTM.app/Contents/MacOS/utmctl stop eschaton-x86-smoke --force
+cp -c "$VM/Data/"*.qcow2 /tmp/eschaton-x86-installed.qcow2      # clone APFS, instantané
+osascript -e 'tell application "UTM" to delete virtual machine named "eschaton-x86-smoke"'
+osascript ~/create-x86-cd-first.applescript                      # CD en 1er dans `drives`
+rm -f "$VM/Data/"*.qcow2 && cp -c /tmp/eschaton-x86-installed.qcow2 "$VM/Data/<nouvel-id>.qcow2"
+```
+
+Le live env démarre alors, `mount /dev/vda1 /mnt/esp` donne accès à `limine.conf`,
+et on recrée ensuite la VM dans l'ordre nominal (disque d'abord).
+
+> **Supprimer `Data/efi_vars.fd` remet la NVRAM à zéro** (UTM la recrée depuis
+> son gabarit au démarrage suivant, 328 704 octets). Utile : cela efface les
+> entrées de démarrage inscrites par l'invité. À savoir — le fichier que QEMU
+> régénère lui-même après un `rm` à chaud n'a pas la même taille (458 752) ;
+> seule la recréation de la VM redonne le gabarit d'origine.
+
+### 10.5 Durées réelles — l'émulation coûte ~3×, pas ~15×
+
+La spec §8 (risque 5) parle d'« émulation x86_64 très lente ». Mesuré, c'est
+**beaucoup moins dramatique que prévu** : le facteur est de l'ordre de **3 sur
+le cycle complet** et de **6 sur `pacstrap`**, pas les 10 à 20 redoutés. La VM
+émulée voit d'ailleurs ses **4 cœurs**, là où le live env aarch64 est bridé à un
+seul (§7).
+
+| Étape | x86_64 émulé | aarch64 virtualisé (§8.1) |
+|---|---|---|
+| Téléchargement de l'ISO | 43 s (1,5 Gio) | — |
+| Démarrage de la VM → invite du live env | **≈ 2 min** | ~30 s |
+| `eschaton-install` complet | **8 min 46 s** | 1 min 30 s |
+| — volume | 234 paquets, 402 Mio téléchargés, 1 220 Mio installés | 231 paquets, 276 Mio, 1,5 Gio |
+| Redémarrage → invite de connexion Eschaton | **≈ 55 s** | ~18 s |
+| **Total, VM éteinte → session ouverte** | **≈ 12 min** | ≈ 4 min |
+| `eschaton-update` (dont kernel, 147 Mio) | 2 min 31 s | ~25 s (petit paquet) |
+| Redémarrage après mise à jour du kernel | 60 s | ~19 s |
+
+Décomposition d'un démarrage d'Eschaton, par `systemd-analyze` :
+
+```
+Startup finished in 2.205s (firmware) + 3.407s (loader) + 3.060s (kernel)
+                  + 9.487s (initrd) + 20.785s (userspace) = 38.946s
+```
+
+> **`systemd-analyze` ment sur le poste « firmware » en émulation.** Au
+> redémarrage suivant il a annoncé `7min 22s (firmware)` pour un cycle qui a
+> duré **60 s au chronomètre**. La valeur vient de variables EFI dont la base de
+> temps n'est pas fiable sous TCG. Seule la mesure au mur fait foi.
+
+### 10.6 `limine-entry-tool` sur x86_64 : la réserve de la Task 9 est levée
+
+C'est ce que ce smoke test devait attraper. Rappel du §8.6 : sur aarch64
+`limine-update` s'arrête sur « The system is not x86_64 » et ne génère jamais
+rien ; **sur x86_64 il s'exécute**, et rien ne garantissait *a priori* qu'il
+s'entende avec le `limine.conf` écrit par `eschaton-install`.
+
+**Il s'entend — et c'est `TARGET_OS_NAME` qui le fait.** L'invariant du §4.2
+étape 6, posé par `eschaton-base` dans `/etc/default/limine`, est lu par
+`limine-entry-tool` exactement comme par `limine-snapper-sync` : l'outil
+retrouve l'entrée `/Eschaton`, y retrouve la sous-entrée de kernel, et **réécrit
+son corps sur place**. C'est l'harmonisation qu'espérait la Task 7bis, vérifiée.
+
+Ce qu'il fait, au premier changement de kernel (`linux` 7.1.9 → 7.1.10) :
+
+```
+(3/4) Record kernels marked for removal in Limine
+(4/4) Removing linux initcpios...
+(3/5) Clean Limine boot entries of removed kernels
+(4/5) Updating linux initcpios...
+Copied: /tmp/limine-mkinitcpio.…/initramfs -> /boot/<machine-id>/linux/initramfs
+Copied: /usr/lib/modules/7.1.10-arch1-1/vmlinuz -> /boot/<machine-id>/linux/vmlinuz
+Updated: /boot/limine.conf
+```
+
+`limine.conf` après réécriture — une seule entrée de premier niveau, la nôtre :
+
+```
+timeout: 3
+default_entry: Eschaton/linux
+
+/Eschaton
+    //linux
+  ### This kernel entry is auto-generated by limine-entry-tool
+  comment: Kernel version: 7.1.10-arch1-1
+  protocol: linux
+  module_path: boot():/<machine-id>/linux/initramfs#<blake2b>
+  path: boot():/<machine-id>/linux/vmlinuz#<blake2b>
+  cmdline: root=LABEL=eschaton rootflags=subvol=@ rw console=tty0 console=ttyS0,115200
+
+    //Snapshots
+     ### Auto-generated by limine-snapper-sync
+     comment: 2 snapshots
+     ///2 │ 2026-08-28 06:02:55
+     …
+```
+
+Point par point, la réserve :
+
+| Question de la Task 9 | Réponse mesurée |
+|---|---|
+| Ajoute-t-il une entrée en double à côté des nôtres ? | **Non.** `grep -c '^/[^/]' /boot/limine.conf` → `1`, avant comme après. |
+| Écrase-t-il `default_entry` ? | **Non.** `default_entry: Eschaton/linux` intact. |
+| Écrase-t-il notre `cmdline` ? | **Non.** Recopié verbatim — y compris l'ajout `console=` du §10.3. |
+| Casse-t-il l'ancre `//Snapshots` ? | **Non.** Préservée, et `limine-snapper-sync` y a écrit ses 2 entrées. |
+| `TARGET_OS_NAME` harmonise-t-il les deux outils ? | **Oui** — c'est la clé de tout ce qui précède. |
+
+**Ce qu'il change tout de même**, et qu'il faut connaître :
+
+- **Il devient propriétaire des fichiers du kernel.** L'entrée pointait sur
+  `/boot/vmlinuz-linux` + `/boot/initramfs-linux.img` (écrits par l'installeur) ;
+  après la première transaction elle pointe sur
+  `/boot/<machine-id>/linux/{vmlinuz,initramfs}`. Les deux fichiers d'origine
+  sont **supprimés** par son crochet de pré-transaction — pas d'orphelins, mais
+  l'arborescence n'est plus celle que l'installeur a posée. Sans conséquence :
+  il maintient désormais les siens, et le système démarre (vérifié : 7.1.10 au
+  redémarrage, modules concordants).
+- **Il installe un second Limine et l'inscrit en NVRAM.** `/boot/EFI/limine/`
+  contient `limine_x64.efi` — **binaire identique** (même md5) à celui que
+  l'installeur pose en `/boot/EFI/BOOT/BOOTX64.EFI` — plus un `.bak`. Pendant le
+  `pacstrap` il crée aussi, via `efibootmgr`, une entrée UEFI
+  `Boot0004* Limine … \EFI\limine\limine_x64.efi` **prioritaire** sur le chemin
+  de repli de l'installeur. Le premier démarrage passe donc par *son* binaire —
+  sans différence observable, les deux étant le même fichier. La variable EFI
+  `LimineLastBootedEntry` valait alors `Eschaton/linux` : c'est bien notre
+  entrée qui a démarré.
+- **L'entrée NVRAM n'est pas recréée** aux transactions suivantes : après une
+  remise à zéro de la NVRAM (§10.4), le système démarre par
+  `\EFI\BOOT\BOOTX64.EFI` et y reste, même après une mise à jour de kernel.
+- **Coût en place sur l'ESP** : ~31 Mio pour le doublon kernel + initramfs. Sur
+  les 4 Gio du §4.3, l'ESP reste à **108 Mio (3 %)** avec 2 snapshots — très
+  loin du seuil `LIMIT_USAGE_PERCENT` (85 %) du risque n° 8.
+
+**Conclusion : aucun conflit réel, aucun correctif à porter au dépôt.**
+
+### 10.7 Checklist §7.3 — sorties réelles
+
+Toutes lues sur la console série de la VM, après le premier démarrage.
+
+```console
+$ grep '^ID=eschaton$' /etc/os-release && echo SMOKE_X86_OK
+ID=eschaton
+SMOKE_X86_OK
+
+$ uname -m; uname -r; nproc
+x86_64
+7.1.9-arch1-2                      (puis 7.1.10-arch1-1 après eschaton-update)
+4
+
+$ pacman -Q linux intel-ucode amd-ucode
+linux 7.1.9.arch1-2
+intel-ucode 20260812-1
+erreur : le paquet « amd-ucode » n'a pas été trouvé      ← détection du vendeur : OK
+
+$ systemctl --failed --no-legend
+(vide — 0 ligne)
+
+$ for u in NetworkManager sshd fstrim.timer limine-snapper-sync snapper-cleanup.timer …
+NetworkManager.service           enabled   active
+sshd.service                     enabled   active
+fstrim.timer                     enabled   active
+limine-snapper-sync.service      enabled   active
+snapper-cleanup.timer            enabled   active
+
+$ grep -c '^/[^/]' /boot/limine.conf ; grep '^default_entry' /boot/limine.conf
+1
+default_entry: Eschaton/linux
+
+$ grep TARGET /etc/default/limine
+TARGET_OS_NAME="Eschaton"
+
+$ timeout 60 curl -fsI https://archlinux.org >/dev/null && echo NET_OK
+NET_OK                                            (enp0s1, 192.168.64.x, jamais `ping`)
+
+$ eschaton-update --noconfirm
+Paquets (1) linux-7.1.10.arch1-1
+(1/4) Performing snapper pre snapshots…    ==> root: 1
+(2/4) Waiting for limine-snapper-sync to finish...
+(5/5) Performing snapper post snapshots…   ==> root: 2
+==> Le kernel a été mis à jour : redémarre pour l'utiliser (sudo reboot).
+UPDATE_RC=0
+
+$ uname -r ; ls -d /usr/lib/modules/$(uname -r)      # après redémarrage
+7.1.10-arch1-1
+/usr/lib/modules/7.1.10-arch1-1                   ← kernel et modules d'accord
+
+$ findmnt -nrt btrfs -o TARGET,SOURCE
+/                     /dev/vda2[/@]
+/home                 /dev/vda2[/@home]
+/.snapshots           /dev/vda2[/@snapshots]
+/var/cache/pacman/pkg /dev/vda2[/@pkg]
+/var/log              /dev/vda2[/@log]
+
+$ swapon --show
+/dev/zram0 partition 1,9G   0B  100                ← zram seul, aucune partition
+
+$ lsblk -no SIZE,FSTYPE /dev/vda1
+   4G vfat                                          ← ESP 4 Gio (spec §4.3)
+
+$ pacman -Q eschaton-base eschaton-branding limine limine-snapper-sync limine-mkinitcpio-hook
+eschaton-base 0.1.0-11        eschaton-branding 0.1.0-1        limine 12.6.1-1
+limine-snapper-sync 1.31.0-1  limine-mkinitcpio-hook 1.37.1-1
+
+$ sudo pacman -Qkk eschaton-base
+eschaton-base : 26 fichiers au total, 0 fichier modifié     ← correctif Task 10 n°2 tenu
+```
+
+Bannière de connexion série : `Eschaton 7.1.9-arch1-2 (ttyS0)`, puis
+`Eschaton 7.1.10-arch1-1 (ttyS0)` après la mise à jour — l'identité vient bien
+de `/etc/os-release`. Le motd s'affiche à l'ouverture de session :
+`Bienvenue sur Eschaton — https://eschaton (rolling)`.
+
+### 10.8 Pièges propres à ce smoke test
+
+- **Ne pas confondre les deux VM sur le réseau.** Les deux s'appellent
+  `eschaton` et vivent en `192.168.64.x`. Le bail se lit dans
+  `/var/db/dhcpd_leases` sur le Mac ; **identifier par l'adresse MAC**, pas par
+  le nom. (Le live env archiso s'y annonce avec un identifiant DUID, le système
+  installé avec sa MAC : ce ne sont pas les mêmes baux.)
+- **Le `pacstrap` demande les invites `passwd` au bout de ~8 min.** Un pilotage
+  qui abandonne avant se trompe de diagnostic — même leçon qu'au §8.1, avec un
+  facteur 6.
+- **Le pty change à chaque `utmctl stop`/`start`** (§5.3) : le redétecter et
+  relancer le démon. Un `reboot` de l'invité, lui, ne le change pas.
+- **`fatal library error, lookup self`** et **`sd-vconsole: "/etc/vconsole.conf"
+  not found`** pendant le `pacstrap` : identiques à aarch64 (§8.5), sans
+  conséquence.
+- **`x86/CPU: Model not found in latest microcode list`** au démarrage : le
+  processeur émulé (« Intel Core Processor (Skylake) », synthétique) n'a pas de
+  blob dans `intel-ucode`. Le chargeur précoce a bien tourné — c'est lui qui
+  émet le message — et le crochet `microcode` de mkinitcpio a bien intégré le
+  blob à l'initramfs. Rien à corriger : c'est une propriété du CPU émulé.
+- **Le compte `seylar` a le mot de passe `eschaton`**, comme la VM aarch64
+  (§8.2). VM jetable, à ne pas exposer.
+
+### 10.9 Ce que ce test rend possible, et qu'il n'a pas fait
+
+La VM est restée sur un état où le §9.10 devient exécutable : **deux kernels
+distincts** (7.1.9 et 7.1.10) existent maintenant dans `limine_history/`, avec
+un snapshot `pre` antérieur au changement. Le rollback *à travers* un changement
+de kernel — le seul morceau du filet que la Task 10 n'a pas pu exercer faute de
+mise à jour de kernel ALARM — peut donc s'éprouver ici, sur x86_64, sans
+attendre. Hors périmètre du §7.3, mais l'occasion est ouverte.
+
