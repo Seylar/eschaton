@@ -4,7 +4,7 @@ pkgrel=3
 pkgdesc="Configuration du bureau Eschaton : session Wayland, greetd, défauts Hyprland"
 arch=(any)
 license=(MIT)
-depends=(hyprland dms-shell greetd bash)
+depends=(hyprland dms-shell greetd bash jq)
 backup=(etc/eschaton/greetd.toml)
 # LICENSE est un lien symbolique vers le LICENSE partagé à la racine du dépôt :
 # makepkg réduit toute entrée locale de source=() à son basename, donc un chemin
@@ -12,8 +12,9 @@ backup=(etc/eschaton/greetd.toml)
 # /usr/share/makepkg/util/source.sh. Le lien conserve une licence unique.
 source=(eschaton-session eschaton.desktop greetd-eschaton.toml greetd-override.conf
         51-eschaton-desktop.preset 90-eschaton-desktop-preset.hook hyprland-session.target
+        eschaton-dms-provision eschaton-dms-provision.service
         seed-hyprland.lua eschaton-defaults.lua LICENSE)
-sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
 
 package() {
   install -Dm755 eschaton-session "$pkgdir/usr/bin/eschaton-session"
@@ -50,6 +51,15 @@ package() {
   install -Dm644 hyprland-session.target "$pkgdir/usr/lib/systemd/user/hyprland-session.target"
   install -d "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants"
   ln -s ../dms.service "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/dms.service"
+
+  # Les plugins système sont découverts mais désactivés par défaut dans DMS.
+  # Ce oneshot les active et les ajoute une fois à la barre via l'IPC officiel,
+  # sans réécrire ensuite les choix de l'utilisateur.
+  install -Dm755 eschaton-dms-provision "$pkgdir/usr/lib/eschaton/eschaton-dms-provision"
+  install -Dm644 eschaton-dms-provision.service \
+    "$pkgdir/usr/lib/systemd/user/eschaton-dms-provision.service"
+  ln -s ../eschaton-dms-provision.service \
+    "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/eschaton-dms-provision.service"
 
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

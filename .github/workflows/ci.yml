@@ -2,7 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    # `bureau` publie la vague SP2 afin que la VM la teste avant revue/fusion.
+    # À refermer sur main après la revue Claude.
+    branches: [main, bureau]
   pull_request:
 
 # Permissions minimales par défaut ; seul le job de publication est élevé.
@@ -26,7 +28,9 @@ jobs:
             installer/lib.sh installer/eschaton-install \
             packages/eschaton-base/lib.sh \
             packages/eschaton-base/eschaton-update \
-            packages/eschaton-base/eschaton-rollback
+            packages/eschaton-base/eschaton-rollback \
+            packages/eschaton-desktop-config/eschaton-session \
+            packages/eschaton-desktop-config/eschaton-dms-provision
       # `tools/vm-serial` n'a pas d'extension .py et échappe à tout linter de
       # paquet : au minimum, il doit compiler.
       - name: py_compile
@@ -90,9 +94,8 @@ jobs:
   # choisit le répertoire.
   publish:
     needs: [build-x86_64, build-aarch64]
-    # La branche de travail publie aussi : les Tasks 9 et 11 installent depuis
-    # Publication depuis `main` uniquement (bascule post-fusion du Socle).
-    if: github.ref == 'refs/heads/main'
+    # Publication de validation SP2 depuis `bureau`, sans fusionner dans main.
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/bureau'
     runs-on: ubuntu-latest
     permissions:
       pages: write

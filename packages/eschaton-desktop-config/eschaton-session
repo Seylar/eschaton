@@ -25,6 +25,21 @@ binds_user="$hypr_dir/dms/binds-user.lua"
 hook_stamp="$hypr_dir/.eschaton-hook"
 defaults=/usr/share/eschaton/hypr/eschaton-defaults.lua
 hook="dofile(\"$defaults\")"
+dms_config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/DankMaterialShell"
+dms_settings="$dms_config_dir/settings.json"
+
+ensure_dms_settings_seed() {
+  # DMS n'active pas un plugin système et ne l'ajoute pas à la barre par sa
+  # seule présence sous /etc. Le service de provisioning utilise son IPC, qui
+  # ne peut persister la barre que si settings.json a déjà été chargé. Un objet
+  # vide fait charger les valeurs par défaut de DMS sans figer leur copie ici.
+  [[ ! -e "$dms_settings" ]] || return 0
+  mkdir -p "$dms_config_dir" || {
+    log "mkdir $dms_config_dir a échoué"
+    return 0
+  }
+  printf '{}\n' > "$dms_settings" || log "amorçage de $dms_settings impossible"
+}
 
 ensure_eschaton_hook() {
   # dms/binds-user.lua doit exister : le hyprland.lua de DMS comme notre amorce
@@ -85,6 +100,8 @@ main() {
     install -Dm644 /usr/share/eschaton/hypr/hyprland.lua "$entry" \
       || log "installation de l'amorce $entry a échoué"
   fi
+
+  ensure_dms_settings_seed
 
   # --- 3. Accroche des défauts Eschaton --------------------------------------
   # La ligne n'est posée qu'une fois dans la vie du compte : qui la retire a

@@ -5,7 +5,7 @@ pkgdesc="Meta-paquet du socle Eschaton : dépendances système et configuration 
 arch=(any)
 license=(MIT)
 depends=(
-  base networkmanager btrfs-progs snapper snap-pac
+  base bash networkmanager btrfs-progs snapper snap-pac
   limine limine-snapper-sync limine-mkinitcpio-hook
   # inotify-tools n'est qu'un optdepend de limine-snapper-sync ; pour Eschaton
   # il est requis. Sans `inotifywait`, limine-snapper-watcher journalise

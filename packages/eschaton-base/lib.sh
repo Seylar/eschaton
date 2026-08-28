@@ -52,6 +52,16 @@ valid_snapshot_number() { # $1=saisie de l'utilisateur
   ((10#$1 > 0))
 }
 
+# Interface non interactive volontairement minuscule : pkexec authentifie le
+# PROGRAMME, pas ses arguments. N'accepter que la forme exacte `--yes N`
+# empêche qu'un appel privilégié soit détourné vers une autre opération.
+noninteractive_rollback_number() {
+  (($# == 2)) || return 1
+  [[ $1 == --yes ]] || return 1
+  valid_snapshot_number "$2" || return 1
+  printf '%s\n' "$2"
+}
+
 # Vrai quand la racine vit SOUS le sous-volume des snapshots, c'est-à-dire quand
 # on a démarré sur une entrée « Snapshots » du menu Limine. Le remplacement de
 # sous-volume n'a alors aucun sens : il abîmerait le magasin de snapshots au lieu

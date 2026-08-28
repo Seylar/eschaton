@@ -85,14 +85,6 @@ depends=(
   # remplacer un agent qui marche et qui est thémé DMS.
   polkit
 
-  # --- Dette assumée, avec sa condition de sortie -----------------------------
-  # Rollback graphique disponible dès le jour 1, le temps que le plugin natif
-  # existe. CONDITION DE SORTIE EXPLICITE (spec Bureau §3, per ADR 0002) :
-  # `btrfs-assistant` quitte cette liste le jour où `eschaton-dms-plugin-rollback`
-  # couvre, depuis le shell, lister + restaurer + inviter au redémarrage. C'est la
-  # condition, pas une intention.
-  btrfs-assistant
-
   # --- Polices ----------------------------------------------------------------
   # La mono à glyphes Nerd que DMS attend pour ses icônes, et la couverture
   # Unicode générale.
@@ -100,9 +92,9 @@ depends=(
   noto-fonts
 
   # --- Paquets Eschaton du bureau ---------------------------------------------
-  # Les deux plugins n'existent pas encore (Tasks 4 et 5) : ce paquet se
-  # construit en `makepkg -d` — aucune résolution de dépendances — et ne se
-  # publie qu'après eux (note du plan, Task 6).
+  # Les deux plugins sont les Tasks 5 et 6. Le plugin rollback remplit la
+  # condition de sortie de btrfs-assistant : liste, confirmation, restauration
+  # et invitation au redémarrage vivent désormais directement dans DMS.
   eschaton-desktop-config
   eschaton-dms-plugin-update
   eschaton-dms-plugin-rollback

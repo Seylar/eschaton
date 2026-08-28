@@ -9,6 +9,17 @@ setup() {
   hook_stamp="$hypr_dir/.eschaton-hook"
   defaults=/usr/share/eschaton/hypr/eschaton-defaults.lua
   hook="dofile(\"$defaults\")"
+  dms_config_dir="$BATS_TEST_TMPDIR/DankMaterialShell"
+  dms_settings="$dms_config_dir/settings.json"
+}
+
+@test "le seed DMS crée un objet vide mais ne remplace jamais les réglages" {
+  ensure_dms_settings_seed
+  [ "$(cat "$dms_settings")" = "{}" ]
+
+  printf '%s\n' '{"theme":"custom"}' > "$dms_settings"
+  ensure_dms_settings_seed
+  [ "$(cat "$dms_settings")" = '{"theme":"custom"}' ]
 }
 
 @test "le hook Eschaton est ajouté et marqué une seule fois" {

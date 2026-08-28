@@ -78,3 +78,16 @@ setup() { source "$BATS_TEST_DIRNAME/../packages/eschaton-base/lib.sh"; }
   run valid_snapshot_number "";     [ "$status" -eq 1 ]
   run valid_snapshot_number "3; rm -rf /"; [ "$status" -eq 1 ]
 }
+
+@test "noninteractive_rollback_number n'accepte que --yes suivi d'un snapshot" {
+  run noninteractive_rollback_number --yes 42
+  [ "$status" -eq 0 ]
+  [ "$output" = "42" ]
+
+  run noninteractive_rollback_number --yes 0
+  [ "$status" -eq 1 ]
+  run noninteractive_rollback_number --force 42
+  [ "$status" -eq 1 ]
+  run noninteractive_rollback_number --yes 42 extra
+  [ "$status" -eq 1 ]
+}

@@ -1,0 +1,9 @@
+// Le droit ne couvre que /usr/bin/eschaton-rollback, déclaré par l'action
+// org.eschaton.rollback. pkexec ne valide pas ses arguments : le script refuse
+// toute forme non interactive autre que `--yes NUMÉRO` avant de toucher btrfs.
+polkit.addRule(function(action, subject) {
+    if (action.id === "org.eschaton.rollback" &&
+        subject.active && subject.local && subject.isInGroup("wheel")) {
+        return polkit.Result.YES;
+    }
+});

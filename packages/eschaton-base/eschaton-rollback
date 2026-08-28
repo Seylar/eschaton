@@ -33,12 +33,29 @@ source /usr/lib/eschaton/lib.sh
 ### spec §6 sont complémentaires.
 
 die() { echo "eschaton-rollback : $*" >&2; exit 1; }
+usage() {
+  echo "usage: eschaton-rollback [--yes NUMÉRO]" >&2
+  exit 2
+}
 
-echo "==> Points de restauration disponibles :"
-sudo snapper --config root list
+noninteractive=false
+case $# in
+  0) ;;
+  2)
+    num=$(noninteractive_rollback_number "$@") || usage
+    noninteractive=true
+    ;;
+  *) usage ;;
+esac
 
-read -rp "Numéro du snapshot vers lequel revenir (vide pour annuler) : " num
-if [[ -z "$num" ]]; then echo "Annulé."; exit 0; fi
+if "$noninteractive"; then
+  ((EUID == 0)) || die "le mode --yes doit être lancé comme root (utiliser pkexec)."
+else
+  echo "==> Points de restauration disponibles :"
+  sudo snapper --config root list
+  read -rp "Numéro du snapshot vers lequel revenir (vide pour annuler) : " num
+  if [[ -z "$num" ]]; then echo "Annulé."; exit 0; fi
+fi
 valid_snapshot_number "$num" || die "numéro invalide : « $num »."
 [[ -d "/.snapshots/$num/snapshot" ]] || die "le snapshot $num n'existe pas."
 
@@ -63,8 +80,10 @@ backup="${root_subvol}.avant-rollback-$(date +%Y%m%d-%H%M%S)"
 echo
 echo "==> Restauration du snapshot $num dans le sous-volume « $root_subvol » de $dev."
 echo "    L'état actuel n'est pas détruit : il est mis de côté sous « $backup »."
-read -rp "Confirmer ? [oui/N] " reply
-if [[ "$reply" != "oui" ]]; then echo "Annulé."; exit 0; fi
+if ! "$noninteractive"; then
+  read -rp "Confirmer ? [oui/N] " reply
+  if [[ "$reply" != "oui" ]]; then echo "Annulé."; exit 0; fi
+fi
 
 # Le remplacement se fait depuis la racine du système de fichiers (subvolid=5),
 # seule vue où `@` et `@snapshots` sont frères et manipulables comme des noms.

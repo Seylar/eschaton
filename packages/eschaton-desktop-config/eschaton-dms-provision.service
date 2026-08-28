@@ -1,0 +1,11 @@
+[Unit]
+Description=Activation initiale des plugins DMS Eschaton
+After=dms.service
+Requires=dms.service
+ConditionPathExists=/etc/xdg/quickshell/dms-plugins/eschatonUpdate/plugin.json
+ConditionPathExists=/etc/xdg/quickshell/dms-plugins/eschatonRollback/plugin.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/eschaton/eschaton-dms-provision
+RemainAfterExit=yes
