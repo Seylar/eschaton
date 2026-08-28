@@ -16,7 +16,8 @@ Preuves de référence :
 
 - spec et DoD : `docs/superpowers/specs/2026-08-28-bureau-design.md`, §6.1 ;
 - déroulé VM détaillé : `tools/vm-dev.md`, §§14–17 ;
-- code à comparer : `main..bureau`.
+- code à comparer : `origin/main...bureau` (le checkout local `main` de la
+  machine est ancien et contient des modifications utilisateur non liées).
 
 ## 2. Correctifs importants trouvés par la review et le dogfooding
 
@@ -99,7 +100,7 @@ Le service de provisioning après reboot est `active (exited)` avec
 
 ## 6. Checklist Claude
 
-1. Reviewer `git diff main...bureau`, en priorité les helpers privilégiés, les
+1. Reviewer `git diff origin/main...bureau`, en priorité les helpers privilégiés, les
    règles Polkit, les unités systemd et `repo/build-repo`.
 2. Rejouer `shellcheck`, `bats tests/`, le build des quatre paquets desktop et
    les validations QML DMS 1.5.3.
