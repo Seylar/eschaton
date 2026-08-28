@@ -171,4 +171,4 @@ Le sous-projet 3 est spécifié et planifié :
 - **Plan d'exécution (8 tâches)** : `docs/superpowers/plans/2026-08-28-assistant.md` — Task 1 = spike de terrain `dms-ai-assistant` + mesure du streaming QML (décision A vs B-remontée AVANT d'écrire le moteur).
 - **Veille (autorité factuelle, ses §7.2 interdits sont contraignants)** : `docs/veille/2026-08-28-sp3-assistant.md`.
 
-Ordre impératif : finir le §7 (rendu pastilles) → revue Claude → [Claude : fusion + tag v0.2.0] → SP3 Task 1. Mêmes règles que toujours : pousser sur `bureau` (ou la branche que Claude indiquera post-fusion), CI verte à chaque vague, preuves vm-dev, jamais de tag/fusion.
+Ordre impératif : finir le §7 (rendu pastilles) → revue Claude → [Claude : fusion + tag v0.2.0] → SP3 Task 1. Mêmes règles que toujours : pousser sur **`assistant`** (créée depuis main post-fusion v0.2.0 — c'est TA branche de travail SP3), CI verte à chaque vague, preuves vm-dev, jamais de tag/fusion.
