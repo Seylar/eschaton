@@ -37,7 +37,8 @@ jobs:
             packages/eschaton-base/eschaton-update \
             packages/eschaton-base/eschaton-rollback \
             packages/eschaton-desktop-config/eschaton-session \
-            packages/eschaton-desktop-config/eschaton-dms-provision
+            packages/eschaton-desktop-config/eschaton-dms-provision \
+            packages/eschaton-desktop-config/eschaton-assistant-shadowing
       # `tools/vm-serial` n'a pas d'extension .py et échappe à tout linter de
       # paquet : au minimum, il doit compiler.
       - name: py_compile
@@ -51,7 +52,9 @@ jobs:
       # passerait toute la CI pour n'échouer qu'à l'installation sur la machine
       # ARM ; cette garde la rattrape ici.
       - name: dépendances du bureau (Arch x86_64 + ALARM aarch64)
-        run: tools/check-desktop-deps
+        run: |
+          tools/check-desktop-deps \
+            --also-pkgbuild packages/eschaton-dms-plugin-assistant/PKGBUILD
 
   # Un job de build PAR ARCHITECTURE (spec §5.3) : les deux paquets vendorés
   # sont des binaires natifs compilés par GraalVM, pas des paquets `any`. Chaque

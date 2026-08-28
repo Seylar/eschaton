@@ -3151,3 +3151,74 @@ Les conteneurs de harnais `eschaton-sp3-core-harness` et
 supprimés, de même que `eschaton-sp3-core-final-audit` ; les répertoires de
 transfert `/tmp/assistant-task2{,-final,-bounded,-final-audit}` sont supprimés ;
 `podman ps` est vide. Le modèle RamaLama reste en cache pour la suite.
+
+## 21. SP3 Task 3 — sidebar DMS et paquet assistant (2026-08-28)
+
+### 21.1 UI et frontières livrées
+
+Le daemon `eschatonAssistant` suit le motif DMS réel :
+`Variants { model: Quickshell.screens }` instancie un `DankSlideout` par écran,
+avec une largeur repliée de 520 px et une largeur étendue de 960 px. `SUPER+A`
+appelle uniquement `dms ipc call plugins toggle eschatonAssistant`. Le panneau
+porte le fil de session, la saisie, l'annulation, l'effacement, les états vide
+et erreur, l'indicateur d'outil et un sélecteur fournisseur volontairement
+limité à RamaLama en Task 3 ; la vraie configuration multi-fournisseur arrive
+en Task 4.
+
+Le rendu assistant n'interprète pas du HTML fournisseur brut. Il échappe
+d'abord tout le texte, puis réintroduit seulement `**gras**` et `` `code` ``.
+Images, liens et chargements de ressources restent impossibles dans cette
+surface. Le style emploie les tokens du thème DMS existant plutôt qu'un second
+système visuel Eschaton.
+
+Le manifeste annonce ses permissions à titre informatif et dit explicitement
+qu'elles ne constituent pas une frontière de sécurité. La détection d'un
+plugin utilisateur portant le même `id` est un oneshot de
+`eschaton-desktop-config`, activé avec la session graphique et accompagné d'une
+notification visible. Le mettre dans le plugin assistant aurait été une erreur
+logique : le plugin système masqué ne serait justement jamais chargé. Le scan
+lit le champ `.id` des manifestes, donc un dossier utilisateur renommé ne
+contourne pas le contrôle.
+
+### 21.2 Validation dans le vrai DMS
+
+Les quatre QML runtime exacts ont été transférés dans la VM puis validés par
+`qmllint`. Les imports dynamiques `qs.*` de DMS n'ont pas de qmltypes
+exploitables hors du shell ; les catégories import/type/propriété concernées
+ont donc été désactivées pour ce lint. Cette limite n'est pas maquillée en
+validation complète : le contrôle décisif est le chargement par le vrai DMS.
+
+Un plugin utilisateur temporaire, avec uniquement un identifiant de harnais,
+a chargé le runtime exact. `dms status` l'a déclaré chargé, le toggle IPC a
+ouvert la couche suivante :
+
+```console
+xywh: 320 44 960 756 ... namespace: dms:eschaton-assistant
+```
+
+Un envoi déclenché dans ce harnais temporaire a ensuite parcouru le vrai
+`AssistantCore`, curl et RamaLama. Le modèle a rendu 1024 tokens en environ
+11,35 s (90,69 tokens/s), ce qui a instancié les delegates utilisateur et
+assistant et exercé le streaming long. Le journal DMS ne contenait après cela
+aucune erreur QML, `ReferenceError` ni erreur de binding. Le harnais utilisateur,
+ses réglages, les transferts `/tmp` et le conteneur RamaLama ont été supprimés ;
+DMS est revenu actif avec les seuls plugins système attendus et `podman ps`
+était vide.
+
+### 21.3 Paquets et gardes
+
+`eschaton-dms-plugin-assistant` se construit en `0.1.0-1` et ne contient que
+les QML runtime, l'adaptateur OpenAI, le catalogue et la licence — ni harnais ni
+fixture. Une première construction a révélé que `makepkg` aplatit le basename
+d'une source locale sous-répertoire ; le lien source racine
+`OpenAIAdapter.js -> providers/OpenAIAdapter.js` corrige ce défaut sans dupliquer
+le code.
+
+`eschaton-desktop-config` se construit en `0.1.0-10` avec le contrôle de
+shadowing et son service ; `eschaton-desktop` se construit en `0.1.0-3` avec la
+dépendance assistant. Les avertissements namcap restants sont attendus : QML
+chargé via DMS, et lien vers `dms.service` fourni par la dépendance `dms-shell`.
+Le script de garde accepte désormais des PKGBUILD additionnels ; exécuté sur le
+meta desktop et l'assistant, il confirme les 16 dépendances externes dans Arch
+x86_64 et ALARM aarch64. Côté hôte, `shellcheck`, `jq`, `git diff --check` et les
+47 tests Bats passent.

@@ -2,7 +2,9 @@
 
 setup() {
   assistant_dir="$BATS_TEST_DIRNAME/../packages/eschaton-dms-plugin-assistant"
+  desktop_config_dir="$BATS_TEST_DIRNAME/../packages/eschaton-desktop-config"
   catalog="$assistant_dir/tool-catalog.json"
+  manifest="$assistant_dir/plugin.json"
 }
 
 @test "le catalogue assistant contient exactement les trois outils v1" {
@@ -38,7 +40,8 @@ setup() {
 }
 
 @test "le transport n'introduit ni shell ni Quickshell.Networking" {
-  run grep -R -E "Quickshell\\.Networking|/(ba)?sh|[\"']-c[\"']" "$assistant_dir"
+  run grep -R -E "Quickshell\\.Networking|/(ba)?sh|[\"']-c[\"']" \
+    "$assistant_dir/AssistantCore.qml" "$assistant_dir/providers"
   [ "$status" -eq 1 ]
 }
 
@@ -61,4 +64,57 @@ setup() {
 
   run grep -F 'maxToolPayloadChars: 65536' "$assistant_dir/AssistantCore.qml"
   [ "$status" -eq 0 ]
+}
+
+@test "le manifeste expose un daemon DMS honnête sur ses permissions" {
+  run jq -e '
+    .id == "eschatonAssistant" and
+    .type == "daemon" and
+    .component == "./EschatonAssistantDaemon.qml" and
+    .requires_dms == ">=1.5.0" and
+    (.permissions | index("process") != null) and
+    (._permissions_notice | contains("non appliquées par DMS"))
+  ' "$manifest"
+  [ "$status" -eq 0 ]
+}
+
+@test "le paquet runtime exclut les harnais et garde les dépendances bi-arch" {
+  run bash -c '
+    source "$1/PKGBUILD"
+    [[ ${arch[*]} == any ]]
+    [[ ${depends[*]} == "dms-shell curl libsecret jq pacman-contrib" ]]
+    [[ ${optdepends[*]} == ramalama:* ]]
+    [[ " ${source[*]} " != *" CoreHarness.qml "* ]]
+    [[ " ${source[*]} " != *" ParserHarness.qml "* ]]
+    [[ " ${source[*]} " != *" tests/fixtures "* ]]
+  ' _ "$assistant_dir"
+  [ "$status" -eq 0 ]
+}
+
+@test "SUPER+A vise uniquement le daemon assistant" {
+  defaults="$BATS_TEST_DIRNAME/../packages/eschaton-desktop-config/eschaton-defaults.lua"
+  run grep -F 'hl.bind("SUPER + A", hl.dsp.exec_cmd("dms ipc call plugins toggle eschatonAssistant")' "$defaults"
+  [ "$status" -eq 0 ]
+}
+
+@test "le contrôle de shadowing détecte l'id même dans un dossier autrement nommé" {
+  config="$BATS_TEST_TMPDIR/config"
+  plugin="$config/DankMaterialShell/plugins/personnalisation/plugin.json"
+  fake_dms="$BATS_TEST_TMPDIR/dms"
+  calls="$BATS_TEST_TMPDIR/calls"
+  mkdir -p "$(dirname "$plugin")"
+  printf '%s\n' '{"id":"eschatonAssistant"}' > "$plugin"
+  cat > "$fake_dms" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "${ASSISTANT_SHADOW_CALLS}"
+EOF
+  chmod +x "$fake_dms"
+
+  ASSISTANT_SHADOW_CALLS="$calls" \
+    XDG_CONFIG_HOME="$config" \
+    ESCHATON_DMS_BIN="$fake_dms" \
+    run "$desktop_config_dir/eschaton-assistant-shadowing"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"remplace le plugin système"* ]]
+  [[ "$(< "$calls")" == notify\ Assistant\ Eschaton\ remplacé* ]]
 }

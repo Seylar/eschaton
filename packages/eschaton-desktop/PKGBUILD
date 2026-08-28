@@ -1,6 +1,6 @@
 pkgname=eschaton-desktop
 pkgver=0.1.0
-pkgrel=2
+pkgrel=3
 pkgdesc="Meta-paquet du bureau Eschaton : Hyprland + DMS, session graphique complète"
 arch=(any)
 license=(MIT)
@@ -88,12 +88,14 @@ depends=(
   noto-fonts
 
   # --- Paquets Eschaton du bureau ---------------------------------------------
-  # Les deux plugins sont les Tasks 5 et 6. Le plugin rollback remplit la
+  # Les trois plugins sont les panneaux système du Bureau et de l'Assistant.
+  # Le plugin rollback remplit la
   # condition de sortie de btrfs-assistant : liste, confirmation, restauration
   # et invitation au redémarrage vivent désormais directement dans DMS.
   eschaton-desktop-config
   eschaton-dms-plugin-update
   eschaton-dms-plugin-rollback
+  eschaton-dms-plugin-assistant
 )
 # VOLONTAIREMENT ABSENTS — chacun a été examiné, aucun n'est un oubli :
 # - `seatd` : arrive par `aquamarine`, dépendance d'`hyprland` (vm-dev §12.8) ; et

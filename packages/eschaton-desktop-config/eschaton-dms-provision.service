@@ -3,6 +3,7 @@ Description=Activation initiale des plugins DMS Eschaton
 After=dms.service
 ConditionPathExists=/etc/xdg/quickshell/dms-plugins/eschatonUpdate/plugin.json
 ConditionPathExists=/etc/xdg/quickshell/dms-plugins/eschatonRollback/plugin.json
+ConditionPathExists=/etc/xdg/quickshell/dms-plugins/eschatonAssistant/plugin.json
 
 [Service]
 Type=oneshot

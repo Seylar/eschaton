@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: tools/check-desktop-deps [--pkgbuild CHEMIN] [--extra-dep NOM]...
+# Usage: tools/check-desktop-deps [--pkgbuild CHEMIN] [--also-pkgbuild CHEMIN] [--extra-dep NOM]...
 #
 # Garde CI bi-architecture des dépendances du bureau (recommandation de veille
 # §7.3). Le meta-paquet `eschaton-desktop` est `arch=(any)` : il se construit
@@ -47,7 +47,7 @@ alarm_mirror="${ESCHATON_ALARM_MIRROR:-http://mirror.archlinuxarm.org/aarch64}"
 readonly ALARM_REPOS=(core extra)
 
 self_dir="$(cd "$(dirname "$0")" && pwd)"
-pkgbuild="$self_dir/../packages/eschaton-desktop/PKGBUILD"
+pkgbuilds=("$self_dir/../packages/eschaton-desktop/PKGBUILD")
 extra_deps=()
 
 while (($# > 0)); do
@@ -57,7 +57,15 @@ while (($# > 0)); do
 			echo "check-desktop-deps : --pkgbuild attend un chemin." >&2
 			exit 2
 		fi
-		pkgbuild="$2"
+		pkgbuilds=("$2")
+		shift
+		;;
+	--also-pkgbuild)
+		if (($# < 2)); then
+			echo "check-desktop-deps : --also-pkgbuild attend un chemin." >&2
+			exit 2
+		fi
+		pkgbuilds+=("$2")
 		shift
 		;;
 	# Option de TEST : ajoute un nom à la liste vérifiée sans toucher au
@@ -87,8 +95,10 @@ for outil in curl jq; do
 	command -v "$outil" >/dev/null ||
 		{ echo "check-desktop-deps : $outil est requis." >&2; exit 2; }
 done
-[[ -r "$pkgbuild" ]] ||
-	{ echo "check-desktop-deps : PKGBUILD illisible : $pkgbuild" >&2; exit 2; }
+for pkgbuild in "${pkgbuilds[@]}"; do
+	[[ -r "$pkgbuild" ]] ||
+		{ echo "check-desktop-deps : PKGBUILD illisible : $pkgbuild" >&2; exit 2; }
+done
 
 # --- 1. Extraction des dépendances -------------------------------------------
 # On SOURCE le PKGBUILD dans un bash séparé au lieu de le parser. Le tableau
@@ -102,13 +112,17 @@ done
 # processus séparé pour qu'aucune de ses variables (`arch`, `source`,
 # `license`…) ne retombe dans ce script.
 # shellcheck disable=SC2016  # $1/${depends[@]} sont évalués par le bash appelé
-if ! deps_brutes=$(bash -c 'set -euo pipefail
-	. "$1"
-	[[ ${depends+defini} == defini ]] || { echo "depends=() absent de $1" >&2; exit 1; }
-	printf "%s\n" "${depends[@]}"' _ "$pkgbuild"); then
-	echo "check-desktop-deps : lecture des dépendances impossible." >&2
-	exit 2
-fi
+deps_brutes=''
+for pkgbuild in "${pkgbuilds[@]}"; do
+	if ! deps_pkg=$(bash -c 'set -euo pipefail
+		. "$1"
+		[[ ${depends+defini} == defini ]] || { echo "depends=() absent de $1" >&2; exit 1; }
+		printf "%s\n" "${depends[@]}"' _ "$pkgbuild"); then
+		echo "check-desktop-deps : lecture des dépendances impossible : $pkgbuild" >&2
+		exit 2
+	fi
+	deps_brutes+="${deps_brutes:+$'\n'}$deps_pkg"
+done
 
 # --- 1b. Paquets servis par NOTRE dépôt ---------------------------------------
 # Énumération identique à celle de repo/build-repo (packages/*/ et
@@ -138,10 +152,9 @@ shopt -u nullglob
 #   1. le paquet est construit ici — couvre les vendorés (`limine-snapper-sync`,
 #      `limine-mkinitcpio-hook`), qui ne portent pas notre préfixe ;
 #   2. le nom est dans notre espace de noms `eschaton-*` — couvre les paquets
-#      DÉCLARÉS mais pas encore écrits, et `eschaton-desktop` en a deux au
-#      moment où ceci s'écrit (`eschaton-dms-plugin-update` et
-#      `-rollback`, Tasks 5 et 6 du Bureau). Sans cette règle la garde
-#      exigerait d'eux qu'ils existent en amont : faux rouge garanti.
+#      DÉCLARÉS mais pas encore écrits, dont les plugins DMS Eschaton. Sans
+#      cette règle la garde exigerait qu'ils existent en amont : faux rouge
+#      garanti.
 est_a_nous() {
 	local n
 	case "$1" in eschaton-*) return 0 ;; esac
@@ -167,10 +180,17 @@ while IFS= read -r d; do
 done <<<"$deps_brutes"
 
 deps+=(${extra_deps[@]+"${extra_deps[@]}"})
+# Plusieurs PKGBUILD peuvent répéter une dépendance (jq et dms-shell, par
+# exemple). Une seule requête par nom suffit et garde la sortie lisible.
+deps_uniques=()
+while IFS= read -r d; do
+	[[ -n "$d" ]] && deps_uniques+=("$d")
+done < <(printf '%s\n' "${deps[@]}" | sort -u)
+deps=("${deps_uniques[@]}")
 ((${#deps[@]} > 0)) ||
 	{ echo "check-desktop-deps : aucune dépendance externe à vérifier." >&2; exit 2; }
 
-echo "==> $pkgbuild"
+echo "==> ${pkgbuilds[*]}"
 printf '    %d dépendances externes ; %d exclue(s) (servies par notre dépôt) : %s\n' \
 	"${#deps[@]}" "${#exclues[@]}" "${exclues[*]-}"
 

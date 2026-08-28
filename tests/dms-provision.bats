@@ -86,6 +86,19 @@ EOF
   [ "$(< "$count")" = 3 ]
 }
 
+@test "la vague v2 active aussi le daemon assistant sans l'ajouter à la barre" {
+  provision="$BATS_TEST_DIRNAME/../packages/eschaton-desktop-config/eschaton-dms-provision"
+  run grep -F 'for plugin in eschatonUpdate eschatonRollback eschatonAssistant' "$provision"
+  [ "$status" -eq 0 ]
+
+  run grep -F '.eschaton-plugins-provisioned-v2' "$provision"
+  [ "$status" -eq 0 ]
+
+  add_eschaton_widgets "$settings"
+  run jq -e '[.barConfigs[0].rightWidgets[] | select(. == "eschatonAssistant")] | length == 0' "$settings"
+  [ "$status" -eq 0 ]
+}
+
 @test "la barre mémoire doit contenir les deux widgets Eschaton" {
   fake_dms="$BATS_TEST_TMPDIR/dms-settings"
   cat > "$fake_dms" <<'EOF'

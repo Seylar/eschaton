@@ -30,6 +30,12 @@ hl.config({
 	},
 })
 
+-- Surface système omniprésente : le daemon DMS expose toggle() et reste le
+-- seul point d'entrée. Aucun terminal ni agent CLI intermédiaire.
+hl.bind("SUPER + A", hl.dsp.exec_cmd("dms ipc call plugins toggle eschatonAssistant"), {
+	description = "Assistant Eschaton",
+})
+
 -- Les surfaces layer-shell de DMS (fond d'écran, barre, popouts) ne doivent pas
 -- être animées : elles ne sont pas des fenêtres, et l'animation d'entrée les
 -- fait clignoter à chaque rechargement de configuration.

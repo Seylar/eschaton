@@ -38,6 +38,13 @@ Veille risque 12 : aucun plugin IA DMS n'a jamais été installé ; risque 7 : c
 
 ### Task 3 : UI sidebar + paquet `eschaton-dms-plugin-assistant`
 
+**Exécutée le 2026-08-28.** Sidebar, paquet, keybind et détection du shadowing :
+`packages/eschaton-dms-plugin-assistant/` et `packages/eschaton-desktop-config/` ;
+preuve de chargement dans le vrai DMS et contrôles de paquet :
+`tools/vm-dev.md` §21. Le contrôle du shadowing vit volontairement dans
+`eschaton-desktop-config` : un plugin système déjà masqué ne peut pas détecter
+son propre remplacement.
+
 1. UI : DankSlideout plein écran (`Variants{Quickshell.screens}`), fil de conversation (rendu des deltas), saisie, sélecteur de fournisseur, indicateur outil-en-cours, états vides/erreur lisibles. Motifs first-party DMS (mêmes imports que les plugins update/rollback).
 2. `plugin.json` (`type:"daemon"`, permissions déclarées par honnêteté avec le commentaire « non appliquées par DMS — voir spec §5 »), contrôle de shadowing au démarrage (spec §5.4).
 3. PKGBUILD motif Socle (depends : `dms-shell curl libsecret jq pacman-contrib` ; optdepends `ramalama`) ; keybind `SUPER+A` via bump d'`eschaton-desktop-config` (canal d'accroche établi) ; bump d'`eschaton-desktop` (+ dépendance).

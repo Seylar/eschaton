@@ -1,0 +1,16 @@
+{
+  "id": "eschatonAssistant",
+  "name": "Eschaton — Assistant",
+  "description": "Assistant système à fournisseurs interchangeables et catalogue d'outils fermé.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "author": "Eschaton",
+  "type": "daemon",
+  "capabilities": ["slideout", "ai", "system-tools"],
+  "component": "./EschatonAssistantDaemon.qml",
+  "settings": "./EschatonAssistantSettings.qml",
+  "icon": "auto_awesome",
+  "permissions": ["process", "settings_read", "settings_write"],
+  "_permissions_notice": "Métadonnées non appliquées par DMS ; elles ne constituent pas une frontière de sécurité (spec Assistant §5).",
+  "requires_dms": ">=1.5.0"
+}

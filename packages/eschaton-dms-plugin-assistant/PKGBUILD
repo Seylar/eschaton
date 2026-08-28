@@ -1,0 +1,27 @@
+pkgname=eschaton-dms-plugin-assistant
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Plugin DMS Eschaton : assistant système à catalogue d'outils fermé"
+arch=(any)
+license=(MIT)
+depends=(dms-shell curl libsecret jq pacman-contrib)
+optdepends=('ramalama: fournisseur local OpenAI-compatible')
+# Les harnais et fixtures restent dans les sources de test du dépôt, jamais dans
+# le paquet livré. Le catalogue, lui, est une donnée runtime versionnée.
+source=(plugin.json EschatonAssistantDaemon.qml EschatonAssistantPanel.qml
+        EschatonAssistantSettings.qml AssistantCore.qml tool-catalog.json
+        OpenAIAdapter.js LICENSE)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+
+package() {
+  local plugin_dir="$pkgdir/etc/xdg/quickshell/dms-plugins/eschatonAssistant"
+  install -Dm644 plugin.json "$plugin_dir/plugin.json"
+  install -Dm644 EschatonAssistantDaemon.qml "$plugin_dir/EschatonAssistantDaemon.qml"
+  install -Dm644 EschatonAssistantPanel.qml "$plugin_dir/EschatonAssistantPanel.qml"
+  install -Dm644 EschatonAssistantSettings.qml "$plugin_dir/EschatonAssistantSettings.qml"
+  install -Dm644 AssistantCore.qml "$plugin_dir/AssistantCore.qml"
+  install -Dm644 tool-catalog.json "$plugin_dir/tool-catalog.json"
+  install -Dm644 OpenAIAdapter.js "$plugin_dir/providers/OpenAIAdapter.js"
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
