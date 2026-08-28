@@ -155,6 +155,25 @@ ShellRoot {
                     && anthropicToolBody.messages[2].content[0].tool_use_id === "toolu_rollback_42",
                   "historique tool_result Anthropic incorrect");
 
+            const largeRequest = OpenAIAdapter.buildRequest({
+                baseUrl: "http://127.0.0.1:18080/v1",
+                model: "transport-test",
+                maxTokens: 4,
+                hasApiKey: false
+            }, [{ role: "user", content: "x".repeat(140000) }], []);
+            const largeCommand = OpenAIAdapter.buildCurlCommand(largeRequest, 5);
+            check(largeRequest.body.length > 131072, "fixture transport trop petite");
+            check(largeCommand.indexOf(largeRequest.body) < 0,
+                  "body OpenAI encore présent dans argv");
+            check(largeCommand.indexOf("@-") >= 0,
+                  "transport OpenAI stdin absent");
+
+            const anthropicCommand = AnthropicAdapter.buildCurlCommand(anthropicRequest, 5);
+            check(anthropicCommand.indexOf(anthropicRequest.body) < 0,
+                  "body Anthropic encore présent dans argv");
+            check(anthropicCommand.indexOf("@-") >= 0,
+                  "transport Anthropic stdin absent");
+
             check(ProviderPolicy.isLocalEndpoint("http://localhost:8080/v1"),
                   "localhost refusé");
             check(ProviderPolicy.isLocalEndpoint("http://127.42.0.1:8080/v1"),

@@ -57,6 +57,31 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
+@test "les bodies fournisseur passent par stdin et le contrat outil conserve callId" {
+  run grep -F '"--data-binary", "@-"' \
+    "$assistant_dir/providers/OpenAIAdapter.js" \
+    "$assistant_dir/providers/AnthropicAdapter.js"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OpenAIAdapter.js"* ]]
+  [[ "$output" == *"AnthropicAdapter.js"* ]]
+
+  run grep -F 'signal toolCall(string callId, string name, string argsJson)' \
+    "$assistant_dir/AssistantCore.qml"
+  [ "$status" -eq 0 ]
+  run grep -F 'toolCall(entry.id, entry.name, entry.arguments)' \
+    "$assistant_dir/AssistantCore.qml"
+  [ "$status" -eq 0 ]
+}
+
+@test "un index OpenAI absent est résolu sans fallback positionnel silencieux" {
+  run grep -F 'index: call.index === undefined ? null : Number(call.index)' \
+    "$assistant_dir/providers/OpenAIAdapter.js"
+  [ "$status" -eq 0 ]
+  run grep -F "a omis l'index d'un fragment d'outil ambigu" \
+    "$assistant_dir/AssistantCore.qml"
+  [ "$status" -eq 0 ]
+}
+
 @test "les fournisseurs par défaut sont une configuration datée sans secret" {
   run jq -e '
     .schema_version == 1 and .updated == "2026-08-28" and
@@ -150,6 +175,8 @@ setup() {
     [[ ${optdepends[*]} == ramalama:* ]]
     [[ " ${source[*]} " != *" CoreHarness.qml "* ]]
     [[ " ${source[*]} " != *" ParserHarness.qml "* ]]
+    [[ " ${source[*]} " != *" TransportHarness.qml "* ]]
+    [[ " ${source[*]} " != *" mock-openai-server.py "* ]]
     [[ " ${source[*]} " != *" tests/fixtures "* ]]
     [[ " ${source[*]} " == *" providers.json "* ]]
     [[ " ${source[*]} " == *" AnthropicAdapter.js "* ]]

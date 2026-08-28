@@ -74,7 +74,7 @@ Item {
             Qt.callLater(function() { messageList.positionViewAtEnd(); });
         }
 
-        function onToolCall(name) {
+        function onToolCall(callId, name) {
             root.activeToolName = name;
         }
 

@@ -67,7 +67,9 @@ function buildCurlCommand(request, timeoutSeconds) {
         "--max-time", String(timeout),
         "--write-out", "\nESCHATON_HTTP_STATUS:%{http_code}\n"
     ].concat(requestData.curlArguments || []).concat([
-        "--data-binary", requestData.body || "{}",
+        // Le JSON peut dépasser Linux MAX_ARG_STRLEN (131072 octets). Le core
+        // l'écrit donc sur stdin après le démarrage de curl.
+        "--data-binary", "@-",
         requestData.url || ""
     ]);
 }
@@ -125,7 +127,10 @@ function parseEvent(payload) {
         const fn = call.function || {};
         events.push({
             kind: "tool_delta",
-            index: Number(call.index === undefined ? i : call.index),
+            // Ne pas inventer `i` : dans des chunks séparés il repart à zéro
+            // et peut fusionner deux appels. Le core résout l'absence par id,
+            // ou refuse si plusieurs appels la rendent ambiguë.
+            index: call.index === undefined ? null : Number(call.index),
             id: String(call.id || ""),
             name: String(fn.name || ""),
             arguments: String(fn.arguments || "")

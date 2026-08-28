@@ -3332,3 +3332,35 @@ Le journal porte `Daemon plugin loaded: eschatonAssistant` sans erreur QML,
 `ReferenceError`, `TypeError` ou erreur de binding. L'activation automatique au
 boot frais et les conversations fournisseur réelles restent volontairement les
 preuves de la Task 6.
+
+### 22.4 Correctifs d'ouverture de la Task 5
+
+La revue de vague a trouvé un défaut de transport bloquant : le JSON complet
+était placé dans l'argv de curl. Linux limite un argument individuel à 131 072
+octets (`MAX_ARG_STRLEN`), donc une conversation suffisamment longue échouait
+avant même le démarrage de curl avec `E2BIG`. Les deux adaptateurs utilisent
+désormais `--data-binary @-` et le core écrit le body sur stdin ; aucun body ni
+secret ne se retrouve dans argv.
+
+Un serveur OpenAI SSE local et déterministe a mesuré le body réellement reçu,
+pas seulement la commande construite. Le harnais QML a envoyé un message de
+140 000 caractères et exercé le vrai `Process`, curl et stdin :
+
+```text
+ASSISTANT_TRANSPORT_HARNESS_OK body_chars=140000 response=stdin-ok
+ASSISTANT_MOCK_BODY_BYTES=141416
+```
+
+Le contrat outil est maintenant symétrique : `toolCall(callId, name,
+argsJson)` répond à `toolResult(callId, resultJson)`. Quand un delta OpenAI
+omet `index`, le core le rattache à un `call_id` connu ou au fragment unique ;
+il refuse explicitement un fragment sans `index` ni `call_id` dès que plusieurs
+appels sont possibles. Le même harnais prouve la recomposition d'un nom et de
+ses arguments sur deux chunks sans index, puis le refus du cas ambigu.
+
+Les 54 tests Bats passent. Le paquet `eschaton-dms-plugin-assistant 0.1.0-3`
+n'embarque ni harnais ni faux serveur. Après installation dans la VM (snapshots
+65 et 66) et redémarrage du service, `dms ipc call plugins status
+eschatonAssistant` répond `loaded`; le journal du nouveau processus porte
+`Daemon plugin loaded: eschatonAssistant` sans erreur QML, `ReferenceError`,
+`TypeError` ni erreur de binding.

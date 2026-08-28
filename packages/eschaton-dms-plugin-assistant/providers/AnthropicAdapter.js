@@ -145,7 +145,9 @@ function buildCurlCommand(request, timeoutSeconds) {
         "--max-time", String(timeout),
         "--write-out", "\nESCHATON_HTTP_STATUS:%{http_code}\n"
     ].concat(requestData.curlArguments || []).concat([
-        "--data-binary", requestData.body || "{}",
+        // Même transport stdin que l'adaptateur OpenAI : aucun body JSON dans
+        // argv, quelle que soit sa taille.
+        "--data-binary", "@-",
         requestData.url || ""
     ]);
 }

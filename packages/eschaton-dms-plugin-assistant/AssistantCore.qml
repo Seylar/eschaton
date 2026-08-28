@@ -63,9 +63,10 @@ Item {
     property bool _requestActive: false
     property string _fatalError: ""
     property int _toolPayloadChars: 0
+    property string _requestBody: ""
 
     signal delta(string chunk)
-    signal toolCall(string name, string argsJson)
+    signal toolCall(string callId, string name, string argsJson)
     signal done(string status)
 
     Component.onCompleted: {
@@ -152,6 +153,9 @@ Item {
         _assistantText = "";
         _pendingDelta = "";
         _streamBuffer = "";
+        _requestBody = "";
+        streamProcess.stdinEnabled = false;
+        streamProcess.environment = ({});
     }
 
     // Résultat d'un exécuteur connu. En Task 2 seuls les stubs appellent cette
@@ -247,6 +251,8 @@ Item {
         streamProcess.environment = ({
             ESCHATON_ASSISTANT_API_KEY: apiKey ? apiKey : null
         });
+        _requestBody = request.body || "{}";
+        streamProcess.stdinEnabled = true;
         _requestActive = true;
         isStreaming = true;
         streamProcess.running = true;
@@ -392,11 +398,12 @@ Item {
     }
 
     function mergeToolDelta(event) {
-        const index = Number(event.index === undefined ? 0 : event.index);
-        if (!isFinite(index) || index < 0 || Math.floor(index) !== index) {
-            abortRequest("Le fournisseur a envoyé un index d'outil invalide.");
+        const resolvedIndex = resolveToolIndex(event);
+        if (!resolvedIndex.ok) {
+            abortRequest(resolvedIndex.error);
             return;
         }
+        const index = resolvedIndex.index;
         const key = String(index);
         if (!_toolFragments[key]
                 && Object.keys(_toolFragments).length >= maxToolCallsPerRound) {
@@ -425,6 +432,42 @@ Item {
         _toolPayloadChars += addedChars;
     }
 
+    function resolveToolIndex(event) {
+        const raw = event ? event.index : undefined;
+        if (raw !== undefined && raw !== null && raw !== "") {
+            const explicit = Number(raw);
+            if (!isFinite(explicit) || explicit < 0 || Math.floor(explicit) !== explicit) {
+                return { ok: false, error: "Le fournisseur a envoyé un index d'outil invalide." };
+            }
+            return { ok: true, index: explicit };
+        }
+
+        const keys = Object.keys(_toolFragments).sort(function(a, b) {
+            return Number(a) - Number(b);
+        });
+        const eventId = String(event && event.id || "");
+        if (eventId) {
+            for (let i = 0; i < keys.length; i++) {
+                const fragment = _toolFragments[keys[i]];
+                if (fragment && fragment.id === eventId)
+                    return { ok: true, index: Number(keys[i]) };
+            }
+            for (let candidate = 0; candidate < maxToolCallsPerRound; candidate++) {
+                if (!_toolFragments[String(candidate)])
+                    return { ok: true, index: candidate };
+            }
+            return { ok: false, error: "Le fournisseur dépasse la limite d'appels d'outils." };
+        }
+        if (keys.length === 0)
+            return { ok: true, index: 0 };
+        if (keys.length === 1)
+            return { ok: true, index: Number(keys[0]) };
+        return {
+            ok: false,
+            error: "Le fournisseur a omis l'index d'un fragment d'outil ambigu."
+        };
+    }
+
     function appendStderr(line) {
         if (_stderrText.length >= 4096)
             return;
@@ -444,6 +487,8 @@ Item {
             return;
         _requestActive = false;
         isStreaming = false;
+        _requestBody = "";
+        streamProcess.stdinEnabled = false;
         // La clé reste nécessaire en mémoire pour un éventuel tour d'outil,
         // mais elle n'a aucune raison de rester dans l'objet Process arrêté.
         streamProcess.environment = ({});
@@ -545,7 +590,7 @@ Item {
                 });
                 continue;
             }
-            toolCall(entry.name, entry.arguments);
+            toolCall(entry.id, entry.name, entry.arguments);
             if (stubTools) {
                 Qt.callLater(function() {
                     root.resolveStub(entry.id);
@@ -649,6 +694,16 @@ Item {
     Process {
         id: streamProcess
         running: false
+        stdinEnabled: false
+
+        onStarted: {
+            // write() passe par QProcess, pas execve : un historique supérieur
+            // à MAX_ARG_STRLEN reste transportable. Fermer ensuite stdin est
+            // requis pour que curl termine la lecture de @-.
+            write(root._requestBody);
+            root._requestBody = "";
+            stdinEnabled = false;
+        }
 
         stdout: SplitParser {
             // Un marqueur vide rend les chunks bruts sans conserver stdout.

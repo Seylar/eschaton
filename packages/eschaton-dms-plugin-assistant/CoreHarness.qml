@@ -14,12 +14,12 @@ ShellRoot {
         );
         if (!known.ok || unknown.ok || invalidRollback.ok) {
             console.error("ASSISTANT_CORE_HARNESS_FAIL catalogue fermé invalide");
-            Qt.callLater(function() { Qt.quit(); });
+            Qt.callLater(function() { Qt.exit(1); });
             return;
         }
         if (!core.send("Réponds en une phrase courte sur Eschaton.")) {
             console.error("ASSISTANT_CORE_HARNESS_FAIL send a refusé la requête");
-            Qt.callLater(function() { Qt.quit(); });
+            Qt.callLater(function() { Qt.exit(1); });
         }
     }
 
@@ -45,6 +45,8 @@ ShellRoot {
                               + " lines=" + streamLineCount
                               + " parseErrors=" + parseErrorCount
                               + " error=" + lastError);
+                Qt.callLater(function() { Qt.exit(1); });
+                return;
             }
             Qt.callLater(function() { Qt.quit(); });
         }
@@ -58,7 +60,7 @@ ShellRoot {
             if (!root.finished)
                 console.error("ASSISTANT_CORE_HARNESS_FAIL timeout");
             core.cancel();
-            Qt.callLater(function() { Qt.quit(); });
+            Qt.callLater(function() { Qt.exit(1); });
         }
     }
 }
