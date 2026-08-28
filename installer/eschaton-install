@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+# Installeur Eschaton — spec docs/superpowers/specs/2026-08-27-socle-design.md §4.
+# S'exécute depuis un environnement live Arch (archboot aarch64 / ISO officielle x86_64).
+set -euo pipefail
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=lib.sh
+source "$(dirname "$0")/lib.sh"
+
+DRY_RUN=0; DISK=""; HOSTNAME_="eschaton"; USERNAME=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1 ;;
+    --disk) DISK="$2"; shift ;;
+    --hostname) HOSTNAME_="$2"; shift ;;
+    --user) USERNAME="$2"; shift ;;
+    *) echo "option inconnue : $1" >&2; exit 1 ;;
+  esac; shift
+done
+export DRY_RUN
+[[ -n "$DISK" && -n "$USERNAME" ]] || { echo "usage: eschaton-install [--dry-run] --disk /dev/X --user NOM [--hostname H]" >&2; exit 1; }
+
+# Précondition spec §4.2 : boot UEFI uniquement
+if [[ "$DRY_RUN" == "0" && ! -d /sys/firmware/efi ]]; then
+  echo "eschaton-install : boot UEFI requis (dossier /sys/firmware/efi absent)." >&2; exit 1
+fi
+
+arch="$(detect_arch)"
+kernels="$(kernel_pkgs_for "$arch")"
+keyrings="$(keyring_pkgs_for "$arch")"
+if [[ "$arch" == "x86_64" && "$DRY_RUN" == "0" ]]; then
+  kernels="linux $(microcode_for_cpu)"
+fi
+
+# 1. Partitionnement (spec §4.3) — ESP 4 Gio + btrfs sur le reste
+# 4 Gio et pas 2 : limine-snapper-sync cesse d'ajouter des entrées de snapshot
+# au-delà de LIMIT_USAGE_PERCENT (85 % par défaut) de l'ESP, et chaque snapshot
+# amarré au menu y stocke son kernel et son initramfs. Trop petit = filet de
+# sécurité qui s'arrête en silence.
+run_cmd sgdisk --zap-all "$DISK"
+run_cmd sgdisk -n1:0:+4G -t1:ef00 -c1:ESP "$DISK"
+run_cmd sgdisk -n2:0:0 -t2:8300 -c2:eschaton "$DISK"
+part() { [[ "$DISK" == *[0-9] ]] && echo "${DISK}p$1" || echo "${DISK}$1"; }
+run_cmd mkfs.vfat -F32 -n ESP "$(part 1)"
+run_cmd mkfs.btrfs -f -L eschaton "$(part 2)"
+
+# 2. Subvolumes
+run_cmd mount "$(part 2)" /mnt
+for sv in @ @home @log @pkg @snapshots; do run_cmd btrfs subvolume create "/mnt/$sv"; done
+run_cmd umount /mnt
+opts="compress=zstd:1,noatime"
+run_cmd mount -o "subvol=@,$opts" "$(part 2)" /mnt
+run_cmd mkdir -p /mnt/home /mnt/var/log /mnt/var/cache/pacman/pkg /mnt/.snapshots /mnt/boot
+run_cmd mount -o "subvol=@home,$opts" "$(part 2)" /mnt/home
+run_cmd mount -o "subvol=@log,$opts" "$(part 2)" /mnt/var/log
+run_cmd mount -o "subvol=@pkg,$opts" "$(part 2)" /mnt/var/cache/pacman/pkg
+run_cmd mount -o "subvol=@snapshots,$opts" "$(part 2)" /mnt/.snapshots
+run_cmd mount "$(part 1)" /mnt/boot
+
+# 3. Dépôt [eschaton] dans le live env, puis pacstrap
+run_cmd bash -c 'grep -q "^\[eschaton\]" /etc/pacman.conf || printf "\n[eschaton]\nSigLevel = Optional TrustAll\nInclude = /etc/pacman.d/eschaton-mirror\n" >> /etc/pacman.conf'
+# Le `\$` est indispensable : `$arch` doit atterrir LITTÉRALEMENT dans le
+# fichier, c'est pacman qui le substitue (dépôt publié par architecture,
+# spec §5.3). Sans l'échappement, le `bash -c` l'expanserait ici — et en vide,
+# puisque la variable `arch` de ce script n'est pas exportée.
+# shellcheck disable=SC2016  # non-expansion voulue : voir ci-dessus
+run_cmd bash -c 'echo "Server = https://seylar.github.io/eschaton/\$arch" > /etc/pacman.d/eschaton-mirror'
+# shellcheck disable=SC2086
+run_cmd pacstrap -K /mnt base $kernels $keyrings eschaton-base eschaton-branding
+run_cmd bash -c 'genfstab -U /mnt >> /mnt/etc/fstab'
+
+# 4. Configuration dans le chroot (spec §4.2 étape 5 + provisioning autorisé)
+chroot_cmd() { run_cmd arch-chroot /mnt bash -c "$1"; }
+# Signer localement les clés des trousseaux installés à l'étape 3. Le `-K` de
+# pacstrap amorce bien un trousseau, mais avec les trousseaux de
+# l'ENVIRONNEMENT LIVE ; les clés apportées par le paquet trousseau de la cible
+# n'y sont pas encore. Sans ce `--populate`, la clé ALARM se retrouve dans le
+# trousseau sans autre signature que la sienne — donc non fiable (constat
+# Task 9). Idempotent : `--init` ne recrée pas une clé maîtresse existante.
+chroot_cmd 'pacman-key --init && pacman-key --populate'
+chroot_cmd 'ln -sf /usr/share/zoneinfo/Europe/Paris /etc/localtime && hwclock --systohc || true'
+chroot_cmd 'sed -i "s/^#fr_FR.UTF-8/fr_FR.UTF-8/; s/^#en_US.UTF-8/en_US.UTF-8/" /etc/locale.gen && locale-gen'
+chroot_cmd 'echo LANG=fr_FR.UTF-8 > /etc/locale.conf && echo KEYMAP=fr > /etc/vconsole.conf'
+run_cmd bash -c "echo '$HOSTNAME_' > /mnt/etc/hostname"
+# `rm -f` d'abord : /etc/os-release est un LIEN SYMBOLIQUE vers
+# ../usr/lib/os-release (paquet `filesystem`). Sans la suppression, le `cp` suit
+# le lien et écrase /usr/lib/os-release — un fichier que `filesystem` possède et
+# qui ne figure pas dans son `backup=` : la prochaine mise à jour de `filesystem`
+# le restaure en silence et le système redevient « Arch Linux ARM » (constat
+# Task 9). En remplaçant le lien par un vrai fichier, l'identité vit dans /etc,
+# qui prime sur /usr/lib pour tous les consommateurs (os-release(5)).
+chroot_cmd 'rm -f /etc/os-release && cp /usr/share/eschaton/os-release /etc/os-release'
+# Provisioning autorisé (spec §3) : activer le dépôt [eschaton] sur le système cible
+chroot_cmd 'grep -q "eschaton.conf" /etc/pacman.conf || printf "\nInclude = /etc/pacman.d/eschaton.conf\n" >> /etc/pacman.conf'
+chroot_cmd 'sed -i "s/^SNAPPER_CONFIGS=.*/SNAPPER_CONFIGS=\"root\"/" /etc/conf.d/snapper'
+chroot_cmd "useradd -m -G wheel $USERNAME"
+if [[ "$DRY_RUN" == "0" ]]; then arch-chroot /mnt passwd "$USERNAME"; else echo "DRY: passwd $USERNAME"; fi
+chroot_cmd 'systemctl preset-all'
+
+# 5. Limine (UEFI, chemin de boot par défaut)
+# Les noms des fichiers posés dans /boot ne se déduisent PAS du nom du paquet
+# kernel. Constaté paquet par paquet (Task 7, step 6) :
+#   x86_64  — Arch `linux` ne livre que usr/lib/modules/<kver>/vmlinuz ; c'est le
+#     hook mkinitcpio (90-mkinitcpio-install.hook, modèle hook.preset) qui pose
+#     /boot/vmlinuz-linux et /boot/initramfs-linux.img.
+#   aarch64 — ALARM `linux-aarch64` livre directement /boot/Image (aucun
+#     vmlinuz-*, aucun usr/lib/modules/<kver>/vmlinuz) et son preset écrit
+#     /boot/initramfs-linux.img — pas initramfs-linux-aarch64.img.
+kernel_name="${kernels%% *}"
+if [[ "$arch" == "aarch64" ]]; then
+  efi=BOOTAA64.EFI; kernel_file="Image";                initramfs_file="initramfs-linux.img"
+else
+  efi=BOOTX64.EFI;  kernel_file="vmlinuz-$kernel_name"; initramfs_file="initramfs-$kernel_name.img"
+fi
+chroot_cmd "mkdir -p /boot/EFI/BOOT && cp /usr/share/limine/$efi /boot/EFI/BOOT/$efi"
+# STRUCTURE IMBRIQUÉE — exigée par limine-snapper-sync, donc par le filet de
+# sécurité tout entier (spec §6). Le nombre de `/` donne le niveau :
+#
+#   /Eschaton          ← l'entrée « OS », celle que TARGET_OS_NAME désigne
+#       //<kernel>     ← au moins UNE sous-entrée de kernel : obligatoire
+#       //Snapshots    ← l'ancre où l'outil écrit les entrées de snapshot
+#
+# Une entrée PLATE (les clés du kernel directement sous `/Eschaton`) est
+# acceptée par Limine et démarre parfaitement — mais limine-snapper-sync la
+# refuse avec « Your OS entry has no kernel in /boot/limine.conf » et n'écrit
+# JAMAIS la moindre entrée de snapshot (constat Task 9). Le système démarre, le
+# filet de sécurité est absent, et rien ne le signale : exactement la panne
+# muette contre laquelle la spec §6 existe.
+#
+# `//Snapshots` est facultatif pour l'outil (à défaut il écrit dans l'entrée OS)
+# mais on le pose explicitement : l'ancre rend visible, dans le fichier même,
+# l'endroit où le filet s'accroche.
+#
+# À noter : sur aarch64 rien ne régénère ce fichier — `limine-update`
+# (limine-entry-tool) s'arrête sur « The system is not x86_64 ». Les chemins
+# ci-dessous sont donc définitifs, ce qui est sans risque : le paquet
+# linux-aarch64 d'ALARM réécrit toujours /boot/Image et /boot/initramfs-linux.img
+# sous les mêmes noms.
+#
+# `default_entry` est la contrepartie OBLIGATOIRE de l'imbrication : une entrée
+# de premier niveau qui contient des sous-entrées n'est plus amorçable, c'est un
+# sous-menu. À l'expiration du `timeout`, Limine n'a alors rien à démarrer et
+# reste sur son menu, indéfiniment — une VM sans clavier ne démarre plus du tout
+# (constat Task 9, au redémarrage qui a suivi le passage à l'imbrication).
+# On désigne la sous-entrée par son CHEMIN (`Eschaton/<kernel>`) et non par son
+# index : limine-snapper-sync insère des entrées de snapshot, donc tout numéro
+# se décalerait au premier snapshot venu.
+run_cmd bash -c "cat > /mnt/boot/limine.conf <<EOF
+timeout: 3
+default_entry: Eschaton/$kernel_name
+
+/Eschaton
+    //$kernel_name
+        protocol: linux
+        path: boot():/$kernel_file
+        module_path: boot():/$initramfs_file
+        cmdline: root=LABEL=eschaton rootflags=subvol=@ rw quiet
+
+    //Snapshots
+EOF"
+
+# 6. Vérification post-install — /boot doit être complet AVANT de dire « terminé ».
+# Motif : limine-mkinitcpio-hook installe un wrapper mkinitcpio dans
+# /usr/local/bin qui ne propage pas les codes de retour (constat Task 6) ; un
+# initramfs non généré pendant pacstrap passerait sinon totalement inaperçu, et
+# l'installeur annoncerait un succès sur un système qui ne démarre pas.
+verify_path() { # $1 = motif (glob accepté), $2 = ce qu'on attend
+  if [[ "$DRY_RUN" == "1" ]]; then echo "DRY: test -e $1   # $2"; return 0; fi
+  if compgen -G "$1" >/dev/null; then echo "    ok : $2 ($1)"; return 0; fi
+  echo "eschaton-install : $2 introuvable — aucun fichier ne correspond à $1." >&2
+  return 1
+}
+
+echo "==> Vérification de /mnt/boot"
+verify_failed=0
+# On vérifie exactement les fichiers que limine.conf référence : un contrôle plus
+# lâche (vmlinuz-*) passerait au vert sur aarch64 alors que le kernel s'y appelle
+# Image, c'est-à-dire précisément le faux succès qu'on veut interdire.
+verify_path "/mnt/boot/$kernel_file"       "le kernel"                  || verify_failed=1
+verify_path "/mnt/boot/$initramfs_file"    "l'initramfs"                || verify_failed=1
+verify_path "/mnt/boot/EFI/BOOT/$efi"      "le binaire EFI de Limine"   || verify_failed=1
+verify_path "/mnt/boot/limine.conf"        "la configuration de Limine" || verify_failed=1
+if [[ "$verify_failed" != "0" ]]; then
+  echo "eschaton-install : /boot est INCOMPLET — le système ne démarrerait pas." >&2
+  echo "Ne redémarre pas : corrige les manques ci-dessus (chroot : arch-chroot /mnt)," >&2
+  echo "puis relance la génération concernée (mkinitcpio -P, réinstallation du kernel...)." >&2
+  exit 1
+fi
+
+echo "==> Installation terminée. Redémarre (umount -R /mnt && reboot)."

@@ -1,0 +1,107 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Permissions minimales par défaut ; seul le job de publication est élevé.
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck bats
+      - name: shellcheck
+        run: |
+          shellcheck \
+            tools/sandbox tools/build-pkg tools/provision-gradle \
+            repo/build-repo \
+            installer/lib.sh installer/eschaton-install \
+            packages/eschaton-base/lib.sh \
+            packages/eschaton-base/eschaton-update \
+            packages/eschaton-base/eschaton-rollback
+      - name: bats
+        run: bats tests/
+
+  # Un job de build PAR ARCHITECTURE (spec §5.3) : les deux paquets vendorés
+  # sont des binaires natifs compilés par GraalVM, pas des paquets `any`. Chaque
+  # job construit dans un conteneur Arch natif de sa cible et publie son propre
+  # répertoire de dépôt.
+  build-x86_64:
+    needs: lint
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    timeout-minutes: 60
+    steps:
+      # Avant le checkout : sans git dans le conteneur, actions/checkout se
+      # rabat sur un téléchargement d'archive REST. `-Syu` et non `-Sy` pour ne
+      # pas fabriquer une mise à jour partielle ; --disable-sandbox parce que le
+      # bac à sable Landlock de pacman 7 est refusé par le profil seccomp par
+      # défaut de Docker (cf. repo/build-repo).
+      - name: git dans le conteneur
+        run: pacman -Syu --noconfirm --needed --disable-sandbox git
+      - uses: actions/checkout@v7
+      - name: build-repo
+        run: repo/build-repo
+      - uses: actions/upload-artifact@v7
+        with:
+          name: repo-x86_64
+          path: repo/out/x86_64
+          if-no-files-found: error
+
+  build-aarch64:
+    needs: lint
+    runs-on: ubuntu-24.04-arm
+    container: menci/archlinuxarm:base-devel
+    timeout-minutes: 60
+    steps:
+      - name: git dans le conteneur
+        run: pacman -Syu --noconfirm --needed --disable-sandbox git
+      - uses: actions/checkout@v7
+      - name: build-repo
+        run: repo/build-repo
+      - uses: actions/upload-artifact@v7
+        with:
+          name: repo-aarch64
+          path: repo/out/aarch64
+          if-no-files-found: error
+
+  # Assemblage de la racine du site Pages (aarch64/ + x86_64/) puis déploiement.
+  # Le client n'écrit qu'une ligne — `Server = .../eschaton/$arch` — et pacman
+  # choisit le répertoire.
+  publish:
+    needs: [build-x86_64, build-aarch64]
+    # La branche de travail publie aussi : les Tasks 9 et 11 installent depuis
+    # Publication depuis `main` uniquement (bascule post-fusion du Socle).
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    # Un seul déploiement Pages à la fois.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: repo-x86_64
+          path: site/x86_64
+      - uses: actions/download-artifact@v8
+        with:
+          name: repo-aarch64
+          path: site/aarch64
+      - name: Contenu publié
+        run: find site -type f | sort
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v5

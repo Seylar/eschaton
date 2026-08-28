@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# lib.sh n'existe qu'une fois le paquet installé ; shellcheck ne peut pas la
+# suivre depuis le dépôt, où elle vit à packages/eschaton-base/lib.sh.
+# shellcheck source=/dev/null
+source /usr/lib/eschaton/lib.sh
+min_kb=1048576  # 1 Gio de marge avant update
+avail_kb=$(df --output=avail -k / | tail -1 | tr -d ' ')
+if ! check_free_space_kb "$avail_kb" "$min_kb"; then
+  echo "eschaton-update : moins de 1 Gio libre sur /, libère de l'espace d'abord." >&2
+  exit 1
+fi
+echo "==> Mise à jour (Arch + [eschaton]). Snapshot automatique via snap-pac."
+sudo pacman -Syu "$@"
+if running_kernel_missing_modules /usr/lib/modules "$(uname -r)"; then
+  echo "==> Le kernel a été mis à jour : redémarre pour l'utiliser (sudo reboot)."
+fi

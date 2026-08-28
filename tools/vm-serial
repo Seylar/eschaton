@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Pilotage de la VM `eschaton-dev` par sa console série (voir tools/vm-dev.md §5).
+
+Le port série `ptty` de UTM expose un getty de l'invité sur un pty de l'hôte.
+Ouvrir et refermer ce pty à répétition finit par raccrocher la ligne (SIGHUP) et
+la console devient muette : d'où la séparation en deux rôles.
+
+  vm-serial daemon <pty> <workdir>      démon — à lancer UNE fois par session
+  vm-serial run [--timeout N] "<cmd>"   exécute une commande, rend stdout et rc
+  vm-serial send "<texte>"              envoie une ligne telle quelle (+ \\n)
+  vm-serial raw "<hexa>"                envoie des octets bruts (03 = Ctrl-C)
+  vm-serial tail [N]                    N dernières lignes de la console
+  vm-serial wait "<motif>" [timeout]    attend un motif (regex) sur la console
+  vm-serial mark                        pose un repère à l'offset courant
+  vm-serial since [N]                   tout ce qui est arrivé depuis `mark`
+
+Le démon garde le pty ouvert pour toute la session, journalise tout ce qui
+arrive dans <workdir>/console.log et poste sur la ligne les fichiers déposés
+dans <workdir>/inbox/. Les clients sont sans état : ils écrivent dans `inbox/`
+et relisent `console.log`. Le journal cumulatif reste relisible après coup, ce
+qu'aucun `tail` interactif ne permet sur les sorties longues de pacman.
+
+Le workdir est pris dans $VM_SERIAL_WORK, ou dans le répertoire du script.
+
+Deux règles apprises à la dure :
+  - préfixer par `timeout N` toute commande susceptible de bloquer ; une
+    commande bloquée ne rend jamais son marqueur de fin et le pilotage se
+    désynchronise en silence ;
+  - après un redémarrage, la console est sur une invite de connexion et non sur
+    un shell — attendre un motif franc (`eschaton login:`) avant de reprendre.
+"""
+import glob
+import os
+import re
+import select
+import sys
+import termios
+import time
+import uuid
+
+WORK = os.environ.get("VM_SERIAL_WORK") or os.path.dirname(os.path.abspath(__file__))
+LOG = os.path.join(WORK, "console.log")
+INBOX = os.path.join(WORK, "inbox")
+MARK = os.path.join(WORK, ".mark")
+
+# Séquences ANSI : OSC (terminé par BEL ou ST), CSI, jeux de caractères, et le
+# reste des échappements à deux octets.
+ANSI = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][0-9A-B]|\x1b.")
+
+
+def clean(b):
+    return ANSI.sub("", b.decode("utf-8", "replace")).replace("\r", "")
+
+
+def size():
+    try:
+        return os.path.getsize(LOG)
+    except OSError:
+        return 0
+
+
+def read_from(off):
+    with open(LOG, "rb") as f:
+        f.seek(off)
+        return f.read()
+
+
+def put(payload: bytes):
+    """Dépose une charge utile dans inbox/ ; le renommage rend l'écriture atomique."""
+    os.makedirs(INBOX, exist_ok=True)
+    name = os.path.join(INBOX, f"{time.time():.6f}-{uuid.uuid4().hex[:6]}.snd")
+    tmp = name + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(payload)
+    os.rename(tmp, name)
+
+
+def wait_for(pattern, timeout, off=None):
+    """Attend `pattern` (regex) dans le journal à partir de `off` ; rend (ok, texte)."""
+    rx = re.compile(pattern)
+    start = size() if off is None else off
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        txt = clean(read_from(start))
+        if rx.search(txt):
+            return True, txt
+        time.sleep(0.5)
+    return False, clean(read_from(start))
+
+
+def cmd_daemon(argv):
+    dev, work = argv[0], argv[1]
+    inbox = os.path.join(work, "inbox")
+    os.makedirs(inbox, exist_ok=True)
+    log = open(os.path.join(work, "console.log"), "ab", buffering=0)
+
+    fd = os.open(dev, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    attrs = termios.tcgetattr(fd)
+    attrs[0] = attrs[1] = attrs[3] = 0          # ni traitement d'entrée/sortie, ni écho local
+    attrs[6][termios.VMIN] = attrs[6][termios.VTIME] = 0
+    termios.tcsetattr(fd, termios.TCSANOW, attrs)
+
+    log.write(b"\n[vm-serial] attache " + dev.encode() + b" @ "
+              + time.strftime("%H:%M:%S").encode() + b"\n")
+
+    last_scan = 0.0
+    while True:
+        if select.select([fd], [], [], 0.2)[0]:
+            try:
+                data = os.read(fd, 65536)
+            except OSError:
+                time.sleep(0.5)
+                continue
+            if data:
+                log.write(data)
+        now = time.time()
+        if now - last_scan > 0.15:
+            last_scan = now
+            for p in sorted(glob.glob(os.path.join(inbox, "*.snd"))):
+                with open(p, "rb") as f:
+                    payload = f.read()
+                # Par petits morceaux : la ligne série est lente (115200 bauds)
+                # et un envoi massif déborde le tampon du tty de l'invité.
+                for i in range(0, len(payload), 64):
+                    os.write(fd, payload[i:i + 64])
+                    time.sleep(0.02)
+                os.rename(p, p[:-4] + ".sent")
+
+
+def cmd_run(argv):
+    timeout = 180.0
+    while argv and argv[0] == "--timeout":
+        timeout = float(argv[1])
+        argv = argv[2:]
+    command = argv[0]
+    tag = uuid.uuid4().hex[:8]
+    begin, end = f"@B{tag}@", f"@E{tag}@"
+    off = size()
+    put(f"echo {begin}; {command}; echo {end}$?\n".encode())
+    ok, txt = wait_for(re.escape(end) + r"\d+\s*\n", timeout, off)
+    out, cap, rc = [], False, None
+    for ln in txt.split("\n"):
+        # Le tty ré-affiche la ligne tapée : ne capturer qu'après le marqueur de
+        # début SEUL sur sa ligne, sinon l'écho de la commande pollue la sortie.
+        if not cap:
+            cap = ln.strip() == begin
+            continue
+        if ln.startswith(end):
+            rc = ln[len(end):].strip()
+            break
+        out.append(ln)
+    if not ok:
+        print(f"$ {command}\n{txt.strip()}\n[TIMEOUT après {timeout}s — pas de marqueur de fin]")
+        sys.exit(2)
+    print(f"$ {command}\n" + "\n".join(out).strip("\n") + f"\n[rc={rc}]")
+
+
+def main():
+    a = sys.argv[1:]
+    if not a:
+        print(__doc__)
+        return
+    op, rest = a[0], a[1:]
+    if op == "daemon":
+        cmd_daemon(rest)
+    elif op == "run":
+        cmd_run(rest)
+    elif op == "send":
+        put((rest[0] + "\n").encode())
+        print("(envoyé)")
+    elif op == "raw":
+        put(bytes.fromhex(rest[0].replace(" ", "")))
+        print("(envoyé brut)")
+    elif op == "tail":
+        n = int(rest[0]) if rest else 60
+        txt = clean(read_from(max(0, size() - 400000)))
+        print("\n".join(txt.split("\n")[-n:]))
+    elif op == "wait":
+        pat = rest[0]
+        to = float(rest[1]) if len(rest) > 1 else 120
+        ok, txt = wait_for(pat, to)
+        print("\n".join(txt.split("\n")[-40:]))
+        print(f"[{'TROUVÉ' if ok else 'TIMEOUT'} : {pat}]")
+    elif op == "mark":
+        with open(MARK, "w") as f:
+            f.write(str(size()))
+        print(f"(repère à {size()})")
+    elif op == "since":
+        off = int(open(MARK).read()) if os.path.exists(MARK) else 0
+        txt = clean(read_from(off))
+        n = int(rest[0]) if rest else 200
+        print("\n".join(txt.split("\n")[-n:]))
+    else:
+        print(__doc__)
+
+
+main()

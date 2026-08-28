@@ -1,0 +1,51 @@
+pkgname=eschaton-base
+pkgver=0.1.0
+pkgrel=11
+pkgdesc="Meta-paquet du socle Eschaton : dépendances système et configuration par défaut"
+arch=(any)
+license=(MIT)
+depends=(
+  base networkmanager btrfs-progs snapper snap-pac
+  limine limine-snapper-sync limine-mkinitcpio-hook
+  # inotify-tools n'est qu'un optdepend de limine-snapper-sync ; pour Eschaton
+  # il est requis. Sans `inotifywait`, limine-snapper-watcher journalise
+  # « inotifywait is not installed. Falling back to Snapper plugin
+  # integration. » et s'arrête aussitôt (rc=0, aucune unité en échec) : le
+  # service reste `enabled` mais `inactive`, et la création d'un snapshot
+  # n'actualise plus limine.conf (constat Task 9). Le filet de la spec §6
+  # cesserait sans le moindre message d'erreur.
+  inotify-tools
+  zram-generator openssh sudo git vim htop man-db
+  eschaton-branding
+)
+backup=(etc/pacman.d/eschaton.conf etc/snapper/configs/root etc/default/limine)
+# LICENSE est un lien symbolique vers le LICENSE partagé à la racine du dépôt :
+# makepkg réduit toute entrée locale de source=() à son basename, donc un chemin
+# relatif ("../../LICENSE") n'est pas résoluble — cf. get_filename() dans
+# /usr/share/makepkg/util/source.sh. Le lien conserve une licence unique.
+source=(eschaton-repo.conf snapper-root.conf zram-generator.conf 10-wheel.sudoers 50-eschaton.preset LICENSE
+        lib.sh eschaton-update eschaton-rollback limine-default.conf)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+
+package() {
+  install -Dm644 eschaton-repo.conf "$pkgdir/etc/pacman.d/eschaton.conf"
+  install -Dm644 snapper-root.conf "$pkgdir/etc/snapper/configs/root"
+  # /etc/default/limine : surcharge commune à limine-snapper-sync et
+  # limine-entry-tool, possédée par aucun des deux (leurs propres .conf sont
+  # backup= chez eux) — voir le fichier pour l'invariant TARGET_OS_NAME.
+  install -Dm644 limine-default.conf "$pkgdir/etc/default/limine"
+  install -Dm644 zram-generator.conf "$pkgdir/etc/systemd/zram-generator.conf"
+  # /etc/sudoers.d appartient AUSSI au paquet sudo, qui le livre en 750. Le
+  # `install -D` créerait le parent en 755 : eschaton-base revendiquerait alors
+  # un mode qui contredit sudo, pacman avertirait à chaque transaction
+  # (« les permissions pour le répertoire /etc/sudoers.d/ sont différentes ») et
+  # `pacman -Qkk eschaton-base` compterait un fichier « modifié » à perpétuité —
+  # de quoi noyer une vraie altération. Créer le répertoire au bon mode d'abord.
+  install -d -m750 "$pkgdir/etc/sudoers.d"
+  install -m440 10-wheel.sudoers "$pkgdir/etc/sudoers.d/10-wheel"
+  install -Dm644 50-eschaton.preset "$pkgdir/usr/lib/systemd/system-preset/50-eschaton.preset"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 lib.sh "$pkgdir/usr/lib/eschaton/lib.sh"
+  install -Dm755 eschaton-update "$pkgdir/usr/bin/eschaton-update"
+  install -Dm755 eschaton-rollback "$pkgdir/usr/bin/eschaton-rollback"
+}

@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# Construit tous les paquets du monorepo pour l'architecture du conteneur
+# courant, puis produit le dépôt pacman dans repo/out/<arch>/ (paquets + index).
+#
+# À exécuter EN ROOT dans un conteneur Arch jetable :
+#   CI    : archlinux:base-devel (x86_64) / menci/archlinuxarm:base-devel (aarch64)
+#   local : tools/sandbox -c 'repo/build-repo'
+#
+# POURQUOI UN DÉPÔT PAR ARCHITECTURE (spec §5.3)
+# Les deux paquets de packages/vendor/ sont des binaires natifs compilés par
+# GraalVM — arch=(x86_64 aarch64), pas `any`. Un index unique ne peut donc pas
+# servir les deux cibles. Chaque architecture reçoit son répertoire et son
+# propre eschaton.db ; les meta-paquets `arch=(any)`, eux, se retrouvent dans
+# les deux, construits nativement de chaque côté. Côté client une seule ligne
+# suffit — `Server = .../eschaton/$arch` — pacman substituant $arch lui-même.
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+arch="$(uname -m)"
+out="$root/repo/out/$arch"
+
+if ((EUID != 0)); then
+	echo "build-repo : à exécuter en root dans un conteneur de build jetable." >&2
+	exit 1
+fi
+
+# --disable-sandbox : le bac à sable Landlock de pacman 7 exige des appels
+# système que le profil seccomp par défaut de Docker refuse (« Landlock ruleset
+# could not be applied »). Même contournement que tools/build-pkg — le conteneur
+# est jetable, le périmètre s'arrête là.
+# -Syu et non -Sy : une base de paquets synchronisée sans mise à niveau fabrique
+# une mise à jour partielle, cassure classique sur Arch.
+echo "==> Préparation du conteneur de build ($arch)"
+pacman -Syu --noconfirm --needed --disable-sandbox base-devel namcap >/dev/null
+
+# makepkg refuse de tourner en root ; on lui donne un utilisateur non privilégié.
+id builder &>/dev/null || useradd -m builder
+
+# Sortie repartie de zéro : repo/out/ est un artefact dérivé, pas un cache.
+# Sans ça un paquet retiré du dépôt (ou un pkgrel obsolète construit localement)
+# survivrait dans l'index.
+rm -rf "$out"
+mkdir -p "$out"
+chown builder "$out"
+
+# Les arborescences de travail de makepkg vont dans le conteneur, pas dans le
+# dépôt monté : les sources des paquets vendorés pèsent ~350 Mio de GraalVM par
+# architecture, et les écrire à travers le montage lié (virtiofs sous Docker
+# Desktop) est lent — en plus de salir le checkout de l'utilisateur.
+# Ces trois variables sont commentées dans /etc/makepkg.conf : les poser dans
+# l'environnement suffit à les faire prendre.
+build_tmp="/tmp/eschaton-build"
+mkdir -p "$build_tmp/build" "$build_tmp/src"
+chown -R builder "$build_tmp"
+makepkg_env=(
+	env
+	"PKGDEST=$out"
+	"BUILDDIR=$build_tmp/build"
+	"SRCDEST=$build_tmp/src"
+)
+
+shopt -s nullglob
+vendor_ready=0
+built=0
+
+# packages/*/ ramasse aussi packages/vendor/ lui-même : sans PKGBUILD, écarté.
+for d in "$root"/packages/*/ "$root"/packages/vendor/*/; do
+	[[ -f "$d/PKGBUILD" ]] || continue
+	name="$(basename "$d")"
+
+	if [[ "$d" == "$root/packages/vendor/"* ]] && ((!vendor_ready)); then
+		# makedepends=('git' 'gradle') des deux paquets vendorés. `gradle` n'est
+		# installable ni sur ALARM (absent) ni utilement sur Arch (paquet cassé,
+		# cf. tools/provision-gradle et spec §8 risque 6) : on le provisionne
+		# nous-mêmes. `git` sert à récupérer les sources (source=git+https://…).
+		echo "==> Provisionnement des makedepends vendorés (gradle, git)"
+		"$root/tools/provision-gradle"
+		pacman -S --noconfirm --needed --disable-sandbox git >/dev/null
+		vendor_ready=1
+	fi
+
+	echo "==> Construction de $name"
+	chown -R builder "$d"
+	# -d (--nodeps) : aucune des depends() n'est installée dans le conteneur, et
+	# aucune ne l'a besoin d'être pour construire — eschaton-base est un
+	# meta-paquet dont les depends ne sont même pas encore publiées, et les
+	# makedepends des paquets vendorés sont provisionnées ci-dessus.
+	(cd "$d" && sudo -u builder "${makepkg_env[@]}" makepkg -fd --noconfirm)
+	built=$((built + 1))
+done
+
+# Filet contre les deux façons d'arriver à un dépôt incomplet sans que rien
+# n'échoue : un PKGDEST ignoré (makepkg.conf d'une image qui le fixerait), et
+# une boucle qui n'a rien trouvé à construire (arborescence réorganisée). Dans
+# les deux cas repo-add produirait un index valide et vide, que la CI
+# publierait — et un `pacman -Syu` sur une machine Eschaton verrait d'un coup
+# tous les paquets du dépôt disparaître.
+pkgs=("$out"/*.pkg.tar.*)
+if ((built == 0 || ${#pkgs[@]} != built)); then
+	echo "build-repo : $built paquet(s) construit(s), ${#pkgs[@]} dans $out — dépôt incomplet." >&2
+	exit 1
+fi
+
+# namcap est informatif (spec §7.4) : il pilonne les meta-paquets de faux
+# positifs (dépendances « inutilisées », absence de fichiers). À lire, pas à
+# bloquer dessus en v0.
+echo "==> namcap (informatif)"
+namcap "${pkgs[@]}" || true
+
+echo "==> Index du dépôt"
+(cd "$out" && repo-add --new eschaton.db.tar.gz ./*.pkg.tar.*)
+
+# repo-add pose eschaton.db et eschaton.files en liens symboliques vers les
+# .tar.gz. On les remplace par de vraies copies : c'est `eschaton.db` que pacman
+# télécharge, et un lien symbolique n'est pas une chose qu'un hébergeur
+# statique sait servir. (actions/upload-pages-artifact déréférence déjà en
+# archivant, mais on ne veut pas que la consommabilité du dépôt dépende d'un
+# détail d'implémentation d'une action tierce.)
+for ext in db files; do
+	if [[ -L "$out/eschaton.$ext" ]]; then
+		rm -f "$out/eschaton.$ext"
+		cp "$out/eschaton.$ext.tar.gz" "$out/eschaton.$ext"
+	fi
+done
+
+echo "==> Dépôt [eschaton] pour $arch prêt dans $out"
+ls -l "$out"

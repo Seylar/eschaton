@@ -1,0 +1,5 @@
+enable NetworkManager.service
+enable sshd.service
+enable fstrim.timer
+enable limine-snapper-sync.service
+enable snapper-cleanup.timer
