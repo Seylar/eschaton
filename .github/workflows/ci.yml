@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main, socle]
+    branches: [main]
   pull_request:
 
 # Permissions minimales par défaut ; seul le job de publication est élevé.
@@ -76,8 +76,8 @@ jobs:
   publish:
     needs: [build-x86_64, build-aarch64]
     # La branche de travail publie aussi : les Tasks 9 et 11 installent depuis
-    # ce dépôt avant que `socle` ne soit fusionnée dans `main`.
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/socle'
+    # Publication depuis `main` uniquement (bascule post-fusion du Socle).
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -85,7 +85,7 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
-    # Un seul déploiement Pages à la fois : `main` et `socle` visent le même site.
+    # Un seul déploiement Pages à la fois.
     concurrency:
       group: pages
       cancel-in-progress: false

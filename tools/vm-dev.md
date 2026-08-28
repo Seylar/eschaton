@@ -522,8 +522,8 @@ stty cols 200 rows 60                # sinon les lignes longues sont repliées
 pacman -Sy --noconfirm arch-install-scripts gptfdisk btrfs-progs dosfstools
 
 cd /root
-curl -fsSLO https://raw.githubusercontent.com/Seylar/eschaton/socle/installer/eschaton-install
-curl -fsSLO https://raw.githubusercontent.com/Seylar/eschaton/socle/installer/lib.sh
+curl -fsSLO https://raw.githubusercontent.com/Seylar/eschaton/main/installer/eschaton-install
+curl -fsSLO https://raw.githubusercontent.com/Seylar/eschaton/main/installer/lib.sh
 chmod +x eschaton-install
 sha256sum eschaton-install lib.sh    # à comparer au dépôt : raw.githubusercontent met en cache
 
@@ -1373,8 +1373,8 @@ tools/vm-serial send "root"                     # aucun mot de passe sur l'ISO A
 tools/vm-serial run "stty cols 200 rows 60"
 
 # identique au §8.2 à partir d'ici
-tools/vm-serial run "cd /root && curl -fsSLO https://raw.githubusercontent.com/Seylar/eschaton/socle/installer/eschaton-install \
-  && curl -fsSLO https://raw.githubusercontent.com/Seylar/eschaton/socle/installer/lib.sh \
+tools/vm-serial run "cd /root && curl -fsSLO https://raw.githubusercontent.com/Seylar/eschaton/main/installer/eschaton-install \
+  && curl -fsSLO https://raw.githubusercontent.com/Seylar/eschaton/main/installer/lib.sh \
   && chmod +x eschaton-install && sha256sum eschaton-install lib.sh"
 #   à comparer au dépôt : raw.githubusercontent met en cache
 
@@ -1776,7 +1776,7 @@ identiques, dette surveillée si les chemins de mise à jour divergent.
 > paquets, dépôt publié et installable. »*
 
 Le seul critère re-vérifié **en direct** à la clôture. La CI tourne sur `socle`
-(et sur `main`) : tant que la branche n'est pas fusionnée, c'est `socle` qui fait
+(et sur `main`) : tant que la branche n'était pas fusionnée, c'était `socle` qui faisait
 foi.
 
 ```console

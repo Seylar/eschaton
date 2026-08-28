@@ -6,3 +6,4 @@
 packages/**/pkg/
 packages/**/src/
 repo/out/
+__pycache__/
