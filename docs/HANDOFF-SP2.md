@@ -126,3 +126,19 @@ présent ; une seconde lecture 15 s plus tard donne encore le même état. Code 
    relancer la CI de `main`, puis seulement créer/pousser `v0.2.0`.
 5. Si un correctif est demandé : bump obligatoire du `pkgrel` concerné ; le
    dépôt refuse désormais implicitement de remplacer une archive du même nom.
+
+
+## 7. Tâche suivante pour Codex — fix du rendu des pastilles (BLOQUEUR du tag v0.2.0)
+
+*(Section ajoutée par Claude après la re-revue de la vague de fix — le commit précédent l'annonçait par erreur, la voici réellement.)*
+
+**Le constat** (vm-dev §14.4, spec §6.1 ligne 6, confirmé en re-revue sur captures) : au **boot frais**, les deux pastilles Eschaton sont intégralement déclarées actives — IPC `plugins list` → `loaded`, `plugin_settings.json` → `true,true`, `rightWidgets` complet — mais **ne sont pas rendues** dans la DankBar. `systemctl --user restart dms.service` les fait apparaître immédiatement et durablement. `dms ipc call plugins reload <id>` ne répare PAS. La Task 7 n'avait jamais testé le rendu (fichiers+IPC seulement).
+
+**Mission** :
+1. **Diagnostiquer la course** dans la VM (`eschaton-dev`, `tools/vm-serial`) : pourquoi la barre compose-t-elle avant que les plugins système soient visibles au premier démarrage, alors qu'un restart règle tout ? Pistes : ordre `eschaton-dms-provision.service` (Wants/Before de `dms.service`) vs le moment où `PluginService` scanne `/etc/xdg/quickshell/dms-plugins/` ; le chargement tardif de `plugin_settings.json` (mensonge IPC n°2, déjà capturé par `tests/dms-provision.bats`) ; un besoin de re-notification de la barre après enregistrement tardif.
+2. **Corriger dans les paquets** (jamais VM-seulement) — le correctif le plus PETIT qui tient : ordonnancement d'unités, séquence de provisioning, ou signal de recomposition documenté côté DMS s'il existe. Si le défaut est amont (DMS ne recompose pas sur enregistrement tardif d'un plugin système), contournement packagé le plus propre + note upstream consignée.
+3. **Prouver au boot frais** : reboot complet → les 2 pastilles rendues SANS action manuelle (capture, méthode §12.5), **deux boots de suite**. Ajouter l'assertion de rendu à la checklist (vm-dev) pour que le trou de T7 ne se reproduise pas.
+4. pkgrel bump des paquets touchés, push, CI verte, `pacman -Syu` en VM avant preuve. Bats pour toute logique nouvelle.
+5. **Ne pas tagger, ne pas fusionner** — la revue Claude reste le gate du tag.
+
+**Rappels** : la règle polkit supprimée ne se réintroduit pas (auth_admin par la modale DMS, prouvée) ; immutabilité du dépôt (bump systématique, jamais des octets différents sous un même pkgrel) ; jamais `ping` ; correctifs toujours au repo.
