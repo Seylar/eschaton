@@ -7,6 +7,15 @@ on:
     branches: [main, bureau]
   pull_request:
 
+# La sérialisation doit couvrir les BUILDS, pas seulement le déploiement Pages.
+# Sinon deux pushes rapprochés peuvent chacun reconstruire un nouveau pkgrel
+# avant que le premier soit public, puis publier deux archives différentes sous
+# le même nom. Les PR attendent aussi leur tour : ce dépôt privilégie
+# l'immutabilité de ses paquets à quelques minutes de latence CI.
+concurrency:
+  group: eschaton-repository-ci
+  cancel-in-progress: false
+
 # Permissions minimales par défaut ; seul le job de publication est élevé.
 permissions:
   contents: read

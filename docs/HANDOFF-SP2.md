@@ -44,7 +44,9 @@ Preuves de référence :
 - publication Pacman rendue immuable : une archive déjà publiée sous le même
   nom/version est téléchargée, vérifiée et réutilisée octet pour octet. La CI
   précédente republiait des octets différents sous le même pkgrel et cassait les
-  caches clients.
+  caches clients. Les workflows complets sont en plus sérialisés : sérialiser
+  seulement le job Pages laisserait deux builds concurrents produire le même
+  nouveau pkgrel avant sa première publication.
 
 ## 3. Rollback : surface exacte à reviewer
 
