@@ -190,3 +190,16 @@ Le SP4 est découpé (veille + roadmap actée) : **4a Signature** (court, bloqua
 - Spec (autorité, sa séquence §3.3 EST l'architecture) : `docs/superpowers/specs/2026-08-28-signature-design.md`
 - Plan (6 tâches) : `docs/superpowers/plans/2026-08-28-signature.md`
 - ⚠️ Task 1 contient un **point utilisateur obligatoire** (garde de la clé privée : sauvegarde chiffrée + passphrase remises à l'utilisateur AVANT tout secret GitHub) et deux décisions restent **à veto utilisateur** (threat model clé-en-CI, spec §3.1 ; requalification de l'atomique, roadmap Socle §1.2) — les signaler au lancement.
+
+## 11. Checkpoint SP3 T5 — verdict Claude et ouverture des Tasks 6-8
+
+**Verdict : « Yes » — 0 Critical, 0 Important. La Task 5 est saine, feu vert pour T6-T8.** La revue sécurité (`4d0de9e`, rejouée : 58/58 bats, shellcheck 0 sur les 13 scripts, jq OK) confirme : chaîne pkexec en défense en profondeur sur 4 étages (core → exécuteur → relecture Snapper → regex `lib.sh` derrière polkit), catalogue réellement fermé aux deux étages avec refus loggé, intention affichée et cliquée AVANT tout pkexec (assertion harnais `pkexec_before_click=false`), `trigger_update` via le flux existant (et bravo pour la suppression opportuniste du `bash -lc` du widget update — réduction de surface au-delà du périmètre), `system_status` étiqueté `UNTRUSTED_SYSTEM_DATA` et jamais concaténé au prompt système, boucle bornée. Les deux correctifs d'ouverture du §9 sont vérifiés en place (`2578f70`).
+
+**3 Minor à intégrer au fil de l'eau en T6** (adjugés, aucun ne bloque) :
+1. **Borne int32 dans `positiveInteger()`** (`ToolExecutor.qml:157-160`) : la validation accepte jusqu'à 2^53-1 mais `rollbackSnapshotId` est `property int` — un id ≥ 2^32 serait silencieusement replié (~ToInt32) avant la relecture d'existence. Non exploitable (affichage, relecture, clic et argv portent tous la même valeur repliée), mais c'est un aliasing muet sur le chemin le plus privilégié. Correctif : refuser > 2147483647.
+2. **Borne défensive dans `AssistantCore.toolResult`** (`AssistantCore.qml:162-185`) : le core fait confiance au `boundedResult` de l'exécuteur ; tronquer aussi côté core (3 lignes, `maxToolPayloadChars`).
+3. **Timeout statut ⇒ `finishCurrent` forcé** (`ToolExecutor.qml:756-767`) : si un des binaires de `system_status` ne spawn jamais, `finishStatusSource` n'atteint pas 0 et la file reste coincée pour la session ; le `statusTimeout` doit forcer la fin de l'appel courant avec un résultat d'erreur.
+
+**Minors différés au ledger** (post-tag, ne pas traiter) : couverture bats textuelle (greps — la logique n'est exécutée qu'en VM par les harnais, pattern assumé du projet) ; `stubTools: true` par défaut dans le core (le daemon force false — inverser le défaut serait plus sûr pour un futur intégrateur) ; le bouton stop relance un tour de streaming après annulation d'outil (UX, protocolairement cohérent).
+
+Ensuite T6-T8 telles que planifiées. Rappels T6 (conversations réelles) : les clés restent hors argv/logs (motif KeyringBridge), le contenu des messages assistant rendu `Text.PlainText`, et tout constat de terrain qui contredit la spec remonte dans la spec (ADR 0002). Au terme de T8 : notifier pour la revue finale SP3 — le tag v0.3.0 et la fusion restent la cérémonie Claude.
