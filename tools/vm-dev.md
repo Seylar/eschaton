@@ -2230,6 +2230,40 @@ config Lua.
 
 ### 12.9 Ce que le spike n'a pas prouvé
 
+- **Cinq « Quickshell Features » manquent au build `extra` — dont `Polkit`.**
+  C'est l'inconnue la plus lourde léguée à la Task 2. `dms doctor` sur
+  `quickshell 0.3.1-1` (`Quickshell 0.3.1 (revision , distributed by Arch
+  Linux)`) rend :
+
+  ```
+    Quickshell Features
+      ○ Polkit ··············· Not available
+      ○ IdleMonitor ·········· Not available
+      ○ IdleInhibitor ········ Not available
+      ○ ShortcutInhibitor ···· Not available
+      ○ BackgroundBlur ······· Not available
+    …
+    → Consider using quickshell-git for full feature support
+  ```
+
+  Celle qui compte est **`Polkit`** : la spec Bureau §3 fait passer la
+  restauration d'`eschaton-dms-plugin-rollback` « derrière polkit », et le
+  conseil de l'amont — `quickshell-git` — est précisément ce que le risque n° 2
+  interdit (politique « `extra/dms-shell` uniquement, jamais `-git` »). Les deux
+  contraintes se croisent ici, et le spike ne les départage pas.
+
+  **Attention, deux mesures qui ne se contredisent pas** : le *module Quickshell*
+  `Polkit` est absent du build `extra`, alors que le *service DMS* du même nom
+  démarre sans erreur (`INFO qml: [PolkitService:25] Initialized successfully`).
+  Ce sont deux objets distincts. À trancher en Task 2, avant d'écrire le
+  plugin : **lequel des deux un plugin DMS utilise réellement pour élever un
+  privilège**, et si c'est le module Quickshell, quelle surface le remplace
+  (helper dédié, `pkexec`, ou service D-Bus maison — les trois options que la
+  spec §3 laisse ouvertes au risque n° 5). Les quatre autres features absentes
+  ne touchent aucun livrable v1 : `IdleMonitor`/`IdleInhibitor` et
+  `ShortcutInhibitor` relèvent du verrouillage et des raccourcis globaux (non-buts
+  v1, différés SP4), `BackgroundBlur` est cosmétique — et de toute façon
+  indisponible sans GL matériel (§12.2).
 - **Le chemin de session réel.** Le spike démarre le compositeur depuis la
   console série avec `seatd` lancé à la main. Le produit passera par
   `greetd` + auto-login sur une VT, donc par le *seat* de logind : la question
