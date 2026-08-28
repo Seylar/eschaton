@@ -682,6 +682,19 @@ tools/vm-serial run "stty cols 200 rows 60"     # sinon les lignes se replient
 > `-n`, un cache expiré transforme la commande suivante en invite de mot de
 > passe silencieuse et le pilotage se désynchronise.
 
+**Codes de sortie** (durcissement du 2026-08-28, avant que le Bureau n'en
+dépende) : `run` rend **le code de retour de la commande dans la VM**, `wait`
+rend 0 si le motif est vu ; `124` = délai dépassé, `125` = dialogue série cassé
+(marqueur de fin vu, rc illisible), `2` = usage. Une commande qui échoue dans la
+VM fait donc échouer le client — enchaîner sous `set -e` devient sûr.
+
+**Fin de ligne** : quand le pty raccroche (`utmctl stop`, arrêt de la VM), le
+démon le journalise et **s'arrête de lui-même** après `VM_SERIAL_EOF_GRACE`
+secondes (10 par défaut). Avant ce correctif il tournait à **100 % de CPU
+indéfiniment et sans un mot** (mesuré : 4,98 s de CPU en 5 s). Voir le message
+`[vm-serial] EOF confirmé …` dans `console.log` : il faut alors redétecter le
+pty (`utmctl attach`) et relancer le démon.
+
 ### 9.3 Étape 1 — le sabotage
 
 ```console

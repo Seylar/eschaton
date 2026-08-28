@@ -14,6 +14,20 @@ la console devient muette : d'où la séparation en deux rôles.
   vm-serial mark                        pose un repère à l'offset courant
   vm-serial since [N]                   tout ce qui est arrivé depuis `mark`
 
+Codes de sortie — `run` et `wait` sont scriptables :
+
+  0..255   `run` : le code de retour de la commande DANS la VM, tel quel ;
+           `wait` : 0 si le motif est trouvé.
+  124      délai dépassé (convention de timeout(1)) : `run` n'a pas revu son
+           marqueur de fin, ou `wait` n'a pas vu son motif.
+  125      dialogue cassé : marqueur de fin présent mais code de retour
+           illisible. Ne jamais confondre avec un rc distant.
+  2        usage incorrect.
+
+Un `run` qui échoue dans la VM fait donc échouer le client : sous `set -e`,
+enchaîner les commandes devient sûr (avant, tout rendait 0 et une commande
+ratée passait inaperçue).
+
 Le démon garde le pty ouvert pour toute la session, journalise tout ce qui
 arrive dans <workdir>/console.log et poste sur la ligne les fichiers déposés
 dans <workdir>/inbox/. Les clients sont sans état : ils écrivent dans `inbox/`
@@ -42,6 +56,17 @@ WORK = os.environ.get("VM_SERIAL_WORK") or os.path.dirname(os.path.abspath(__fil
 LOG = os.path.join(WORK, "console.log")
 INBOX = os.path.join(WORK, "inbox")
 MARK = os.path.join(WORK, ".mark")
+
+EX_TIMEOUT = 124        # convention de timeout(1)
+EX_PROTOCOL = 125       # marqueur de fin vu, rc illisible
+EX_USAGE = 2
+
+# Combien de temps tolérer une ligne « lisible mais vide » avant de conclure au
+# raccrochage. Le pty est réglé en VMIN=VTIME=0 : une lecture sans donnée rend
+# 0 octet au lieu d'un EAGAIN, donc un EOF isolé n'est pas une preuve. En
+# revanche select() ne signale un tty inerte que s'il est en hangup : une
+# lisibilité continue sans le moindre octet, elle, ne trompe pas.
+EOF_GRACE = float(os.environ.get("VM_SERIAL_EOF_GRACE") or 10.0)
 
 # Séquences ANSI : OSC (terminé par BEL ou ST), CSI, jeux de caractères, et le
 # reste des échappements à deux octets.
@@ -89,6 +114,9 @@ def wait_for(pattern, timeout, off=None):
 
 
 def cmd_daemon(argv):
+    if len(argv) != 2:
+        print("usage: vm-serial daemon <pty> <workdir>", file=sys.stderr)
+        return EX_USAGE
     dev, work = argv[0], argv[1]
     inbox = os.path.join(work, "inbox")
     os.makedirs(inbox, exist_ok=True)
@@ -103,16 +131,37 @@ def cmd_daemon(argv):
     log.write(b"\n[vm-serial] attache " + dev.encode() + b" @ "
               + time.strftime("%H:%M:%S").encode() + b"\n")
 
+    def note(msg):
+        log.write(f"\n[vm-serial] {msg} @ {time.strftime('%H:%M:%S')}\n".encode())
+
     last_scan = 0.0
+    hung_since = None                       # début de la suspicion de raccrochage
     while True:
         if select.select([fd], [], [], 0.2)[0]:
             try:
                 data = os.read(fd, 65536)
-            except OSError:
-                time.sleep(0.5)
-                continue
+            except OSError as exc:          # EIO : le maître du pty a fermé
+                data = b""
+                if hung_since is None:
+                    note(f"lecture impossible sur {dev} ({exc.strerror})")
             if data:
+                hung_since = None
                 log.write(data)
+            else:
+                # « Lisible » mais rien à lire. Sans ce garde, la boucle tourne
+                # à 100 % de CPU, en silence, et pour toujours : c'est ainsi
+                # qu'un `utmctl stop` laissait un démon fantôme derrière lui.
+                now = time.time()
+                if hung_since is None:
+                    hung_since = now
+                    note(f"ligne muette sur {dev} — attente de {EOF_GRACE:g}s")
+                elif now - hung_since >= EOF_GRACE:
+                    note(f"EOF confirmé sur {dev} — démon arrêté. Redétecter le "
+                         "pty (utmctl attach) et relancer le démon.")
+                    log.close()
+                    os.close(fd)
+                    return 0
+                time.sleep(0.2)             # attente passive, pas de boucle chaude
         now = time.time()
         if now - last_scan > 0.15:
             last_scan = now
@@ -121,17 +170,29 @@ def cmd_daemon(argv):
                     payload = f.read()
                 # Par petits morceaux : la ligne série est lente (115200 bauds)
                 # et un envoi massif déborde le tampon du tty de l'invité.
-                for i in range(0, len(payload), 64):
-                    os.write(fd, payload[i:i + 64])
-                    time.sleep(0.02)
+                try:
+                    for i in range(0, len(payload), 64):
+                        os.write(fd, payload[i:i + 64])
+                        time.sleep(0.02)
+                except OSError as exc:      # écrire sur une ligne raccrochée
+                    note(f"écriture impossible sur {dev} ({exc.strerror})")
+                    if hung_since is None:
+                        hung_since = time.time()
+                    break
                 os.rename(p, p[:-4] + ".sent")
 
 
 def cmd_run(argv):
     timeout = 180.0
     while argv and argv[0] == "--timeout":
+        if len(argv) < 2:
+            print("usage: vm-serial run [--timeout N] \"<cmd>\"", file=sys.stderr)
+            return EX_USAGE
         timeout = float(argv[1])
         argv = argv[2:]
+    if not argv:
+        print("usage: vm-serial run [--timeout N] \"<cmd>\"", file=sys.stderr)
+        return EX_USAGE
     command = argv[0]
     tag = uuid.uuid4().hex[:8]
     begin, end = f"@B{tag}@", f"@E{tag}@"
@@ -151,24 +212,37 @@ def cmd_run(argv):
         out.append(ln)
     if not ok:
         print(f"$ {command}\n{txt.strip()}\n[TIMEOUT après {timeout}s — pas de marqueur de fin]")
-        sys.exit(2)
+        return EX_TIMEOUT
     print(f"$ {command}\n" + "\n".join(out).strip("\n") + f"\n[rc={rc}]")
+    # Le code de retour de la VM devient celui du client : une commande qui
+    # échoue là-bas échoue ici. Un rc illisible n'est PAS un rc distant.
+    if rc is None or not rc.isdigit() or not 0 <= int(rc) <= 255:
+        print(f"[rc illisible ({rc!r}) — dialogue série cassé]")
+        return EX_PROTOCOL
+    return int(rc)
 
 
 def main():
+    """Rend le code de sortie du programme (voir la table en tête de fichier)."""
     a = sys.argv[1:]
     if not a:
         print(__doc__)
-        return
+        return EX_USAGE
     op, rest = a[0], a[1:]
     if op == "daemon":
-        cmd_daemon(rest)
-    elif op == "run":
-        cmd_run(rest)
-    elif op == "send":
+        return cmd_daemon(rest)
+    if op == "run":
+        return cmd_run(rest)
+    if op == "send":
+        if not rest:
+            print("usage: vm-serial send \"<texte>\"", file=sys.stderr)
+            return EX_USAGE
         put((rest[0] + "\n").encode())
         print("(envoyé)")
     elif op == "raw":
+        if not rest:
+            print("usage: vm-serial raw \"<hexa>\"", file=sys.stderr)
+            return EX_USAGE
         put(bytes.fromhex(rest[0].replace(" ", "")))
         print("(envoyé brut)")
     elif op == "tail":
@@ -176,11 +250,17 @@ def main():
         txt = clean(read_from(max(0, size() - 400000)))
         print("\n".join(txt.split("\n")[-n:]))
     elif op == "wait":
+        if not rest:
+            print("usage: vm-serial wait \"<motif>\" [timeout]", file=sys.stderr)
+            return EX_USAGE
         pat = rest[0]
         to = float(rest[1]) if len(rest) > 1 else 120
         ok, txt = wait_for(pat, to)
         print("\n".join(txt.split("\n")[-40:]))
         print(f"[{'TROUVÉ' if ok else 'TIMEOUT'} : {pat}]")
+        # Un `wait` qui expire doit stopper le script : sinon l'attente ratée
+        # passe pour une réussite et le pilotage repart désynchronisé.
+        return 0 if ok else EX_TIMEOUT
     elif op == "mark":
         with open(MARK, "w") as f:
             f.write(str(size()))
@@ -192,6 +272,9 @@ def main():
         print("\n".join(txt.split("\n")[-n:]))
     else:
         print(__doc__)
+        return EX_USAGE
+    return 0
 
 
-main()
+if __name__ == "__main__":
+    sys.exit(main())

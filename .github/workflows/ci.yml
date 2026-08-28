@@ -24,6 +24,10 @@ jobs:
             packages/eschaton-base/lib.sh \
             packages/eschaton-base/eschaton-update \
             packages/eschaton-base/eschaton-rollback
+      # `tools/vm-serial` n'a pas d'extension .py et échappe à tout linter de
+      # paquet : au minimum, il doit compiler.
+      - name: py_compile
+        run: python3 -m py_compile tools/vm-serial
       - name: bats
         run: bats tests/
 
