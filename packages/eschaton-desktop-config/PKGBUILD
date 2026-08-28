@@ -1,6 +1,6 @@
 pkgname=eschaton-desktop-config
 pkgver=0.1.0
-pkgrel=3
+pkgrel=4
 pkgdesc="Configuration du bureau Eschaton : session Wayland, greetd, défauts Hyprland"
 arch=(any)
 license=(MIT)
@@ -12,9 +12,9 @@ backup=(etc/eschaton/greetd.toml)
 # /usr/share/makepkg/util/source.sh. Le lien conserve une licence unique.
 source=(eschaton-session eschaton.desktop greetd-eschaton.toml greetd-override.conf
         51-eschaton-desktop.preset 90-eschaton-desktop-preset.hook hyprland-session.target
-        eschaton-dms-provision eschaton-dms-provision.service
+        eschaton-dms-provision eschaton-dms-provision.service eschaton-dms-provision.conf
         seed-hyprland.lua eschaton-defaults.lua LICENSE)
-sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
 
 package() {
   install -Dm755 eschaton-session "$pkgdir/usr/bin/eschaton-session"
@@ -58,8 +58,8 @@ package() {
   install -Dm755 eschaton-dms-provision "$pkgdir/usr/lib/eschaton/eschaton-dms-provision"
   install -Dm644 eschaton-dms-provision.service \
     "$pkgdir/usr/lib/systemd/user/eschaton-dms-provision.service"
-  ln -s ../eschaton-dms-provision.service \
-    "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/eschaton-dms-provision.service"
+  install -Dm644 eschaton-dms-provision.conf \
+    "$pkgdir/usr/lib/systemd/user/dms.service.d/eschaton-dms-provision.conf"
 
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
