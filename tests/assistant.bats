@@ -3,8 +3,10 @@
 setup() {
   assistant_dir="$BATS_TEST_DIRNAME/../packages/eschaton-dms-plugin-assistant"
   desktop_config_dir="$BATS_TEST_DIRNAME/../packages/eschaton-desktop-config"
+  desktop_dir="$BATS_TEST_DIRNAME/../packages/eschaton-desktop"
   catalog="$assistant_dir/tool-catalog.json"
   manifest="$assistant_dir/plugin.json"
+  providers="$assistant_dir/providers.json"
 }
 
 @test "le catalogue assistant contient exactement les trois outils v1" {
@@ -55,6 +57,68 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
+@test "les fournisseurs par défaut sont une configuration datée sans secret" {
+  run jq -e '
+    .schema_version == 1 and .updated == "2026-08-28" and
+    ([.providers[].id] == ["ramalama-local", "openai", "anthropic"]) and
+    ([.providers[].format] == ["openai", "openai", "anthropic"]) and
+    ([.providers[].requires_key] == [false, true, true]) and
+    (all(.providers[];
+      (keys | sort) == ["base_url", "format", "id", "model", "name", "requires_key"]))
+  ' "$providers"
+  [ "$status" -eq 0 ]
+
+  run grep -E 'api[_-]?key|secret|token' "$providers"
+  [ "$status" -eq 1 ]
+}
+
+@test "le trousseau utilise des attributs stables et stdin, jamais argv" {
+  bridge="$assistant_dir/KeyringBridge.qml"
+  run grep -F '"application", "org.eschaton.Assistant"' "$bridge"
+  [ "$status" -eq 0 ]
+  run grep -F '"provider", String(providerId)' "$bridge"
+  [ "$status" -eq 0 ]
+  run grep -F 'write(root._pendingSecret + "\n")' "$bridge"
+  [ "$status" -eq 0 ]
+  run grep -E 'command.*_pendingSecret|command.*apiKeyInput' "$bridge"
+  [ "$status" -eq 1 ]
+  run grep -F 'interval: 60000' "$bridge"
+  [ "$status" -eq 0 ]
+  run grep -F 'Qt.callLater(function()' "$bridge"
+  [ "$status" -eq 0 ]
+}
+
+@test "Secret Service appartient au bureau et le risque autologin est visible" {
+  run bash -c '
+    source "$1/PKGBUILD"
+    [[ " ${depends[*]} " == *" gnome-keyring "* ]]
+  ' _ "$desktop_dir"
+  [ "$status" -eq 0 ]
+
+  run grep -F "les clés seraient stockées en clair sur le disque" \
+    "$assistant_dir/EschatonAssistantSettings.qml"
+  [ "$status" -eq 0 ]
+}
+
+@test "local-only est imposé par le core et la surcharge utilisateur reste en lecture seule" {
+  run grep -F 'ProviderPolicy.validateEndpoint(baseUrl, localOnly)' "$assistant_dir/AssistantCore.qml"
+  [ "$status" -eq 0 ]
+  run grep -F '/eschaton/assistant/providers.json' "$assistant_dir/ProviderCatalog.qml"
+  [ "$status" -eq 0 ]
+  run grep -E 'FileView|write\(|save\(' "$assistant_dir/ProviderCatalog.qml"
+  [ "$status" -eq 1 ]
+}
+
+@test "Anthropic passe sa clé par environnement et traduit les outils natifs" {
+  adapter="$assistant_dir/providers/AnthropicAdapter.js"
+  run grep -F 'x-api-key: {{ESCHATON_ASSISTANT_API_KEY}}' "$adapter"
+  [ "$status" -eq 0 ]
+  run grep -F 'input_schema: fn.parameters' "$adapter"
+  [ "$status" -eq 0 ]
+  run grep -F 'reason === "tool_use" ? "tool_calls"' "$adapter"
+  [ "$status" -eq 0 ]
+}
+
 @test "le transport ignore curlrc et borne les appels d'outils" {
   run grep -F '"--disable"' "$assistant_dir/providers/OpenAIAdapter.js"
   [ "$status" -eq 0 ]
@@ -87,6 +151,8 @@ setup() {
     [[ " ${source[*]} " != *" CoreHarness.qml "* ]]
     [[ " ${source[*]} " != *" ParserHarness.qml "* ]]
     [[ " ${source[*]} " != *" tests/fixtures "* ]]
+    [[ " ${source[*]} " == *" providers.json "* ]]
+    [[ " ${source[*]} " == *" AnthropicAdapter.js "* ]]
   ' _ "$assistant_dir"
   [ "$status" -eq 0 ]
 }

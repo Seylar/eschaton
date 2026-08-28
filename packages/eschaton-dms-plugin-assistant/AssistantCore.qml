@@ -1,6 +1,8 @@
 import QtQuick
 import Quickshell.Io
 import "./providers/OpenAIAdapter.js" as OpenAIAdapter
+import "./providers/AnthropicAdapter.js" as AnthropicAdapter
+import "./providers/ProviderPolicy.js" as ProviderPolicy
 
 // Frontière stable entre l'UI et le transport. Les handlers QML publics sont
 // onDelta, onToolCall et onDone ; l'UI n'accède jamais au Process curl.
@@ -17,6 +19,10 @@ Item {
     property string baseUrl: "http://127.0.0.1:8080/v1"
     property string model: ""
     property string apiKey: ""
+    property string providerId: "ramalama-local"
+    property string providerFormat: "openai"
+    property bool requiresApiKey: false
+    property bool localOnly: true
     property real temperature: 0.4
     property int maxTokens: 1024
     property int timeoutSeconds: 60
@@ -86,8 +92,17 @@ Item {
             failBeforeRequest("Aucun modèle n'est configuré.");
             return false;
         }
-        if (!/^https?:\/\//.test(baseUrl.trim())) {
-            failBeforeRequest("L'URL du fournisseur doit utiliser HTTP ou HTTPS.");
+        if (providerFormat !== "openai" && providerFormat !== "anthropic") {
+            failBeforeRequest("Format de fournisseur non supporté.");
+            return false;
+        }
+        const endpoint = ProviderPolicy.validateEndpoint(baseUrl, localOnly);
+        if (!endpoint.ok) {
+            failBeforeRequest(endpoint.error);
+            return false;
+        }
+        if (requiresApiKey && !apiKey) {
+            failBeforeRequest("Aucune clé n'est disponible dans le trousseau pour ce fournisseur.");
             return false;
         }
         if (!Array.isArray(toolCatalog) || toolCatalog.length !== 3) {
@@ -205,7 +220,17 @@ Item {
 
     function startRequest() {
         resetRequestState();
-        const request = OpenAIAdapter.buildRequest({
+        const endpoint = ProviderPolicy.validateEndpoint(baseUrl, localOnly);
+        if (!endpoint.ok) {
+            finishReply("error", endpoint.error);
+            return;
+        }
+        if (requiresApiKey && !apiKey) {
+            finishReply("error", "La clé du fournisseur n'est plus disponible dans le trousseau.");
+            return;
+        }
+        const adapter = providerFormat === "anthropic" ? AnthropicAdapter : OpenAIAdapter;
+        const request = adapter.buildRequest({
             baseUrl: baseUrl,
             model: model,
             maxTokens: maxTokens,
@@ -218,7 +243,7 @@ Item {
             return;
         }
 
-        streamProcess.command = OpenAIAdapter.buildCurlCommand(request, timeoutSeconds);
+        streamProcess.command = adapter.buildCurlCommand(request, timeoutSeconds);
         streamProcess.environment = ({
             ESCHATON_ASSISTANT_API_KEY: apiKey ? apiKey : null
         });
@@ -302,7 +327,9 @@ Item {
             return;
         const payload = _eventData;
         _eventData = "";
-        const parsed = OpenAIAdapter.parseEvent(payload);
+        const parsed = providerFormat === "anthropic"
+            ? AnthropicAdapter.parseEvent(payload)
+            : OpenAIAdapter.parseEvent(payload);
         if (!parsed.ok) {
             parseErrorCount++;
             console.warn("[EschatonAssistant]", parsed.error);
@@ -417,6 +444,9 @@ Item {
             return;
         _requestActive = false;
         isStreaming = false;
+        // La clé reste nécessaire en mémoire pour un éventuel tour d'outil,
+        // mais elle n'a aucune raison de rester dans l'objet Process arrêté.
+        streamProcess.environment = ({});
         flushStreamBuffer();
         flushSseEvent();
         flushDelta();

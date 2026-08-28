@@ -3222,3 +3222,113 @@ Le script de garde accepte désormais des PKGBUILD additionnels ; exécuté sur 
 meta desktop et l'assistant, il confirme les 16 dépendances externes dans Arch
 x86_64 et ALARM aarch64. Côté hôte, `shellcheck`, `jq`, `git diff --check` et les
 47 tests Bats passent.
+
+## 22. SP3 Task 4 — fournisseurs et trousseau (2026-08-28)
+
+### 22.1 Catalogue et formats
+
+`/usr/share/eschaton/assistant/providers.json` est une configuration datée
+(`2026-08-28`) de trois entrées : RamaLama loopback, OpenAI et Anthropic. Elle ne
+contient que les six champs autorisés par fournisseur et aucun secret. Une
+surcharge complète peut être lue depuis
+`~/.config/eschaton/assistant/providers.json` ; le plugin ne crée ni ne modifie
+jamais ce fichier. La lecture est bornée à 65 537 octets et la validation refuse
+champs inconnus, doublons, formats autres qu'`openai|anthropic`, ports invalides
+et catalogues de plus de 32 fournisseurs.
+
+La barrière local-only n'effectue aucune résolution DNS. Elle n'accepte que les
+littéraux `localhost`, `127.0.0.0/8` et `[::1]`, sans userinfo. Les cas
+`localhost.example`, `localhost@evil.example` et un endpoint OpenAI distant ont
+été refusés par le harnais.
+
+L'adaptateur OpenAI conserve `/v1/chat/completions`. L'adaptateur Anthropic
+traduit le même historique interne vers `/v1/messages`, `system`, `tool_use`,
+`tool_result` et `input_schema`, puis normalise son SSE vers les événements du
+core. Les clés OpenAI et Anthropic passent à curl par environnement et
+`--expand-header`, jamais dans argv.
+
+### 22.2 Constat Secret Service et adjudication
+
+Le premier test réel a réfuté la spec initiale : avec `libsecret 0.21.7-1` mais
+sans backend Secret Service, le pont échoue immédiatement :
+
+```text
+ASSISTANT_PROVIDER_HARNESS_FAIL store secret-tool : secret-tool: The name is not activatable
+```
+
+`gnome-keyring 1:50.0-1` a donc été testé puis porté par le meta
+`eschaton-desktop`, pas par le plugin. Cette frontière et la dette de
+déverrouillage greetd/PAM sont actées par l'ADR 0003. Le réglage avertit
+explicitement qu'un mot de passe de trousseau vide laisserait les clés en clair
+sur le disque. Le pont coupe aussi toute opération restée sans réponse après
+60 secondes.
+
+L'autologin courant n'avait fourni aucun mot de passe à PAM. Une tentative
+`secret-tool store` a donc attendu le prompt graphique jusqu'au timeout. Pour
+tester le chemin cible sans prétendre avoir réparé l'autologin, les deux fichiers
+de trousseau vides créés par ces essais ont été déplacés dans `/tmp`, puis un
+login PAM équivalent a été simulé avec `gnome-keyring-daemon --login` et un mot
+de passe de test non vide. La chaîne CLI a alors passé :
+
+```console
+$ secret-tool store … provider task4-direct
+$ secret-tool lookup … provider task4-direct
+task4-direct-secret
+$ secret-tool clear … provider task4-direct
+store_rc=0 lookup_rc=0 clear_rc=0
+```
+
+Le harnais QML, sur le même trousseau déverrouillé, charge le vrai catalogue par
+`ProviderCatalog`, puis exerce le vrai `KeyringBridge` :
+
+```text
+DEBUG qml: ASSISTANT_PROVIDER_HARNESS_OK providers=3 keyring=store,lookup,clear
+```
+
+Ce harnais a trouvé un défaut que la CLI seule ne voyait pas : le signal
+`storeFinished` partait pendant que Quickshell considérait encore le processus
+actif, donc le `lookup` chaîné était refusé comme occupé. Les signaux de fin sont
+désormais différés d'un tour de boucle. Un échec de harnais rend aussi un code
+non nul, au lieu de seulement écrire `FAIL` avant de quitter avec 0.
+
+Cette preuve valide le client et le chemin PAM cible. Elle ne valide pas le
+déverrouillage transparent de l'autologin actuel ; cette exigence reste fermement
+attribuée au greeter authentifié de SP4.
+
+### 22.3 QML, paquets et vrai DMS
+
+Dans la VM, le lint strict passe sur le core, le catalogue, le pont et les trois
+harnais. Le lint UI passe avec les seules catégories dynamiques `qs.*` déjà
+documentées au §21 désactivées. Les quatre fixtures, deux OpenAI et deux
+Anthropic, rendent :
+
+```text
+DEBUG qml: ASSISTANT_PARSER_HARNESS_OK
+```
+
+Sur l'hôte, `git diff --check`, `jq`, `shellcheck` et les 52 tests Bats passent.
+Les paquets construits sont :
+
+- `eschaton-dms-plugin-assistant 0.1.0-2`, sans harnais ni fixture ;
+- `eschaton-desktop 0.1.0-4`, portant `gnome-keyring` et le plugin.
+
+La garde interroge les PKGBUILD du meta et du plugin : 17 dépendances externes,
+toutes présentes dans Arch x86_64 et ALARM aarch64. Elle relève précisément
+`gnome-keyring 1:50.0-1` des deux côtés.
+
+L'installation initiale de `gnome-keyring` pendant le diagnostic a produit les
+snapshots 59 et 60. Les deux paquets ont ensuite été installés avec `pacman -U`
+(snapshots 61 et 62), puis le rebuild final du plugin a été réinstallé après la
+passe UI (snapshots 63 et 64). Après activation du daemon, le vrai DMS 1.5.3
+déclare :
+
+```text
+eschatonAssistant [loaded]
+PLUGIN_TOGGLE_SUCCESS: eschatonAssistant
+dms:eschaton-assistant  320  44  960  756
+```
+
+Le journal porte `Daemon plugin loaded: eschatonAssistant` sans erreur QML,
+`ReferenceError`, `TypeError` ou erreur de binding. L'activation automatique au
+boot frais et les conversations fournisseur réelles restent volontairement les
+preuves de la Task 6.

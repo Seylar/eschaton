@@ -25,7 +25,7 @@ Les deux moitiés existent séparément (sidebars IA d'un côté, admin GUI de l
 
 La veille (§7.4) éclaire deux candidats viables ; la spec acte la **trajectoire** :
 
-- **v1 = Candidat A** : tout vit dans le plugin DMS `eschaton-dms-plugin-assistant` (`type:"daemon"`, `Variants{Quickshell.screens}` + `DankSlideout`). Transport `Process` + `curl` (JAMAIS `Quickshell.Networking` — ce n'est pas un client HTTP, veille risque 8). Zéro dépendance nouvelle : `curl` (core), `libsecret`/`secret-tool` (core), le reste est déjà là.
+- **v1 = Candidat A** : tout vit dans le plugin DMS `eschaton-dms-plugin-assistant` (`type:"daemon"`, `Variants{Quickshell.screens}` + `DankSlideout`). Transport `Process` + `curl` (JAMAIS `Quickshell.Networking` — ce n'est pas un client HTTP, veille risque 8). Le plugin dépend de `libsecret`/`secret-tool`, mais le test VM a invalidé l'hypothèse « libsecret suffit » : le meta bureau fournit aussi `gnome-keyring`, backend Secret Service de la session, conformément à l'[ADR 0003](../../decisions/0003-service-secrets-assistant.md).
 - **B en cible** (`eschaton-assistantd`, démon utilisateur systemd, socket Unix `$XDG_RUNTIME_DIR`, JSON-lignes) : l'extraction se déclenche quand la boucle d'outils est stabilisée OU si l'API interne DMS casse (risque SP2 n°4). **Pour que l'extraction ne soit pas une réécriture, la v1 s'écrit dès maintenant contre un protocole interne** : un unique module QML `AssistantCore` expose `send(message)`, `onDelta(chunk)`, `onToolCall(name, argsJson)`, `toolResult(callId, resultJson)`, `onDone(status)` — l'UI ne parle QUE ce contrat ; en B, `AssistantCore` devient un client socket au même contrat.
 
 ### Paquets
@@ -34,13 +34,13 @@ La veille (§7.4) éclaire deux candidats viables ; la spec acte la **trajectoir
 |---|---|
 | `eschaton-dms-plugin-assistant` | `/etc/xdg/quickshell/dms-plugins/eschatonAssistant/` — `plugin.json` (`type:"daemon"`, `requires_dms ">=1.5.0"`), `AssistantCore.qml`, UI (sidebar, fil, saisie, sélecteur de fournisseur), `Settings.qml`. `arch=(any)`, motif Socle (LICENSE symlink), depends : `dms-shell`, `curl`, `libsecret`, `jq`. `optdepends` : `ramalama` (inférence locale bi-arch — JAMAIS ollama, absent d'ALARM). |
 | `eschaton-desktop-config` (bump) | Keybind `SUPER+A` → `dms ipc call plugins toggle eschatonAssistant`, via le canal d'accroche établi (defaults Eschaton, `dms/binds-user.lua`). |
-| `eschaton-desktop` (bump) | + `eschaton-dms-plugin-assistant` dans depends. |
+| `eschaton-desktop` (bump) | + `eschaton-dms-plugin-assistant` et `gnome-keyring` dans depends. Le backend de secrets appartient à la session, jamais au plugin (ADR 0003 §8.1). |
 
 ## 4. Couche fournisseurs (provider-agnostique)
 
 - **Patron Strategy indexé sur le *format de fil***, pas le fournisseur (veille §7.3) : adaptateur `openai` (`/v1/chat/completions`, SSE) qui sert OpenAI, Ollama, vLLM, LM Studio, RamaLama et l'endpoint compatible d'Anthropic ; adaptateur `anthropic` (`/v1/messages`) uniquement pour le function calling fiable (l'endpoint compatible ignore `strict` — veille §4.3).
 - **La liste des fournisseurs est une CONFIGURATION** (fichier `providers.json` livré en défaut `/usr/share/eschaton/assistant/`, surcharge utilisateur), jamais une architecture : chaque entrée = nom, base_url, format (`openai`|`anthropic`), modèle par défaut. Volatilité prouvée (Gemini CLI mort en 2 mois, veille risque 6).
-- **Clés** : `secret-tool` (libsecret), passées par variable d'environnement de processus à `curl`. AUCUNE clé en clair dans un fichier.
+- **Clés** : `secret-tool` (client libsecret) sur le backend Secret Service `gnome-keyring` de la session, passées par variable d'environnement de processus à `curl`. AUCUNE clé dans la configuration ou les arguments. Sous l'autologin transitoire, l'UI interdit explicitement le piège du trousseau sans mot de passe, qui laisserait les secrets en clair au repos ; le déverrouillage PAM est une exigence ferme de SP4 (ADR 0003 §8).
 - **Mode « local uniquement »** (repris d'end-4) : un réglage qui refuse tout endpoint non-localhost, avec message explicite — c'est aussi le mode hors-ligne et données sensibles.
 
 ## 5. Le catalogue d'outils v1 (fermé) et la sécurité
@@ -60,7 +60,7 @@ La veille (§7.4) éclaire deux candidats viables ; la spec acte la **trajectoir
 1. **Spike de terrain** (tâche 1 du plan) : `dms-ai-assistant` (MIT, modèle de référence) installé dans la VM — rendu de DankSlideout, latence de streaming QML, empreinte mesurés (veille risque 12 : aucune évaluation de terrain n'existe).
 2. `pacman -S eschaton-desktop` (bump) → `SUPER+A` ouvre la sidebar ; conversation réelle en streaming avec ≥ 2 fournisseurs de formats différents (un `openai` — RamaLama local ou distant — et l'adaptateur `anthropic`).
 3. Les 3 outils opèrent en conditions réelles : status lu ; une update déclenchée PAR l'assistant (terminal visible, snapshot pre/post) ; un rollback proposé PAR l'assistant → modale polkit → restauration vérifiée au reboot. Le tout consigné façon vm-dev.
-4. Mode local-only prouvé (endpoint distant refusé avec message) ; clé stockée/relue par secret-tool ; aucun secret en clair (`grep` des configs).
+4. Mode local-only prouvé (endpoint distant refusé avec message) ; clé stockée/relue par secret-tool ; aucun secret dans la configuration ou les arguments ; avertissement visible contre le trousseau sans mot de passe sous autologin (ADR 0003 §8.2).
 5. Contenu hostile : une description de snapshot piégée (injection d'instructions) N'ALTÈRE ni les outils appelés ni leurs arguments — test documenté.
 6. CI verte bi-arch (paquets `any`, garde `check-desktop-deps` étendue aux nouvelles dépendances), bats/qmllint/jq sur le nouveau code, chargement du plugin prouvé au boot frais (l'assertion de rendu SP2 s'applique).
 

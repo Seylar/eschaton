@@ -52,6 +52,11 @@ son propre remplacement.
 
 ### Task 4 : Fournisseurs — providers.json, secret-tool, local-only, adaptateur `anthropic`
 
+**Exécutée le 2026-08-28.** Catalogue daté, deux adaptateurs, barrière
+local-only et pont Secret Service : `packages/eschaton-dms-plugin-assistant/` ;
+backend de session et dette PAM arbitrés par l'ADR 0003 ; preuves VM et paquets :
+`tools/vm-dev.md` §22. Le push de vague Tasks 2-4 déclenche la revue Claude.
+
 1. `providers.json` défaut dans `/usr/share/eschaton/assistant/` (entrées datées : RamaLama localhost, OpenAI, Anthropic — la LISTE est une config, spec §4) + surcharge utilisateur (`~/.config/eschaton/assistant/providers.json`, jamais écrasée).
 2. Clés : `secret-tool lookup/store` (schéma d'attributs documenté), passage par env de process à curl ; AUCUN secret en clair (grep prouvé).
 3. Mode local-only : réglage dans Settings du plugin ; tout endpoint non-localhost refusé avec message explicite.

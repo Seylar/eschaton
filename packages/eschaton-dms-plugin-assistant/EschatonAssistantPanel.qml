@@ -13,8 +13,13 @@ Item {
     property var providerNames: []
     property string currentProvider: ""
     property string activeToolName: ""
+    property bool localOnly: true
+    property bool providerReady: false
+    property bool credentialsPending: false
+    property string providerMessage: ""
 
     signal hideRequested
+    signal providerSelected(string name)
 
     function focusComposer() {
         composer.forceActiveFocus();
@@ -34,7 +39,7 @@ Item {
 
     function sendComposer() {
         const message = composer.text.trim();
-        if (!message)
+        if (!message || !providerReady)
             return;
         if (assistantCore.send(message)) {
             composer.text = "";
@@ -92,7 +97,9 @@ Item {
                 options: root.providerNames
                 currentValue: root.currentProvider
                 emptyText: "Aucun fournisseur"
-                onValueChanged: value => root.currentProvider = value
+                enabled: !root.assistantCore.busy && !root.credentialsPending
+                    && root.providerNames.length > 0
+                onValueChanged: value => root.providerSelected(value)
             }
 
             StyledRect {
@@ -110,12 +117,12 @@ Item {
                         width: 8
                         height: 8
                         radius: 4
-                        color: Theme.success
+                        color: root.localOnly ? Theme.success : Theme.warning
                         anchors.verticalCenter: parent.verticalCenter
                     }
 
                     StyledText {
-                        text: "Local"
+                        text: root.localOnly ? "Local uniquement" : "Distant autorisé"
                         font.pixelSize: Theme.fontSizeSmall
                         color: Theme.surfaceVariantText
                     }
@@ -129,6 +136,41 @@ Item {
                 tooltipText: "Effacer la conversation"
                 enabled: root.assistantCore.messageCount > 0 && !root.assistantCore.busy
                 onClicked: root.assistantCore.clear()
+            }
+        }
+
+        StyledRect {
+            Layout.fillWidth: true
+            Layout.preferredHeight: providerRow.implicitHeight + Theme.spacingM * 2
+            visible: root.providerMessage !== ""
+            radius: Theme.cornerRadius
+            color: Theme.withAlpha(Theme.warning, 0.14)
+            border.width: 1
+            border.color: Theme.withAlpha(Theme.warning, 0.45)
+
+            Row {
+                id: providerRow
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Theme.spacingM
+                anchors.rightMargin: Theme.spacingM
+                spacing: Theme.spacingS
+
+                DankIcon {
+                    name: root.credentialsPending ? "sync" : "key"
+                    size: Theme.iconSize
+                    color: Theme.warning
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                StyledText {
+                    width: parent.width - Theme.iconSize - parent.spacing
+                    text: root.providerMessage
+                    color: Theme.surfaceText
+                    wrapMode: Text.WordWrap
+                    elide: Text.ElideNone
+                }
             }
         }
 
@@ -338,9 +380,10 @@ Item {
                 anchors.margins: Theme.spacingS
                 anchors.rightMargin: Theme.spacingXS
                 activeFocusOnTab: true
-                enabled: !root.assistantCore.busy
-                placeholderText: root.assistantCore.busy
-                    ? "Réponse en cours…" : "Écris une demande système…"
+                enabled: root.providerReady && !root.assistantCore.busy
+                placeholderText: root.assistantCore.busy ? "Réponse en cours…"
+                    : (root.providerReady ? "Écris une demande système…"
+                                          : "Configure un fournisseur disponible…")
                 wrapMode: TextArea.Wrap
                 color: Theme.surfaceText
                 placeholderTextColor: Theme.surfaceVariantText
@@ -370,7 +413,8 @@ Item {
                 iconName: root.assistantCore.busy ? "stop" : "send"
                 tooltipText: root.assistantCore.busy ? "Annuler" : "Envoyer"
                 iconColor: root.assistantCore.busy ? Theme.error : Theme.primary
-                enabled: root.assistantCore.busy || composer.text.trim().length > 0
+                enabled: root.assistantCore.busy
+                    || (root.providerReady && composer.text.trim().length > 0)
                 onClicked: {
                     if (root.assistantCore.busy)
                         root.assistantCore.cancel();
