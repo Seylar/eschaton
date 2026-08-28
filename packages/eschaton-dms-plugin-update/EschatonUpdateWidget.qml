@@ -70,10 +70,10 @@ PluginComponent {
         id: updateProcess
         command: [
             "/usr/bin/foot",
+            "--hold",
             "--title=Eschaton · Mise à jour",
-            "/usr/bin/bash",
-            "-lc",
-            "/usr/bin/eschaton-update --yes; rc=$?; printf '\\nAppuyez sur Entrée pour fermer…'; read -r _; exit \"$rc\""
+            "/usr/bin/eschaton-update",
+            "--yes"
         ]
         running: false
 

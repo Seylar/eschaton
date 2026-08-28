@@ -3364,3 +3364,79 @@ n'embarque ni harnais ni faux serveur. Après installation dans la VM (snapshots
 eschatonAssistant` répond `loaded`; le journal du nouveau processus porte
 `Daemon plugin loaded: eschatonAssistant` sans erreur QML, `ReferenceError`,
 `TypeError` ni erreur de binding.
+
+## 23. SP3 Task 5 — catalogue d'outils fermé (2026-08-29)
+
+### 23.1 Exécuteurs et frontières
+
+Le daemon réel désactive les stubs et relie `AssistantCore` à un exécuteur dont
+le `switch` ne connaît que `system_status`, `trigger_update` et
+`propose_rollback`. Un nom inconnu est refusé et journalisé. Les deux premiers
+outils refusent tout argument ; le rollback exige comme unique argument un
+entier JSON positif et sûr, puis relit la liste Snapper avant de retenir le
+snapshot. Une seule action privilégiée peut être active ou en attente par tour.
+
+`system_status` lance quatre argv constants, sans shell ni réseau :
+`checkupdates`, `snapper --jsonout --config root list`, `dgop system --json` et
+`dgop memory --json`. Chaque source, le nombre d'éléments et le résultat final
+sont bornés. Le résultat porte `UNTRUSTED_SYSTEM_DATA` et garde toutes les
+valeurs collectées sous `data` ; rien n'est concaténé au prompt système. Dans
+l'intention de rollback, la description Snapper est explicitement rendue en
+`Text.PlainText` et annoncée comme donnée non fiable.
+
+L'outil de mise à jour ouvre un terminal visible avec l'argv discret
+`foot --hold --title=Eschaton · Mise à jour /usr/bin/eschaton-update --yes`.
+Le rollback s'arrête, lui, sur une intention inline indiquant le numéro, la date
+et la description du snapshot. Seul le bouton humain « Continuer vers
+l'authentification » construit ensuite l'argv exact
+`pkexec /usr/bin/eschaton-rollback --yes N`. Il n'existe aucun auto-approve et,
+après ce clic, l'annulation appartient à la modale polkit afin de ne pas tuer le
+helper au milieu d'une section Btrfs critique. Le bouton d'arrêt du panneau
+annule à la fois le core et les exécuteurs encore annulables.
+
+Le widget Update existant emploie désormais le même argv sans `bash -lc`. Les
+dépendances runtime sont portées explicitement par le paquet assistant :
+`eschaton-base`, `foot` et `polkit`, en plus de celles du core.
+
+### 23.2 Preuves fonctionnelles dans la VM
+
+Le harnais QML a exécuté les vraies commandes de statut et relu les vrais
+snapshots. Avec le code finalement empaqueté, il rend :
+
+```text
+ASSISTANT_TOOL_HARNESS_OK status=labelled rollback=70 pkexec_before_click=false unknown=refused privileged=single args=strict
+```
+
+Un second essai a ouvert le vrai terminal Wayland. `hyprctl clients` montrait
+une fenêtre `foot` visible intitulée « Eschaton · Mise à jour », dont les
+enfants étaient `/usr/bin/eschaton-update --yes` puis
+`sudo pacman -Syu --noconfirm`. Aucun mot de passe n'a été saisi ; le terminal a
+été fermé avant authentification et aucun snapshot supplémentaire n'a été créé.
+
+Pour la restauration, un harnais temporaire chargé par le vrai daemon DMS a
+d'abord exposé `awaiting_confirmation` avec `pkexec_running=false`. Après
+l'action humaine de confirmation, Hyprland montrait la modale DMS
+« Authentification » et le processus exact était :
+
+```text
+/usr/bin/pkexec /usr/bin/eschaton-rollback --yes 66
+```
+
+`pkexec` a été interrompu avant toute saisie. Aucun secret n'a été injecté,
+aucune transaction de rollback n'a démarré et aucun snapshot n'a été créé. Le
+plugin de harnais, son entrée dans les réglages DMS et ses fichiers ont ensuite
+été retirés.
+
+### 23.3 Paquets et validation finale
+
+Les paquets installés sont `eschaton-dms-plugin-assistant 0.1.0-5` et
+`eschaton-dms-plugin-update 0.1.0-4`. Leur installation a créé les snapshots
+67/68, puis le durcissement final de l'assistant les snapshots 69/70. Le paquet
+assistant ne contient ni harnais ni fixture.
+
+Le lint strict passe sur `AssistantCore`, `ToolExecutor` et ses harnais ; le
+lint UI passe avec les seules catégories dynamiques `qs.*` déjà documentées.
+Après redémarrage, le vrai DMS déclare les deux plugins `loaded`, ouvre la couche
+`dms:eschaton-assistant` en 960×756 et journalise uniquement
+`Daemon plugin loaded: eschatonAssistant` parmi les motifs QML critiques. Les
+58 tests Bats du dépôt et `git diff --check` passent.

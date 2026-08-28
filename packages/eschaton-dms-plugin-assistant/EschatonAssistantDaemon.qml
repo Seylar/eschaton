@@ -173,6 +173,12 @@ Item {
 
     AssistantCore {
         id: assistantCore
+        stubTools: false
+    }
+
+    ToolExecutor {
+        id: toolExecutor
+        assistantCore: assistantCore
     }
 
     Variants {
@@ -197,6 +203,7 @@ Item {
 
             content: EschatonAssistantPanel {
                 assistantCore: assistantCore
+                toolExecutor: toolExecutor
                 providerNames: root.providerNames()
                 currentProvider: root.selectedProviderName
                 localOnly: root.localOnly

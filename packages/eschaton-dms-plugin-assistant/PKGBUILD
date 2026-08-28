@@ -1,18 +1,18 @@
 pkgname=eschaton-dms-plugin-assistant
 pkgver=0.1.0
-pkgrel=3
+pkgrel=5
 pkgdesc="Plugin DMS Eschaton : assistant système à catalogue d'outils fermé"
 arch=(any)
 license=(MIT)
-depends=(dms-shell curl libsecret jq pacman-contrib)
+depends=(dms-shell curl libsecret jq pacman-contrib eschaton-base foot polkit)
 optdepends=('ramalama: fournisseur local OpenAI-compatible')
 # Les harnais et fixtures restent dans les sources de test du dépôt, jamais dans
 # le paquet livré. Le catalogue, lui, est une donnée runtime versionnée.
 source=(plugin.json EschatonAssistantDaemon.qml EschatonAssistantPanel.qml
-        EschatonAssistantSettings.qml AssistantCore.qml ProviderCatalog.qml
+        EschatonAssistantSettings.qml AssistantCore.qml ToolExecutor.qml ProviderCatalog.qml
         KeyringBridge.qml tool-catalog.json providers.json OpenAIAdapter.js
         AnthropicAdapter.js ProviderPolicy.js LICENSE)
-sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
 
 package() {
   local plugin_dir="$pkgdir/etc/xdg/quickshell/dms-plugins/eschatonAssistant"
@@ -21,6 +21,7 @@ package() {
   install -Dm644 EschatonAssistantPanel.qml "$plugin_dir/EschatonAssistantPanel.qml"
   install -Dm644 EschatonAssistantSettings.qml "$plugin_dir/EschatonAssistantSettings.qml"
   install -Dm644 AssistantCore.qml "$plugin_dir/AssistantCore.qml"
+  install -Dm644 ToolExecutor.qml "$plugin_dir/ToolExecutor.qml"
   install -Dm644 ProviderCatalog.qml "$plugin_dir/ProviderCatalog.qml"
   install -Dm644 KeyringBridge.qml "$plugin_dir/KeyringBridge.qml"
   install -Dm644 tool-catalog.json "$plugin_dir/tool-catalog.json"

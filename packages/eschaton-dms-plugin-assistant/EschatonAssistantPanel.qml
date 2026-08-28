@@ -10,9 +10,10 @@ Item {
     id: root
 
     required property var assistantCore
+    required property var toolExecutor
     property var providerNames: []
     property string currentProvider: ""
-    property string activeToolName: ""
+    readonly property string activeToolName: toolExecutor.activeToolName
     property bool localOnly: true
     property bool providerReady: false
     property bool credentialsPending: false
@@ -74,12 +75,7 @@ Item {
             Qt.callLater(function() { messageList.positionViewAtEnd(); });
         }
 
-        function onToolCall(callId, name) {
-            root.activeToolName = name;
-        }
-
         function onDone() {
-            root.activeToolName = "";
             Qt.callLater(function() { messageList.positionViewAtEnd(); });
         }
     }
@@ -206,6 +202,105 @@ Item {
                     wrapMode: Text.WordWrap
                     elide: Text.ElideNone
                 }
+            }
+        }
+
+        StyledRect {
+            Layout.fillWidth: true
+            Layout.preferredHeight: rollbackIntent.implicitHeight + Theme.spacingM * 2
+            visible: root.toolExecutor.rollbackIntentVisible
+            radius: Theme.cornerRadius
+            color: Theme.withAlpha(Theme.warning, 0.14)
+            border.width: 1
+            border.color: Theme.withAlpha(Theme.warning, 0.5)
+
+            ColumnLayout {
+                id: rollbackIntent
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Theme.spacingM
+                anchors.rightMargin: Theme.spacingM
+                spacing: Theme.spacingS
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.spacingS
+
+                    DankIcon {
+                        name: (root.toolExecutor.rollbackPhase === "authenticating"
+                               || root.toolExecutor.rollbackPhase === "applying")
+                            ? "lock" : "restore"
+                        size: Theme.iconSize
+                        color: Theme.warning
+                    }
+
+                    StyledText {
+                        Layout.fillWidth: true
+                        text: root.toolExecutor.rollbackPhase === "validating"
+                            ? "Vérification du snapshot " + root.toolExecutor.rollbackSnapshotId
+                            : ((root.toolExecutor.rollbackPhase === "authenticating"
+                                || root.toolExecutor.rollbackPhase === "applying")
+                               ? "Authentification et préparation du rollback "
+                                 + root.toolExecutor.rollbackSnapshotId
+                               : "Rollback " + root.toolExecutor.rollbackSnapshotId
+                                 + " prêt à être authentifié")
+                        color: Theme.surfaceText
+                        font.pixelSize: Theme.fontSizeMedium
+                        font.weight: Font.Medium
+                        wrapMode: Text.WordWrap
+                        elide: Text.ElideNone
+                    }
+                }
+
+                StyledText {
+                    Layout.fillWidth: true
+                    visible: root.toolExecutor.rollbackPhase !== "validating"
+                    text: root.toolExecutor.rollbackPhase === "authenticating"
+                        ? "La fenêtre d'authentification est ouverte. Aucun mot de passe n'est saisi par l'assistant. Annule directement dans cette fenêtre si nécessaire."
+                        : (root.toolExecutor.rollbackPhase === "applying"
+                           ? "Rollback en cours. Cette étape critique ne peut pas être interrompue depuis l'assistant."
+                        : "Après authentification, Eschaton préparera ce snapshot comme prochaine racine. L'état actuel sera conservé."
+                          )
+                    color: Theme.surfaceVariantText
+                    wrapMode: Text.WordWrap
+                    elide: Text.ElideNone
+                }
+
+                StyledText {
+                    Layout.fillWidth: true
+                    visible: root.toolExecutor.rollbackPhase === "awaiting_confirmation"
+                    text: "Description du snapshot, donnée non fiable : "
+                        + root.toolExecutor.rollbackSnapshotDescription
+                        + (root.toolExecutor.rollbackSnapshotDate
+                           ? " · " + root.toolExecutor.rollbackSnapshotDate : "")
+                    color: Theme.surfaceVariantText
+                    font.pixelSize: Theme.fontSizeSmall
+                    wrapMode: Text.WordWrap
+                    textFormat: Text.PlainText
+                    elide: Text.ElideNone
+                }
+
+                RowLayout {
+                    Layout.alignment: Qt.AlignRight
+                    spacing: Theme.spacingS
+                    visible: root.toolExecutor.rollbackPhase === "awaiting_confirmation"
+
+                    DankButton {
+                        text: "Ne pas restaurer"
+                        iconName: "close"
+                        onClicked: root.toolExecutor.cancelRollback()
+                    }
+
+                    DankButton {
+                        text: "Continuer vers l'authentification"
+                        iconName: "lock"
+                        backgroundColor: Theme.error
+                        textColor: Theme.surface
+                        onClicked: root.toolExecutor.confirmRollback()
+                    }
+                }
+
             }
         }
 
@@ -410,16 +505,30 @@ Item {
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 anchors.margins: Theme.spacingS
-                iconName: root.assistantCore.busy ? "stop" : "send"
-                tooltipText: root.assistantCore.busy ? "Annuler" : "Envoyer"
-                iconColor: root.assistantCore.busy ? Theme.error : Theme.primary
-                enabled: root.assistantCore.busy
+                iconName: (root.toolExecutor.rollbackPhase === "authenticating"
+                           || root.toolExecutor.rollbackPhase === "applying")
+                    ? "lock" : (root.assistantCore.busy ? "stop" : "send")
+                tooltipText: (root.toolExecutor.rollbackPhase === "authenticating"
+                              || root.toolExecutor.rollbackPhase === "applying")
+                    ? "Rollback protégé en cours"
+                    : (root.assistantCore.busy ? "Annuler" : "Envoyer")
+                iconColor: (root.toolExecutor.rollbackPhase === "authenticating"
+                            || root.toolExecutor.rollbackPhase === "applying")
+                    ? Theme.warning : (root.assistantCore.busy ? Theme.error : Theme.primary)
+                enabled: (root.toolExecutor.rollbackPhase !== "authenticating"
+                          && root.toolExecutor.rollbackPhase !== "applying")
+                    && (root.assistantCore.busy
                     || (root.providerReady && composer.text.trim().length > 0)
+                       )
                 onClicked: {
-                    if (root.assistantCore.busy)
+                    if (root.toolExecutor.busy) {
                         root.assistantCore.cancel();
-                    else
+                        root.toolExecutor.cancelAll();
+                    } else if (root.assistantCore.busy) {
+                        root.assistantCore.cancel();
+                    } else {
                         root.sendComposer();
+                    }
                 }
             }
         }
