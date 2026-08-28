@@ -2504,6 +2504,113 @@ justement la plus destructive des deux. Le paquet ne livre plus que l'action ;
 ce sont ses `<defaults>` (`allow_any=no`, `allow_inactive=no`,
 `allow_active=auth_admin`, sans `_keep`) qui décident.
 
+### 14.4 Preuve en VM de la modale (vague de fix pré-tag, 2026-08-28)
+
+Le retrait de la règle a été mesuré **après** publication, sur la VM de
+dogfooding mise à jour depuis le dépôt Pages — pas sur un paquet local :
+
+```console
+$ sudo pacman -Syu --noconfirm
+Paquets (1) eschaton-dms-plugin-rollback-0.1.0-3
+…
+(1/2) Performing snapper pre snapshots …  ==> root: 47
+(2/2) Performing snapper post snapshots … ==> root: 48
+
+$ ls /usr/share/polkit-1/rules.d/ | grep -i eschaton || echo 'AUCUNE regle eschaton'
+AUCUNE regle eschaton
+
+$ pacman -Ql eschaton-dms-plugin-rollback | grep polkit
+… /usr/share/polkit-1/actions/org.eschaton.rollback.policy
+
+$ jq -c '.permissions' /etc/xdg/quickshell/dms-plugins/eschatonRollback/plugin.json
+["process","settings_read"]
+```
+
+Le plugin se recharge sans `settings_write` (`PLUGIN_RELOAD_SUCCESS`, puis
+`status = loaded`, et `DankBar: Plugin loaded: eschatonRollback` au journal).
+
+**Parcours widget — la modale apparaît.** Popout ouvert à la souris, snapshot 48
+sélectionné, bouton passé à « Confirmer le rollback 48 », deuxième clic :
+
+```console
+$ ps -eo pid,args | grep pkexec
+   8812 /usr/bin/pkexec /usr/bin/eschaton-rollback --yes 48   ← en attente
+```
+
+La fenêtre `com.danklinux.dms` « Authentification » s'affiche, titrée
+**« Authentification requise »**, avec le `<message>` exact de la policy —
+« Une autorisation est requise pour restaurer Eschaton. » —, un champ
+*Password:* et deux boutons *Annuler* / *S'authentifier*. Sous la règle
+supprimée, ce même parcours élevait sans rien demander (§16.2). Modale annulée :
+
+```console
+août 28 15:13:03 eschaton pkexec[8812]: seylar: Error executing command as another user:
+    Request dismissed [USER=root] [TTY=unknown] [CWD=/home/seylar]
+    [COMMAND=/usr/bin/eschaton-rollback --yes 48]
+
+$ sudo btrfs subvolume list / | grep avant-rollback
+ID 266 gen 665 top level 5 path @.avant-rollback-20260828-132747   ← l'ancien, inchangé
+$ findmnt -no SOURCE /
+/dev/vda2[/@]
+```
+
+**Même chose en ligne de commande, dans la session graphique.** Un script lancé
+par `hyprctl dispatch 'hl.dsp.exec_cmd("…")'` (donc rattaché à la session
+`seat0`, pas à la console série) :
+
+```console
+$ pkexec /usr/bin/eschaton-rollback --yes 1     # modale → Annuler
+rc=126
+Error executing command as another user: Request dismissed
+```
+
+**Matrice `pkcheck`, mesurée dans la même session :**
+
+```console
+$ pkaction --action-id org.eschaton.rollback --verbose
+  implicit any:      no
+  implicit inactive: no
+  implicit active:   auth_admin
+  annotation:        org.freedesktop.policykit.exec.path -> /usr/bin/eschaton-rollback
+
+$ pkcheck --action-id org.eschaton.rollback --process $$
+polkit\56result=auth_admin
+Authorization requires authentication and -u wasn't passed.     → rc=2
+```
+
+`pkaction` lit les `<defaults>` **après** application des règles : `auth_admin`
+prouve qu'aucune `rules.d` ne les court-circuite plus.
+
+> **Piloter la souris de la session : le dispatcher a changé de syntaxe.**
+> `hyprctl dispatch movecursor X Y` — la forme notée au §13.4 — est refusée par
+> une configuration **Lua** : `hyprctl` compile son argument en Lua et rend
+> `[string "return hl.dispatch(movecursor 1252 24)"]:1: ')' expected`. La forme
+> qui marche est `hyprctl dispatch 'hl.dsp.cursor.move({ x = 1252, y = 24 })'`,
+> qui positionne au pixel près (vérifié par `hyprctl cursorpos`) — là où
+> `ydotool mousemove --absolute` sature en bord d'écran et où les déplacements
+> relatifs sont déformés par l'accélération du pointeur. Le clic, lui, reste
+> `ydotool click 0xC0` (démon lancé par
+> `sudo systemd-run --unit=… /usr/bin/ydotoold --socket-path=/run/user/1000/.ydotool_socket
+> --socket-perm=0660 --socket-own=1000:1000`). Sur une fenêtre flottante qui
+> vient d'apparaître, **le premier clic ne fait que la focaliser** : il en faut
+> un second, et un micro-déplacement du curseur avant le clic pour que Qt
+> réévalue le survol.
+
+> **Réserve : les pastilles des plugins ne sont pas rendues après un
+> démarrage.** Au démarrage du 14:19, le service de provisioning est
+> `active (exited)`, `dms ipc call plugins status` rend `loaded` pour les deux
+> plugins, `plugin_settings.json` porte `true,true` et `barConfigs[0].rightWidgets`
+> contient bien `eschatonUpdate` et `eschatonRollback` — mais la capture d'écran
+> prise à 15:04, soit 45 minutes après le démarrage, ne montre que les sept
+> pastilles first-party : aucune des deux pastilles Eschaton. Un
+> `systemctl --user restart dms.service` les fait apparaître immédiatement et
+> définitivement. La capture `bureau-final-published.png` (14:04, avant ce
+> redémarrage) montre la même absence. Les assertions de la Task 7 portaient sur
+> `settings.json` et sur l'IPC, jamais sur le rendu : **l'état de la barre après
+> un démarrage frais n'est donc pas prouvé.** À reprendre avant le tag — c'est
+> le critère « zéro terminal » qui est en jeu, pas la mécanique de restauration,
+> elle-même prouvée ci-dessus.
+
 ## 15. Installation réelle du Bureau (SP2, Task 7)
 
 Installation effectuée depuis le dépôt Pages sur la VM Socle existante :
@@ -2628,8 +2735,10 @@ $ sudo pacman -S --noconfirm cowsay
 ```
 
 Le widget a été actualisé, le snapshot **33** sélectionné, puis le bouton
-**Confirmer le rollback 33** actionné. Polkit a autorisé l'action sans demande
-redondante et l'ancien état a été conservé sous
+**Confirmer le rollback 33** actionné. Polkit a autorisé l'action sans rien
+demander — *c'était la règle `rules.d` du paquet 0.1.0-2, supprimée depuis :
+le même parcours ouvre désormais une modale d'authentification (§14.3, preuve
+au §14.4)* — et l'ancien état a été conservé sous
 `@.avant-rollback-20260828-132747`. Après reboot :
 
 ```console
@@ -2656,3 +2765,98 @@ faits à la souris et vérifiés côté système.
 La branche de livraison reste `bureau`. Ni fusion vers `main` ni tag `v0.2.0`
 ne sont faits avant la revue Claude demandée ; les créer maintenant transformerait
 un jalon de review en fausse release finale.
+
+## 18. Contre-test de l'invariant Lua (spec §6.4, 2026-08-28)
+
+Le second membre du critère §6.4 — « suppression volontaire du `-c` → constat
+que la config serait ignorée » — n'avait jamais été joué. Il l'a été ici, et
+**il réfute l'énoncé du critère.**
+
+### 18.1 Ce que la spec affirmait
+
+Spec Bureau §4.1 : « sans `-c`, la config Lua est ignorée silencieusement ».
+`eschaton-session` porte la même phrase en commentaire. La session de référence
+lance bien la forme complète :
+
+```console
+$ tr '\0' ' ' < /proc/$(pgrep -x Hyprland)/cmdline
+Hyprland --watchdog-fd 4 -c /home/seylar/.config/hypr/hyprland.lua
+
+$ grep '\[cfg\]' /run/user/1000/hypr/*/hyprland.log
+[cfg] Config is either explicit or special.
+[cfg] Config is lua, loading lua mgr
+```
+
+### 18.2 Méthode — instances jetables, session de référence intacte
+
+Hyprland 0.56.1 accepte de tourner **imbriqué** dans la session existante : il
+suffit de lui donner `WAYLAND_DISPLAY=wayland-1`, de lui retirer
+`HYPRLAND_INSTANCE_SIGNATURE` (il en tire une nouvelle) et de garder le repli
+logiciel de cette VM. Ni le siège, ni le DRM, ni la session greetd ne sont
+touchés — la session de référence a survécu aux cinq lancements.
+
+```bash
+env -u HYPRLAND_INSTANCE_SIGNATURE -u XKB_DEFAULT_LAYOUT \
+    XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 \
+    LIBGL_ALWAYS_SOFTWARE=1 setsid nohup Hyprland > /tmp/ct.log 2>&1 &
+```
+
+Inventaire de `~/.config/hypr/` relevé avant (`find … | sort`), rejoué après
+chaque étape : **identique à l'octet près à la fin**, aucun fichier laissé.
+
+### 18.3 Résultats
+
+| # | Ce qui est lancé | `~/.config/hypr` | Ce que le log dit | `misc:disable_hyprland_logo` |
+|---|---|---|---|---|
+| réf. | `Hyprland -c …/hyprland.lua` | lua seul | `Config is explicit` + `Config is lua, loading lua mgr` | `true` (défaut Eschaton) |
+| 1 | `Hyprland` **sans `-c`** | lua seul | `[cfg] Regular config at …/hyprland.lua` + `[cfg] Using lua config found at …` | **`true`** |
+| 2 | `Hyprland` **sans `-c`** | lua **+ un `hyprland.conf` leurre** posé exprès (`disable_hyprland_logo = false`, `kb_layout = us`) | idem — `Using lua config found at …/hyprland.lua` | **`true`** |
+| 3 | `Hyprland` sans `-c`, `HOME` vierge | rien | `WARN: No config file found; attempting to generate.` puis `Using lua config found at …` | `false` |
+| 4 | **`start-hyprland` sans `-- -c`** (la vraie forme de production, amputée) | lua seul | `[cfg] Regular config at …/hyprland.lua` + `Using lua config found at …` | **`true`** |
+
+Le cas 4 est celui que le critère décrit : `start-hyprland` sans son `-- -c`
+exécute `Hyprland --watchdog-fd 4`, et cette instance **charge quand même**
+`~/.config/hypr/hyprland.lua`, défauts Eschaton compris.
+
+Trois constats en découlent :
+
+1. **La phrase de la spec est fausse sur Hyprland 0.56.1.** Sans `-c`, la
+   découverte automatique trouve `hyprland.lua` dans `~/.config/hypr/` et la
+   charge. Le chemin de code diffère (`Regular config` au lieu de
+   `Config is either explicit or special`), le résultat non.
+2. **`hyprland.lua` gagne sur `hyprland.conf`** (cas 2). Un `hyprland.conf`
+   égaré ne détourne pas la configuration ; l'hypothèse inverse, qui aurait pu
+   justifier la phrase, ne tient pas non plus.
+3. **Le fichier auto-généré est un `.lua`, pas un `.conf`** (cas 3) : sur un
+   compte vierge, 0.56.1 écrit `~/.config/hypr/hyprland.lua`
+   (`hl.config({ autogenerated = true })`, 364 lignes) et non l'ancien
+   `hyprland.conf` hyprlang. La migration amont est plus avancée que la veille
+   ne le supposait.
+
+Un seul écart de comportement subsiste entre les instances jetables et la
+référence : le clavier (`English (US)` contre `French`). Il ne vient pas de
+`-c` mais de `XKB_DEFAULT_LAYOUT`, que ces lancements retirent volontairement
+et que `/usr/bin/eschaton-session` pose. `input:kb_layout` vaut `""` des deux
+côtés — c'est bien l'environnement de session, et lui seul, qui décide de la
+disposition.
+
+### 18.4 Ce que le `-c` vaut réellement
+
+Pas « la différence entre chargé et ignoré » — mais l'**explicite** :
+`eschaton-session` nomme le fichier qu'il veut, indépendamment de l'ordre de
+découverte d'Hyprland, lequel a déjà changé une fois (le `.lua` généré par
+défaut en est la preuve) et peut rechanger d'ici la suppression d'hyprlang en
+0.57. Le garder coûte huit caractères ; s'en remettre à la découverte
+reviendrait à parier sur une heuristique amont non contractuelle. **L'invariant
+reste donc en vigueur — mais sa justification, dans la spec comme dans le
+commentaire d'`eschaton-session`, devait être corrigée : elle décrivait un
+comportement qui n'existe pas.**
+
+### 18.5 Nettoyage
+
+Instances jetables tuées, répertoires `/run/user/1000/hypr/<sig>` correspondants
+supprimés, `hyprland.conf` leurre retiré, `HOME` de test effacé. Vérifications
+finales : un seul `Hyprland` en vie (`-c …/hyprland.lua`), une seule signature
+sous `/run/user/1000/hypr/`, `diff` de l'inventaire de `~/.config/hypr` vide,
+`dms.service` toujours `active`, pastilles et fond d'écran inchangés à la
+capture.

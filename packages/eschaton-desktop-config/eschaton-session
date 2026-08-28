@@ -10,7 +10,18 @@
 #      session, pas mutation de config par paquet : aucun fichier de cet arbre
 #      n'appartient à pacman (spec Bureau §4.2) ;
 #   3. exec du lanceur amont avec l'invariant Lua : `start-hyprland -- -c <lua>`
-#      (spec Bureau §4.1 — sans `-c`, la config Lua est ignorée en silence).
+#      (spec Bureau §4.1).
+#
+# Sur le `-c`, une précision mesurée le 2026-08-28 (contre-test du critère §6.4,
+# tools/vm-dev.md §18) : ce commentaire affirmait que « sans -c, la config Lua
+# est ignorée en silence ». C'est FAUX sur Hyprland 0.56.1 — amputé de son
+# `-- -c`, start-hyprland charge quand même ~/.config/hypr/hyprland.lua par
+# découverte automatique, et le Lua l'emporte même sur un hyprland.conf présent.
+# Le `-c` ne garantit donc pas le chargement : il garantit QUEL fichier est
+# chargé, sans dépendre d'un ordre de découverte amont non contractuel — qui a
+# déjà changé une fois (un compte vierge se voit générer un hyprland.lua, plus
+# un hyprland.conf) et peut rechanger d'ici la suppression d'hyprlang en 0.57.
+# On le garde à ce titre.
 #
 # Le script ne doit JAMAIS refuser d'ouvrir la session : toute étape d'amorçage
 # qui échoue est journalisée sur stderr (donc dans le journal de greetd) et la
