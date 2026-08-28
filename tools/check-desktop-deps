@@ -53,14 +53,22 @@ extra_deps=()
 while (($# > 0)); do
 	case "$1" in
 	--pkgbuild)
-		pkgbuild="${2:?--pkgbuild attend un chemin}"
+		if (($# < 2)); then
+			echo "check-desktop-deps : --pkgbuild attend un chemin." >&2
+			exit 2
+		fi
+		pkgbuild="$2"
 		shift
 		;;
 	# Option de TEST : ajoute un nom à la liste vérifiée sans toucher au
 	# PKGBUILD. Sert à éprouver le chemin d'échec (`--extra-dep un-nom-bidon`)
 	# et le chemin des noms virtuels, sans avoir à casser un fichier du dépôt.
 	--extra-dep)
-		extra_deps+=("${2:?--extra-dep attend un nom de paquet}")
+		if (($# < 2)); then
+			echo "check-desktop-deps : --extra-dep attend un nom de paquet." >&2
+			exit 2
+		fi
+		extra_deps+=("$2")
 		shift
 		;;
 	-h | --help)
@@ -113,11 +121,16 @@ shopt -s nullglob
 for d in "$racine"/packages/*/ "$racine"/packages/vendor/*/; do
 	[[ -f "$d/PKGBUILD" ]] || continue
 	# shellcheck disable=SC2016  # évalué par le bash appelé
+	if ! noms_locaux=$(bash -c 'set -euo pipefail
+		. "$1"
+		[[ ${pkgname+defini} == defini ]] || { echo "pkgname absent de $1" >&2; exit 1; }
+		printf "%s\n" "${pkgname[@]}"' _ "$d/PKGBUILD"); then
+		echo "check-desktop-deps : lecture du paquet local impossible : $d/PKGBUILD" >&2
+		exit 2
+	fi
 	while IFS= read -r n; do
 		if [[ -n "$n" ]]; then locaux+=("$n"); fi
-	done < <(bash -c 'set -euo pipefail
-		. "$1"
-		printf "%s\n" "${pkgname[@]}"' _ "$d/PKGBUILD")
+	done <<<"$noms_locaux"
 done
 shopt -u nullglob
 
@@ -189,7 +202,7 @@ for repo in "${ALARM_REPOS[@]}"; do
 			-e "s/^(.*)-([^-]+)-([^-]+)-[^-]+\.pkg\.tar\.(xz|zst)\$/\1 \2-\3 $repo/" \
 			-e 's/%2B/+/g' -e 's/%3A/:/g' \
 			>"$tmp/$repo" || statut=$?
-	# Échec du téléchargement (pipefail rapporte le premier étage fautif, donc un
+	# Échec du téléchargement (pipefail rend la chaîne non nulle, donc un
 	# transfert coupé compte), ou sortie vide (miroir servi sans listage de
 	# répertoire). Sans ce garde-fou la méthode s'effondrerait en silence et
 	# déclarerait TOUTES les dépendances absentes d'ALARM : une avalanche de faux
@@ -224,13 +237,19 @@ for p in "${deps[@]}"; do
 	# `+` est un caractère légal d'un nom de paquet (`gtk+`) mais vaut « espace »
 	# dans une chaîne de requête : sans encodage, l'API chercherait « gtk ».
 	p_url="${p//+/%2B}"
-	json="$("${CURL[@]}" "$ARCH_API?name=$p_url")"
-	etat_arch="$(jq -r '
+	if ! json=$("${CURL[@]}" "$ARCH_API?name=$p_url"); then
+		printf 'check-desktop-deps : API Arch injoignable pour « %s » — verdict impossible.\n' "$p" >&2
+		exit 2
+	fi
+	if ! etat_arch=$(jq -r '
 		if (.results | length) == 0 then ""
 		else (.results[0] |
 			(if .epoch > 0 then "\(.epoch):" else "" end) +
 			"\(.pkgver)-\(.pkgrel) (\(.repo))")
-		end' <<<"$json")"
+		end' <<<"$json"); then
+		printf 'check-desktop-deps : réponse Arch invalide pour « %s » — verdict impossible.\n' "$p" >&2
+		exit 2
+	fi
 
 	# Nom VIRTUEL : `?name=` ne cherche que les pkgname et ne trouvera jamais une
 	# provision (`dms-shell-compositor`, `pipewire-session-manager`…). `?q=`, lui,
@@ -244,12 +263,20 @@ for p in "${deps[@]}"; do
 	# faux ROUGE, jamais faux vert. Le sens de l'erreur est le bon.
 	fournisseurs=()
 	if [[ -z "$etat_arch" ]]; then
-		while IFS= read -r f; do
-			if [[ -n "$f" ]]; then fournisseurs+=("$f"); fi
-		done < <("${CURL[@]}" "$ARCH_API?q=$p_url" | jq -r --arg p "$p" '
+		if ! json_fournisseurs=$("${CURL[@]}" "$ARCH_API?q=$p_url"); then
+			printf 'check-desktop-deps : recherche des fournisseurs Arch impossible pour « %s ».\n' "$p" >&2
+			exit 2
+		fi
+		if ! noms_fournisseurs=$(jq -r --arg p "$p" '
 			[.results[]
 			 | select(((.provides // []) | map(split("=")[0]) | index($p)) != null)
-			 | .pkgname] | unique | .[]')
+			 | .pkgname] | unique | .[]' <<<"$json_fournisseurs"); then
+			printf 'check-desktop-deps : réponse fournisseurs invalide pour « %s ».\n' "$p" >&2
+			exit 2
+		fi
+		while IFS= read -r f; do
+			if [[ -n "$f" ]]; then fournisseurs+=("$f"); fi
+		done <<<"$noms_fournisseurs"
 		if ((${#fournisseurs[@]} > 0)); then
 			etat_arch="virtuel < ${fournisseurs[*]}"
 		fi
