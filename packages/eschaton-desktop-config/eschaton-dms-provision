@@ -3,6 +3,10 @@ set -euo pipefail
 
 log() { printf 'eschaton-dms-provision: %s\n' "$*" >&2; }
 
+wallpaper_needs_seed() { # $1=wallpaper DMS courant $2=fichier Eschaton
+  [[ -z $1 && -r $2 ]]
+}
+
 add_eschaton_widgets() { # $1=settings.json
   local settings=$1 config_dir tmp mode
   config_dir=$(dirname "$settings")
@@ -24,7 +28,8 @@ add_eschaton_widgets() { # $1=settings.json
 }
 
 main() {
-  local config_dir settings stamp dms_bin position output
+  local config_dir settings stamp dms_bin position output current_wallpaper
+  local eschaton_wallpaper=/usr/share/backgrounds/eschaton/default.png
   local ready=false
   config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/DankMaterialShell"
   settings="$config_dir/settings.json"
@@ -69,6 +74,20 @@ main() {
     ;;
   esac
   "$dms_bin" ipc call bar setPosition index 0 "$position" >/dev/null
+
+  # Le wallpaper amont est un repli interne de DMS : `wallpaper get` rend une
+  # chaîne vide, même si une image DMS apparaît. Sur un compte neuf, poser le
+  # fond Eschaton via l'IPC officiel. Un choix utilisateur non vide gagne.
+  current_wallpaper=$("$dms_bin" ipc call wallpaper get) || {
+    log "lecture du fond d'écran DMS impossible"
+    return 1
+  }
+  if wallpaper_needs_seed "$current_wallpaper" "$eschaton_wallpaper"; then
+    "$dms_bin" ipc call wallpaper set "$eschaton_wallpaper" >/dev/null || {
+      log "activation du fond d'écran Eschaton impossible"
+      return 1
+    }
+  fi
 
   for _ in {1..10}; do
     if jq -e '.barConfigs[0].rightWidgets | arrays' "$settings" >/dev/null 2>&1; then

@@ -1,6 +1,6 @@
 pkgname=eschaton-dms-plugin-rollback
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Plugin DMS Eschaton : liste des snapshots et restauration système"
 arch=(any)
 license=(MIT)

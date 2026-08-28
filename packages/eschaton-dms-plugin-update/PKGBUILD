@@ -1,10 +1,10 @@
 pkgname=eschaton-dms-plugin-update
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Plugin DMS Eschaton : disponibilité et installation des mises à jour"
 arch=(any)
 license=(MIT)
-depends=(dms-shell pacman-contrib foot eschaton-base)
+depends=(dms-shell pacman-contrib fakeroot foot eschaton-base)
 source=(plugin.json EschatonUpdateWidget.qml EschatonUpdateSettings.qml LICENSE)
 sha256sums=(SKIP SKIP SKIP SKIP)
 

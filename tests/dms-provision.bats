@@ -23,3 +23,15 @@ setup() {
   run jq '[.barConfigs[0].rightWidgets[] | select(. == "eschatonRollback")] | length' "$settings"
   [ "$output" = "1" ]
 }
+
+@test "le wallpaper Eschaton ne remplace qu'un repli DMS vide" {
+  wallpaper="$BATS_TEST_TMPDIR/default.png"
+  : > "$wallpaper"
+
+  run wallpaper_needs_seed "" "$wallpaper"
+  [ "$status" -eq 0 ]
+  run wallpaper_needs_seed "/home/seylar/mon-fond.png" "$wallpaper"
+  [ "$status" -eq 1 ]
+  run wallpaper_needs_seed "" "$BATS_TEST_TMPDIR/absent.png"
+  [ "$status" -eq 1 ]
+}

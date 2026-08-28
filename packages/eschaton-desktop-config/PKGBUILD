@@ -1,6 +1,6 @@
 pkgname=eschaton-desktop-config
 pkgver=0.1.0
-pkgrel=4
+pkgrel=5
 pkgdesc="Configuration du bureau Eschaton : session Wayland, greetd, défauts Hyprland"
 arch=(any)
 license=(MIT)

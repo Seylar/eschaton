@@ -65,6 +65,11 @@ jobs:
         run: pacman -Syu --noconfirm --needed --disable-sandbox git
       - uses: actions/checkout@v7
       - name: build-repo
+        env:
+          # Ne jamais republier des octets différents sous le même pkgrel : les
+          # caches Pacman existants deviendraient invalides. Le build réutilise
+          # les archives dont le nom est déjà présent dans le dépôt public.
+          ESCHATON_REPO_SEED_URL: https://seylar.github.io/eschaton/x86_64
         run: repo/build-repo
       - uses: actions/upload-artifact@v7
         with:
@@ -82,6 +87,8 @@ jobs:
         run: pacman -Syu --noconfirm --needed --disable-sandbox git
       - uses: actions/checkout@v7
       - name: build-repo
+        env:
+          ESCHATON_REPO_SEED_URL: https://seylar.github.io/eschaton/aarch64
         run: repo/build-repo
       - uses: actions/upload-artifact@v7
         with:

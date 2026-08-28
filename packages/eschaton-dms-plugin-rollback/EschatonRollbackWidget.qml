@@ -136,6 +136,20 @@ PluginComponent {
                 : root.snapshots.length + " point(s) de restauration")
             showCloseButton: true
 
+            // La liste initiale est chargée avec le plugin, qui peut rester actif
+            // plusieurs heures. Un rollback ne doit jamais proposer silencieusement
+            // cette vue périmée : l'instanciation et chaque réouverture relisent
+            // Snapper. PluginPopout conserve en effet son Loader entre deux toggles.
+            Component.onCompleted: Qt.callLater(root.refresh)
+
+            Connections {
+                target: rollbackPopout.parentPopout
+                function onShouldBeVisibleChanged() {
+                    if (rollbackPopout.parentPopout?.shouldBeVisible)
+                        Qt.callLater(root.refresh);
+                }
+            }
+
             Column {
                 width: parent.width
                 spacing: Theme.spacingM

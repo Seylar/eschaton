@@ -1,6 +1,6 @@
 pkgname=eschaton-desktop
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Meta-paquet du bureau Eschaton : Hyprland + DMS, session graphique complète"
 arch=(any)
 license=(MIT)
@@ -54,20 +54,16 @@ depends=(
   # PAS de sélecteur de fichiers — `org.freedesktop.impl.portal.FileChooser` n'est
   # pas dans cette liste.
   #
-  # TROU CONNU, NON COMBLÉ ICI. Dans la pile déclarée par ce meta, AUCUN back-end
-  # ne fournit FileChooser : `portals/` ne contient que `hyprland.portal`. Et il
-  # n'y a même pas de repli déclaré — contrairement à ce que fait l'amont dans son
-  # dépôt, le paquet Arch/ALARM de xdg-desktop-portal-hyprland ne livre AUCUN
-  # fichier .conf (`pacman -Ql` : rien), et `xdg-desktop-portal` n'en livre pas non
-  # plus (rien qu'une page de manuel portals.conf(5)). Le candidat naturel est
-  # `xdg-desktop-portal-gtk` (1.15.3-1 des deux côtés), qui déclare bien
-  # `Interfaces=org.freedesktop.impl.portal.FileChooser` — mais il tire GTK dans
-  # une session qui n'en a pas, et l'effet réel du trou dépend des applications
-  # qu'on y met : une application GTK ou Qt non confinée ouvre sa propre boîte de
-  # dialogue sans passer par le portail. C'est donc un arbitrage à faire ÉCRAN EN
-  # MAIN, pas par précaution — il est inscrit à ce titre dans les arbitrages de la
-  # Task 7 (rapport Task 3 §6).
+  # Arbitrage Task 7, sur la VM installée par le flux réel : le seul fichier
+  # portals/*.portal était hyprland.portal et sa liste d'interfaces ne contient
+  # PAS FileChooser. Ce n'est pas acceptable pour un bureau généraliste : toute
+  # application sandboxée dépend du portail, même si une application GTK/Qt non
+  # confinée sait encore ouvrir sa propre boîte. Le backend GTK coûte une pile
+  # supplémentaire, mais il est l'implémentation amont disponible des interfaces
+  # génériques manquantes ; le laisser dehors fabriquerait un desktop incomplet
+  # pour économiser les mauvaises dépendances.
   xdg-desktop-portal-hyprland
+  xdg-desktop-portal-gtk
 
   # --- Session ----------------------------------------------------------------
   # greetd + auto-login. Sa configuration, son drop-in, son préset et le crochet
