@@ -1,0 +1,15 @@
+{
+  "id": "eschatonRollback",
+  "name": "Eschaton — Restauration",
+  "description": "Liste les snapshots Snapper et restaure le système depuis le shell.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "author": "Eschaton",
+  "type": "widget",
+  "capabilities": ["dankbar-widget"],
+  "component": "./EschatonRollbackWidget.qml",
+  "settings": "./EschatonRollbackSettings.qml",
+  "icon": "history",
+  "permissions": ["process", "settings_read"],
+  "requires_dms": ">=1.5.0"
+}

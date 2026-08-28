@@ -682,6 +682,19 @@ tools/vm-serial run "stty cols 200 rows 60"     # sinon les lignes se replient
 > `-n`, un cache expiré transforme la commande suivante en invite de mot de
 > passe silencieuse et le pilotage se désynchronise.
 
+**Codes de sortie** (durcissement du 2026-08-28, avant que le Bureau n'en
+dépende) : `run` rend **le code de retour de la commande dans la VM**, `wait`
+rend 0 si le motif est vu ; `124` = délai dépassé, `125` = dialogue série cassé
+(marqueur de fin vu, rc illisible), `2` = usage. Une commande qui échoue dans la
+VM fait donc échouer le client — enchaîner sous `set -e` devient sûr.
+
+**Fin de ligne** : quand le pty raccroche (`utmctl stop`, arrêt de la VM), le
+démon le journalise et **s'arrête de lui-même** après `VM_SERIAL_EOF_GRACE`
+secondes (10 par défaut). Avant ce correctif il tournait à **100 % de CPU
+indéfiniment et sans un mot** (mesuré : 4,98 s de CPU en 5 s). Voir le message
+`[vm-serial] EOF confirmé …` dans `console.log` : il faut alors redétecter le
+pty (`utmctl attach`) et relancer le démon.
+
 ### 9.3 Étape 1 — le sabotage
 
 ```console
@@ -1843,3 +1856,1085 @@ et non bloquants pour `v0.1.0` :
 - la **vérification elle-même**, qui reste une checklist manuelle en v0 : son
   automatisation sous QEMU est un chantier ultérieur, nommé par la spec §7.
 
+---
+
+## 12. Spike rendu bureau — Quickshell/DMS sous virtio-gpu (SP2, Task 1)
+
+Déroulé le 2026-08-28 sur la VM `eschaton-dev` (Socle 0.1.0-11), entièrement par
+la console série. Répond au risque n° 1 de la [spec Bureau](../docs/superpowers/specs/2026-08-28-bureau-design.md)
+et à son critère §6.1.
+
+### 12.1 Décision : **rendu OK, par repli logiciel côté compositeur seulement**
+
+| | |
+|---|---|
+| Hyprland 0.56.1 | démarre et tient, **à condition de `LIBGL_ALWAYS_SOFTWARE=1`** |
+| Quickshell 0.3.1 / DMS 1.5.3 | rend **sans aucune variable d'environnement** — Qt prend l'OpenGL de Mesa, qui retombe seul en logiciel |
+| Qualité | barre, Control Center, lanceur, fond d'écran, icônes SVG, texte antialiasé, traduction `fr` — **aucun artefact** |
+| Coût | 0 % de CPU au repos ; ~620 Mio de RSS pour le bureau (Hyprland 256 + `qs` 363) |
+
+Le repli du risque n° 1 de la spec est donc **partiellement nécessaire, et son
+nom est faux** (§12.6). Les tâches 7–9 peuvent tabler sur un bureau qui rend.
+
+### 12.2 Le fait qui explique tout : pas de virgl
+
+UTM n'expose **aucune accélération 3D** sur son `virtio-gpu-pci`. C'est visible
+dès le `dmesg` de l'invité, avant toute installation :
+
+```
+[drm] pci: virtio-gpu-pci detected at 0000:00:02.0
+[drm] features: -virgl +edid -resource_blob -host_visible
+[drm] number of cap sets: 0
+[drm] Initialized virtio_gpu 0.1.0 for 0000:00:02.0 on minor 0
+```
+
+`-virgl` + `cap sets: 0` = le noyau donne un KMS complet (modes, EDID, tampons
+« dumb ») mais **aucun contexte GL**. Mesa a bien `/usr/lib/dri/virtio_gpu_dri.so`,
+il ne peut simplement pas créer d'écran DRI dessus. Tout le reste en découle.
+
+### 12.3 La séquence qui marche (et les deux échecs qui la précèdent)
+
+**Échec 1 — depuis la console série, pas de siège.** Une session série n'a pas
+de VT, donc pas de *seat* logind :
+
+```console
+$ loginctl show-session … -p Type -p Seat -p VTNr
+VTNr=0
+Seat=
+Type=tty
+
+$ Hyprland -c ~/.config/hypr/hyprland.lua
+…
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  CBackend::create() failed!            → rc 134 (core dumped)
+```
+
+**Le contournement est `seatd`** — déjà installé (dépendance d'`aquamarine`,
+elle-même dépendance d'`hyprland`), lancé à la main, **sans rien modifier dans
+`/etc`** :
+
+```console
+$ sudo seatd -g wheel -l info &
+[INFO] [seatd/seat.c:48] Created VT-bound seat seat0
+[INFO] [seatd/seatd.c:194] seatd started
+$ ls -l /run/seatd.sock
+srwxrwx--- 1 root wheel 0 /run/seatd.sock          (seylar est dans wheel)
+```
+
+**Échec 2 — siège obtenu, mais EGL refuse.** `LIBSEAT_BACKEND=seatd Hyprland …`
+va bien plus loin (connecteur trouvé, allocateurs GBM et dumb créés) puis meurt
+sur EGL :
+
+```console
+DEBUG from aquamarine ]: drm: Description Red Hat, Inc. QEMU Monitor  (Virtual-1)
+DEBUG from aquamarine ]: drm: gpu /dev/dri/card0 becomes primary drm
+DEBUG from aquamarine ]: DRM Dumb: created a dumb allocator
+DEBUG from aquamarine ]: Created a GBM allocator with drm fd 25
+ERR   from aquamarine ]: [EGL] Command eglInitialize errored out with
+                         EGL_NOT_INITIALIZED (0x12289): DRI2: failed to create screen
+ERR   from aquamarine ]: [EGL] … DRI2: failed to load driver
+ERR   from aquamarine ]: CDRMRenderer: fail, eglInitialize failed
+ERR   from aquamarine ]: drm: onReady: no renderer for gl formats
+                                                 → rc 134 (core dumped)
+```
+
+**La séquence complète qui marche :**
+
+```bash
+sudo seatd -g wheel -l info &                     # une fois par démarrage
+LIBSEAT_BACKEND=seatd LIBGL_ALWAYS_SOFTWARE=1 \
+  Hyprland -c ~/.config/hypr/hyprland.lua &       # le compositeur
+export WAYLAND_DISPLAY=wayland-1 \
+       HYPRLAND_INSTANCE_SIGNATURE=$(basename $(ls -td /run/user/1000/hypr/*/ | head -1)) \
+       XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=Hyprland
+dms run &                                          # le shell — aucune variable GL
+```
+
+```console
+$ hyprctl monitors
+Monitor Virtual-1 (ID 0):
+	1280x800@74.99400 at 0x0
+	description: Red Hat Inc. QEMU Monitor
+	currentFormat: XRGB8888
+	directScanoutBlockedBy: user settings,software renders/cursors,missing candidate
+
+$ hyprctl layers
+	Layer level 0 (background):
+		Layer …: xywh: 0 0 1280 800, a: 1, namespace: quickshell, pid: 2866
+	Layer level 2 (top):
+		Layer …: xywh: 0 0 1280 64,  a: 1, namespace: dms:bar,   pid: 2866
+```
+
+Les deux surfaces layer-shell **portent un tampon** (`a: 1`) : Quickshell a bien
+peint, le compositeur affiche.
+
+> **Le repli n'est nécessaire que pour le compositeur.** Vérifié dans
+> `/proc/<pid>/environ` : `Hyprland` porte `LIBGL_ALWAYS_SOFTWARE=1`, `qs` ne
+> porte que le `QSG_USE_SIMPLE_ANIMATION_DRIVER=1` que DMS se met tout seul.
+> Les deux ont chargé `libgallium-26.2.1`. La raison est connue : sur une
+> plateforme GBM, Mesa **ne retombe pas** seul en logiciel ; sur la plateforme
+> Wayland d'un client, si.
+
+> **Bruit résiduel, non fatal.** Même en mode logiciel, aquamarine réessaie son
+> `CDRMRenderer` à chaque commit et échoue : `Can't create renderer, no matching
+> devices found` / `drm: initMgpu: no renderer` / `Failed to update renderer
+> state for Virtual-1 on applyCommit`. Le rendu, lui, passe par le renderer
+> OpenGL propre à Hyprland. Ne pas lire ces lignes comme une panne.
+
+### 12.4 Vie et stabilité (critères §6.1 de la spec Bureau)
+
+```console
+$ ps -eo pid,etime,%cpu,rss,comm | grep -E 'Hyprland|qs$|seatd'
+   2605       15:56  0.0    3748 seatd
+   2767       12:36  3.6  256104 Hyprland
+   4996       05:06  1.3  363516 qs
+
+$ top -bn2 -d 2                       → Hyprland 0,0 %  qs 0,0 %  (2e échantillon)
+                                        %Cpu(s): 99,8 id
+$ systemctl --failed --no-legend      → (vide)
+$ coredumpctl list --since '…09:30'   → No coredumps found.
+```
+
+Relevé à nouveau à la clôture du spike : `seatd 20:29`, `Hyprland 17:09`,
+`qs 09:39`, toujours aucun coredump et aucune unité en échec. Le critère
+« stable ≥ 5 min » est tenu trois fois plutôt qu'une. Les seuls coredumps du
+journal sont les **deux échecs de démarrage** du §12.3, à 09:22 et 09:28.
+
+Puis la session a **encaissé une suspension/reprise de l'hôte** sans rien
+perdre — voir l'encadré ci-dessous — et se relevait à `Hyprland 22:30`, les deux
+surfaces layer-shell toujours pourvues d'un tampon, l'IPC toujours répondante et
+une nouvelle capture 1280×800 produite après la reprise.
+
+> **Piège d'exploitation : UTM dit `stopped` pour une VM seulement suspendue.**
+> Constaté ici : `utmctl status` a rendu `stopped` alors que l'invité n'avait
+> jamais redémarré. `utmctl start` l'a **reprise**, pas rebootée — même pty,
+> même shell, même répertoire courant, mêmes PID, `who -b` inchangé
+> (`démarrage système 2026-08-28 06:21`, `uptime` continu). Corollaires :
+> - la règle du §5.3 (« seul un `utmctl stop`/`start` renumérote le pty ») ne
+>   vaut pas pour ce cas-là — le pty était identique après la reprise ;
+> - la console reste **muette** après la reprise tant qu'on ne lui envoie rien :
+>   il n'y a ni bannière ni invite de connexion à attendre. Un `wait "…login:"`
+>   expire pour de bon (rc 124). Envoyer un `raw 0a` et lire le `tail` est la
+>   façon de savoir où l'on est ;
+> - le démon série, lui, voit un EOF franc au moment de la suspension. C'est
+>   exactement le cas que le durcissement de `tools/vm-serial` traite : il l'a
+>   journalisé et s'est arrêté seul en 10 s au lieu de tourner à vide.
+
+> **Le processus s'appelle `qs`, pas `quickshell`.** `pgrep -a quickshell` ne
+> rend rien alors que le shell tourne — c'est `qs -p /usr/share/quickshell/dms`.
+> Piège de vérification pour les tâches 7–9.
+
+L'IPC répond (la commande du brief, `dms ipc call mpris getall`, n'existe pas —
+la bonne est `mpris list`) :
+
+```console
+$ dms ipc call control-center status   → hidden
+$ dms ipc call control-center open     → CONTROL_CENTER_OPEN_SUCCESS
+$ dms ipc call spotlight open          → SPOTLIGHT_OPEN_SUCCESS
+$ dms ipc                              → 30+ cibles : audio, bar, control-center,
+                                         dock, launcher, lock, night, systemupdater,
+                                         theme, tray, wallpaper, widget, …
+```
+
+> **DMS a déjà une cible IPC `systemupdater`** (`close, open, toggle,
+> updatestatus`). À examiner avant d'écrire `eschaton-dms-plugin-update` : le
+> plugin doit s'y brancher ou assumer de la doubler.
+
+### 12.5 Preuve visuelle et méthode de capture
+
+**La méthode retenue est la capture *dans l'invité*, pas depuis le Mac.** Elle
+ne demande aucune permission de l'hôte, produit exactement ce que le
+compositeur affiche, et se vérifie par empreinte :
+
+```bash
+# dans la VM (session Wayland exportée, cf. §12.3)
+dms screenshot output -o Virtual-1 -d ~ --filename spike.png \
+    --no-clipboard --no-notify
+sha256sum ~/spike.png
+
+# depuis le Mac — la ligne série suffit, l'image passe en base64
+tools/vm-serial run --timeout 300 "base64 -w 200 /home/seylar/spike.png" > b64.raw
+sed -e '1d' -e '$d' b64.raw | tr -d '\n ' | base64 -d > spike.png
+shasum -a 256 spike.png        # doit égaler le sha256sum de l'invité
+```
+
+Vérifié : 79 110 octets, `PNG image data, 1280 x 800`, empreinte identique des
+deux côtés (`dfcf2db8a16c…`). Une capture de ~80 Kio passe en quelques secondes.
+
+Ce que montrent les captures : barre supérieure (grille d'applications, pastille
+d'espace de travail, horloge, météo, tray, CPU/RAM, notifications, batterie,
+réseau, volume) ; Control Center complet (avatar, uptime, verrouillage/extinction/
+réglages, curseurs volume et luminosité, tuiles Ethernet « Connecté » / Bluetooth
+« Aucun adaptateur », bascules Mode nuit / Mode sombre) ; lanceur avec champ de
+recherche, liste d'applications avec icônes SVG, onglets *Tous / Applis /
+Fichiers / **Plugins*** ; fond d'écran DMS. Coins arrondis, translucidité,
+antialiasing et localisation `fr` corrects.
+
+**La capture de la fenêtre UTM depuis le Mac** est possible mais **exige une
+permission que l'agent ne peut pas s'accorder** :
+
+```bash
+osascript -e 'tell application "UTM" to activate' \
+          -e 'tell application "System Events" to tell process "UTM" to \
+              perform action "AXRaise" of window "eschaton-dev"'
+osascript -e 'tell application "System Events" to tell process "UTM" to \
+              get {position, size} of window "eschaton-dev"'
+#   → 140, 53, 1280, 840      (840 = 800 + la barre de titre)
+screencapture -x -R140,53,1280,840 utm-window.png
+#   → could not create image from rect
+```
+
+Le nom de la fenêtre est le nom de la VM (`window "eschaton-dev"` — attention,
+`window 1` échoue, UTM en ouvre plusieurs). `screencapture` échoue tant que
+**Réglages Système → Confidentialité et sécurité → Enregistrement de l'écran**
+n'autorise pas le terminal ; c'est un réglage de sécurité à accorder à la main.
+En pratique, la méthode de l'invité rend celle-ci inutile.
+
+### 12.6 Ce que le spike corrige dans la spec Bureau
+
+1. **`QSG_RHI_BACKEND=software` (risque n° 1) n'existe pas.** Qt 6.11 le refuse :
+
+   ```console
+   WARN: Unknown key "software" for QSG_RHI_BACKEND, falling back to default backend.
+   ```
+
+   La variable ne nomme que des back-ends RHI (`vulkan`, `metal`, `d3d11`,
+   `d3d12`, `opengl`, `null`) : aucun n'est un rendu logiciel. Le vrai repli
+   logiciel de Qt Quick est **`QT_QUICK_BACKEND=software`**
+   — testé, il démarre et rend barre et Control Center, **mais perd l'image du
+   fond d'écran** (le rendu logiciel ne fait pas les effets). C'est un repli
+   dégradé, pas l'égal du chemin nominal.
+
+   Chemin nominal mesuré (`QSG_INFO=1`, sans aucune variable) :
+
+   ```console
+   qt.scenegraph.general: Creating QRhi with backend OpenGL for window …
+     Prefer software device: 0
+   ```
+
+2. **`dms setup` possède `hyprland.lua`, pas seulement `~/.config/hypr/dms/`**
+   (risque n° 4 et règle de propriété §4.2). Mesuré en plantant des marqueurs
+   puis en relançant `dms setup` avec les mêmes réponses :
+
+   | Fichier | Sort |
+   |---|---|
+   | `~/.config/hypr/hyprland.lua` | **régénéré** — la ligne ajoutée a disparu ; l'ancien est sauvé sous `~/.config/hypr/.dms-backups/<horodatage>/hyprland.lua`, et l'outil annonce « Successfully merged existing monitor sections » |
+   | `~/.config/hypr/dms/binds.lua` | **« Updated »** — réécrit sans condition |
+   | les six autres `dms/*.lua` | **« Skipping … (already exists) »** — le marqueur survit |
+   | `~/.config/hypr/eschaton.lua` (fichier étranger, hors `dms/`) | **intact** |
+
+   Conséquence pour la Task 3 : le `hyprland.lua` « de 3 lignes » posé par
+   `/etc/skel` **ne survit pas** à un `dms setup` ultérieur. Soit Eschaton ne
+   fait jamais tourner `dms setup` complet après le premier démarrage (et déploie
+   l'arbre `dms/` par les sous-commandes `dms setup binds|colors|layout|…`), soit
+   il assume que l'utilisateur qui le lance perd son point d'entrée — sauvegarde
+   à l'appui.
+
+3. **`start-hyprland` est le lanceur amont, et il sait passer `-c`.** Hyprland
+   avertit à chaque démarrage direct (« Hyprland is being launched without
+   start-hyprland. This is highly advised against »), et l'entrée de session
+   packagée (`/usr/share/wayland-sessions/hyprland.desktop`) lance
+   `/usr/bin/start-hyprland`. L'invariant §4.1 s'écrit donc
+   **`start-hyprland -- -c <chemin du lua>`** (« Any arguments after -- are
+   passed to Hyprland »). Au passage, l'invariant est confirmé côté Hyprland :
+   `[cfg] Config is lua, loading lua mgr`.
+
+4. **`dms doctor` ne reconnaît pas Eschaton** : `Operating System ····· Eschaton
+   (not supported by dms setup)`. Conséquence directe de l'`ID=eschaton`
+   d'`eschaton-branding`. Le déploiement des configs a fonctionné quand même,
+   mais l'amont ne le garantit pas.
+
+### 12.7 Ce que `dms setup` crée exactement (interface des Tasks 2 et 3)
+
+`dms setup` est **interactif** et demande, dans l'ordre : outil d'élévation
+(`sudo` / `run0` — court-circuitable par `DMS_PRIVESC=`), compositeur
+(Niri / Hyprland / Mango / None), terminal (Ghostty / Kitty / Alacritty / None),
+gestion de session systemd (oui / non), puis confirmation. Il **ajoute d'office
+l'utilisateur au groupe `input`** (« for Caps Lock OSD support »), et **déploie
+une configuration Ghostty même quand on répond « None »** au terminal.
+
+Sur un `$HOME` vierge, il crée exactement :
+
+```
+~/.config/hypr/hyprland.lua          2990 o, 90 l.  point d'entrée, généré par DMS
+~/.config/hypr/dms/binds.lua         9762 o, 171 l. réécrit à chaque setup
+~/.config/hypr/dms/binds-user.lua      85 o         surcharges utilisateur (préservé)
+~/.config/hypr/dms/colors.lua         614 o         « Auto-generated … do not edit »
+~/.config/hypr/dms/cursor.lua          71 o
+~/.config/hypr/dms/layout.lua         170 o         « Auto-generated by DMS »
+~/.config/hypr/dms/outputs.lua        215 o         hl.monitor({ output = "", mode = "preferred", … })
+~/.config/hypr/dms/windowrules.lua     66 o
+~/.config/ghostty/config                            (même si terminal = None)
+~/.config/ghostty/themes/dankcolors
+~/.config/hypr/.dms-backups/<horodatage>/           (créé seulement au 2e passage)
+```
+
+`hyprland.lua` n'est **pas** un fichier de 3 lignes : c'est la configuration DMS
+complète (entrées, général, décoration, animations, règles de fenêtres), encadrée
+par des marqueurs `-- DMS_STARTUP_BEGIN` / `-- DMS_STARTUP_END` autour du bloc
+d'amorçage, et terminée par les `require` :
+
+```lua
+hl.config({ autogenerated = false })
+-- DMS_STARTUP_BEGIN
+hl.on("hyprland.start", function()
+	hl.exec_cmd("dbus-update-activation-environment --systemd --all")
+	hl.exec_cmd("systemctl --user start hyprland-session.target")
+end)
+-- DMS_STARTUP_END
+…
+require("dms.colors") ; require("dms.outputs") ; require("dms.layout")
+require("dms.cursor") ; require("dms.binds")   ; require("dms.binds-user")
+require("dms.windowrules")
+```
+
+La racine des `require` est `~/.config/hypr/` (`dms.colors` → `dms/colors.lua`).
+
+Côté systemd, `dms-shell` fournit `/usr/lib/systemd/user/dms.service` :
+`Type=dbus`, `BusName=org.freedesktop.Notifications`,
+`ExecStart=/usr/bin/dms run --session`, `WantedBy=graphical-session.target`,
+`Requisite=graphical-session.target`. Il est **désactivé** par défaut
+(`dms doctor` : `dms.service ·········· Disabled`) — c'est à
+`eschaton-desktop-config` de le mettre au préset. `dms-shell-hyprland` est un
+méta-paquet **sans aucun fichier**.
+
+### 12.8 Inventaire réellement installé (Task 3 : depends à figer)
+
+Installation : `pacman -S --noconfirm hyprland dms-shell-hyprland pipewire
+wireplumber xdg-desktop-portal-hyprland ttf-jetbrains-mono-nerd noto-fonts`
+→ **112 paquets, 230,47 Mio téléchargés, 1 165,86 Mio installés, en moins de
+45 s** (snapshots snapper pre/post compris).
+
+```
+hyprland 0.56.1-3                 dms-shell 1.5.3-1
+dms-shell-hyprland 1.5.3-1        quickshell 0.3.1-1
+dgop 0.2.3-1                      pipewire 1:1.6.8-1
+wireplumber 0.5.15-1              xdg-desktop-portal-hyprland 1.4.1-1
+xdg-desktop-portal 1.22.1-2       ttf-jetbrains-mono-nerd 3.5.1-2
+noto-fonts 1:2026.08.01-1         mesa 1:26.2.1-1
+qt6-base 6.11.2-2                 qt6-declarative 6.11.2-1
+qt6-wayland 6.11.2-1              qt6-svg 6.11.2-1
+seatd 0.9.3-1                     aquamarine 0.14.0-2
+wayland 1.26.0-1                  libinput 1.31.3-1
+hyprlang 0.6.8-5                  hyprutils 0.14.1-1
+hyprgraphics 0.5.1-4              hyprcursor 0.1.13-7
+xorg-xwayland 24.1.13-1           llvm-libs 22.1.8-2
+```
+
+Tout vient de `extra` d'ALARM, en binaires natifs aarch64 — la veille est
+confirmée, aucun vendoring. `hyprland` est bien en **0.56.1** côté ALARM (Arch
+est en 0.56.2) : le risque n° 7 de la spec est réel mais sans effet ici.
+`seatd` arrive par `aquamarine` (dépendance d'`hyprland`), il n'a pas à être
+ajouté aux `depends` d'`eschaton-desktop`. `hyprlang` est encore là malgré la
+config Lua.
+
+> **Amendement du 2026-08-28 (Task 3) : cet inventaire est INCOMPLET côté audio.**
+> Le paquet `pipewire` ne livre aucun greffon SPA audio — son
+> `/usr/lib/spa-0.2/` ne contient que `control`, `support`, `v4l2`,
+> `videoconvert` et `videotestsrc`. `libspa-alsa.so` et les codecs bluez5 sont
+> dans **`pipewire-audio`**, que ni `pipewire` ni `wireplumber` ne tirent
+> (relevé dans les index des deux dépôts, `pacman -Fl`). La pile du spike était
+> donc **dépourvue de tout back-end de périphérique audio** : « Aucun appareil de
+> sortie » n'est pas seulement le `-audio none` de QEMU (§12.9, §13.3), c'est
+> aussi — et de façon certaine, elle, puisqu'elle vaut sur toute machine — le jeu
+> de paquets. `eschaton-desktop` ajoute `pipewire-pulse`, qui tire
+> `pipewire-audio` en dépendance dure et fournit en plus le serveur d'API
+> PulseAudio des applications ordinaires (le Control Center de DMS, lui, parle le
+> protocole PipeWire natif par Quickshell). Reste à vérifier sur matériel réel
+> (Task 7) : la VM ne peut pas trancher, elle n'a pas de carte son.
+
+### 12.9 Ce que le spike n'a pas prouvé
+
+- **Cinq « Quickshell Features » manquent au build `extra` — dont `Polkit`.**
+  C'est l'inconnue la plus lourde léguée à la Task 2. `dms doctor` sur
+  `quickshell 0.3.1-1` (`Quickshell 0.3.1 (revision , distributed by Arch
+  Linux)`) rend :
+
+  ```
+    Quickshell Features
+      ○ Polkit ··············· Not available
+      ○ IdleMonitor ·········· Not available
+      ○ IdleInhibitor ········ Not available
+      ○ ShortcutInhibitor ···· Not available
+      ○ BackgroundBlur ······· Not available
+    …
+    → Consider using quickshell-git for full feature support
+  ```
+
+  Celle qui compte est **`Polkit`** : la spec Bureau §3 fait passer la
+  restauration d'`eschaton-dms-plugin-rollback` « derrière polkit », et le
+  conseil de l'amont — `quickshell-git` — est précisément ce que le risque n° 2
+  interdit (politique « `extra/dms-shell` uniquement, jamais `-git` »). Les deux
+  contraintes se croisent ici, et le spike ne les départage pas.
+
+  **Attention, deux mesures qui ne se contredisent pas** : le *module Quickshell*
+  `Polkit` est absent du build `extra`, alors que le *service DMS* du même nom
+  démarre sans erreur (`INFO qml: [PolkitService:25] Initialized successfully`).
+  Ce sont deux objets distincts. À trancher en Task 2, avant d'écrire le
+  plugin : **lequel des deux un plugin DMS utilise réellement pour élever un
+  privilège**, et si c'est le module Quickshell, quelle surface le remplace
+  (helper dédié, `pkexec`, ou service D-Bus maison — les trois options que la
+  spec §3 laisse ouvertes au risque n° 5). Les quatre autres features absentes
+  ne touchent aucun livrable v1 : `IdleMonitor`/`IdleInhibitor` et
+  `ShortcutInhibitor` relèvent du verrouillage et des raccourcis globaux (non-buts
+  v1, différés SP4), `BackgroundBlur` est cosmétique — et de toute façon
+  indisponible sans GL matériel (§12.2).
+
+  > **Réserve levée le 2026-08-28 (Task 2) : la ligne `Polkit ····· Not
+  > available` de `dms doctor` est un FAUX NÉGATIF.** Le greffon
+  > `Quickshell_Services_PolkitPlugin` est bien lié dans le `/usr/bin/qs` du
+  > paquet `extra`, l'agent d'authentification de DMS s'enregistre auprès de
+  > `polkitd`, affiche sa modale, et une élévation aboutit :
+  >
+  > ```console
+  > $ pkcheck --action-id org.freedesktop.policykit.exec --process $$ --allow-user-interaction
+  > polkit\56result=auth_admin          → rc=0 après saisie du mot de passe
+  > $ pkcheck --action-id org.freedesktop.policykit.exec --process $$
+  > Authorization requires authentication and -u wasn't passed.   → rc=2
+  > ```
+  >
+  > Mesuré deux fois : dans la session du spike, puis dans la vraie session
+  > greetd du §13. Mauvais mot de passe → la modale reste ouverte, `pkcheck` ne
+  > rend jamais la main (rc=124 par `timeout`). Détail et captures dans le
+  > rapport de la Task 2. **Aucun agent polkit externe n'est à empaqueter.**
+- **Le chemin de session réel.** Le spike démarre le compositeur depuis la
+  console série avec `seatd` lancé à la main. Le produit passera par
+  `greetd` + auto-login sur une VT, donc par le *seat* de logind : la question
+  du siège disparaît, mais `LIBGL_ALWAYS_SOFTWARE=1` devra être posé dans
+  l'entrée de session (Task 3). Rien ici ne dit *où* le poser.
+- **Le rendu sur le vrai balayage écran.** Toutes les preuves passent par
+  `wlr-screencopy` (`dms screenshot`), pas par une photo du framebuffer. Le
+  scan-out direct est de toute façon désactivé (`directScanoutBlockedBy:
+  software renders/cursors`).
+- **PipeWire.** `ERROR quickshell.service.pipewire.loop: Failed to connect
+  pipewire context. Errno: 112` — les unités utilisateur de PipeWire ne sont pas
+  démarrées. Le Control Center affiche « Aucun appareil de sortie ». À traiter
+  par le préset d'`eschaton-desktop-config`, pas un problème de rendu.
+  *(Réserve levée le 2026-08-28, Task 2 : c'était l'absence de session logind,
+  pas une affaire de préset — voir §13.3. Sous greetd, `pipewire.service` et
+  `wireplumber.service` sont `running` sans rien ajouter.)*
+- **La fluidité au sens strict.** Aucun compteur d'images mesuré : le constat est
+  « 0 % de CPU au repos, ouverture du Control Center et du lanceur immédiates,
+  aucun artefact sur les captures ».
+- **Le matériel réel.** Sur une machine avec un GPU, `LIBGL_ALWAYS_SOFTWARE=1`
+  serait une régression. Ce n'est pas un réglage à mettre dans le paquet — c'est
+  un réglage de la **VM**.
+- **La VM n'est pas nettoyée** (choix assumé du brief) : la pile est installée à
+  la main, `seatd` tourne hors systemd, `~/.config/hypr` contient l'arbre de
+  `dms setup` et un `eschaton.lua` de test. La Task 7 réinstallera par paquets
+  par-dessus.
+
+## 13. Session graphique par greetd (SP2, Task 2)
+
+Déroulé le 2026-08-28, toujours par la console série, avec le paquet
+`eschaton-desktop-config` 0.1.0-1 installé par `pacman -U`. La VM démarre
+désormais **sur le bureau** : `greetd` est `enabled` (le préset livré par le
+paquet a été appliqué par `systemctl preset greetd.service`, qui crée
+`/etc/systemd/system/display-manager.service → greetd.service`).
+
+### 13.1 Le réglage de banc d'essai à poser dans le greetd de LA VM
+
+`LIBGL_ALWAYS_SOFTWARE=1` reste indispensable au compositeur sous ce
+virtio-gpu sans virgl (§12.2), et reste **hors des paquets** : sur une machine
+dotée d'un GPU ce serait une régression. La VM le porte dans son propre
+`/etc/eschaton/greetd.toml` — un fichier `backup=`, donc modifiable sans que
+pacman le reprenne :
+
+```toml
+[initial_session]
+command = "env LIBGL_ALWAYS_SOFTWARE=1 /usr/bin/eschaton-session"
+user = "seylar"
+```
+
+(Le fichier livré par le paquet dit `command = "/usr/bin/eschaton-session"` ;
+seul le préfixe `env …` est propre à la VM. greetd n'a pas de section
+d'environnement : `env` est le moyen d'en poser un.) Après édition :
+
+```bash
+sudo rm -f /run/greetd.run && sudo systemctl restart greetd
+```
+
+### 13.2 Piège : l'auto-login ne rejoue pas sur un simple `restart`
+
+greetd retient dans `/run/greetd.run` qu'il a déjà déroulé son
+`[initial_session]`. Un `systemctl restart greetd` **retombe donc sur
+`[default_session]`** — chez nous `agreety`, le greeter texte, qui attend un
+identifiant sur le VT 1 et ne peut pas être piloté depuis la console série. Le
+journal le dit franchement :
+
+```console
+$ journalctl -u greetd | tail -3
+greetd[18587]: pam_unix(greetd:session): session opened for user greeter(uid=965)
+```
+
+Supprimer `/run/greetd.run` avant le `restart` (ou redémarrer la VM) rejoue
+l'auto-login :
+
+```console
+$ sudo rm -f /run/greetd.run && sudo systemctl restart greetd && sleep 18
+$ ps -eo user,pid,comm | grep -E 'Hyprland|qs'
+seylar     19382 Hyprland
+seylar     19410 qs
+```
+
+### 13.3 Ce que la session greetd corrige par rapport au spike
+
+- **Plus de `seatd` à la main.** greetd ouvre une session logind sur `seat0` /
+  `tty1` ; `libseat` prend son back-end logind tout seul. Le contournement du
+  §12.3 n'a plus lieu d'être.
+- **PipeWire démarre.** La réserve du §12.9 tombe : dans une vraie session
+  utilisateur, `pipewire.service` et `wireplumber.service` sont `running` sans
+  qu'aucun préset d'Eschaton n'ait à s'en mêler. Le Control Center affiche
+  toujours « Aucun appareil de sortie » — attribué ici au matériel de la VM
+  (`-audio none` côté QEMU). *(Amendé le 2026-08-28, Task 3 : ce n'est pas la
+  seule cause, ni même la cause suffisante — la pile installée n'avait aucun
+  back-end de périphérique audio, `pipewire-audio` n'étant tiré ni par
+  `pipewire` ni par `wireplumber`. Voir l'amendement du §12.8.)*
+- **`dms.service` est supervisé.** `hyprland-session.target` (livré par
+  `eschaton-desktop-config`, absent du paquet `hyprland`) tire
+  `graphical-session.target`, qui tire `dms.service`.
+
+```console
+$ systemctl --user is-active hyprland-session.target graphical-session.target dms.service
+active
+active
+active
+```
+
+> **Lecture trompeuse.** `systemctl --user list-unit-files dms.service` affiche
+> encore `disabled` : cet état ne regarde que les liens de `/etc/systemd/user/`
+> et de `~/.config/systemd/user/`, pas le `.wants` livré sous `/usr/lib`. La
+> preuve utile est
+> `systemctl --user show graphical-session.target -p Wants` → `dms.service`.
+
+### 13.4 Injecter des frappes dans la session (utile aux tâches 7–9)
+
+Aucun dispatcher `hyprctl` ne tape du texte, et `sendshortcut` ne vise que des
+fenêtres — pas les surfaces layer-shell de DMS, qui portent justement les
+modales. Le moyen qui marche est **`wtype`** (`extra`, 0.4-2, protocole
+virtual-keyboard) :
+
+```bash
+export WAYLAND_DISPLAY=wayland-1
+wtype 'eschaton'; wtype -k Return
+```
+
+C'est un outil de banc d'essai, installé à la main dans la VM ; il n'entre dans
+les `depends` d'aucun paquet Eschaton.
+
+### 13.5 Pousser un fichier de l'hôte vers la VM par la console série
+
+Le §12.5 documente le sens invité → hôte. Le sens inverse tient au même
+procédé, en morceaux (la ligne canonique de l'invité plafonne à 4096 caractères ;
+480 passent sans risque) :
+
+```bash
+b64=$(base64 < paquet.pkg.tar.xz | tr -d '\n')
+# pour chaque morceau de 480 caractères :
+tools/vm-serial send "printf %s '<morceau>' >> /tmp/paquet.b64"
+tools/vm-serial run "base64 -d /tmp/paquet.b64 > /tmp/paquet.pkg.tar.xz; sha256sum /tmp/paquet.pkg.tar.xz"
+```
+
+8 Kio (24 morceaux) passent en une vingtaine de secondes, empreinte vérifiée
+des deux côtés.
+
+## 14. Plugins DMS Eschaton (SP2, Tasks 5–6)
+
+### 14.1 Motifs amont retenus
+
+L'étude a été faite contre DMS **1.5.3**, sa documentation versionnée et ses
+plugins first-party, pas contre `master`. Le squelette utile est : imports
+`Quickshell.Io` et `qs.Common`/`qs.Services`/`qs.Widgets`/`qs.Modules.Plugins`,
+racine `PluginComponent`, commandes par `Process` + `StdioCollector`, widget de
+barre déclaré par la capability `dankbar-widget`. Les plugins système vivent
+sous `/etc/xdg/quickshell/dms-plugins/<id>/`.
+
+La présence du répertoire ne vaut ni activation ni placement. Le provisioning
+initial utilise donc l'IPC DMS pour activer `eschatonUpdate` et
+`eschatonRollback`, matérialise `barConfigs[0]`, puis ajoute les deux ids à
+`rightWidgets` sans déplacer ni dupliquer les widgets existants. Le service est
+tiré **après** `dms.service` par un drop-in du service DMS ; le premier montage
+sur `graphical-session.target` fabriquait un cycle réel et a été supprimé.
+
+Le chargement et le hot reload ont été prouvés dans la VM :
+
+```console
+$ dms ipc call plugins reload eschatonUpdate
+PLUGIN_RELOAD_SUCCESS: eschatonUpdate
+
+$ journalctl --user -u dms | grep 'Plugin loaded: eschaton'
+DankBar: Plugin loaded: eschatonUpdate
+DankBar: Plugin loaded: eschatonRollback
+```
+
+### 14.2 Update
+
+Le widget compte les lignes de `checkupdates`, affiche un badge, et ouvre Foot
+pour exécuter `/usr/bin/eschaton-update --yes` avec une sortie visible. Deux
+défauts n'apparaissaient qu'en conditions réelles :
+
+- `checkupdates` exige `fakeroot`, qui n'est pas une dépendance dure de
+  `pacman-contrib` sur cette image ; le plugin le déclare désormais ;
+- le badge pouvait rester périmé jusqu'au prochain timer ; ouvrir le popout
+  déclenche désormais une nouvelle lecture.
+
+### 14.3 Rollback et privilèges
+
+Le widget lit `snapper --jsonout --config root list`, trie les numéros du plus
+récent au plus ancien, demande deux clics, puis lance exactement :
+
+```text
+pkexec /usr/bin/eschaton-rollback --yes NUMÉRO
+```
+
+La surface privilégiée se réduit à une action, `org.eschaton.rollback`, annotée
+sur l'exécutable exact ci-dessus. Snapper n'a aucune action polkit propre à
+ouvrir : sa lecture passe par ses réglages `ALLOW_GROUPS`. La liste étant
+conservée en mémoire par le plugin, elle pouvait devenir périmée ; chaque
+ouverture relit maintenant Snapper.
+
+**Amendement du 2026-08-28 (revue de vague, `eschaton-dms-plugin-rollback`
+0.1.0-3) : la règle `rules.d` est supprimée.** Les versions 0.1.0-1 et -2
+livraient `/usr/share/polkit-1/rules.d/50-eschaton-rollback.rules`, qui rendait
+`polkit.Result.YES` — donc **aucune authentification** — pour un sujet local,
+actif et membre de `wheel`. Deux objections l'ont emporté : le reste d'Eschaton
+demande le mot de passe (les sudoers livrés n'ont pas de `NOPASSWD`, et le
+widget de mise à jour hérite de cette invite), et l'opération sans invite était
+justement la plus destructive des deux. Le paquet ne livre plus que l'action ;
+ce sont ses `<defaults>` (`allow_any=no`, `allow_inactive=no`,
+`allow_active=auth_admin`, sans `_keep`) qui décident.
+
+### 14.4 Preuve en VM de la modale (vague de fix pré-tag, 2026-08-28)
+
+Le retrait de la règle a été mesuré **après** publication, sur la VM de
+dogfooding mise à jour depuis le dépôt Pages — pas sur un paquet local :
+
+```console
+$ sudo pacman -Syu --noconfirm
+Paquets (1) eschaton-dms-plugin-rollback-0.1.0-3
+…
+(1/2) Performing snapper pre snapshots …  ==> root: 47
+(2/2) Performing snapper post snapshots … ==> root: 48
+
+$ ls /usr/share/polkit-1/rules.d/ | grep -i eschaton || echo 'AUCUNE regle eschaton'
+AUCUNE regle eschaton
+
+$ pacman -Ql eschaton-dms-plugin-rollback | grep polkit
+… /usr/share/polkit-1/actions/org.eschaton.rollback.policy
+
+$ jq -c '.permissions' /etc/xdg/quickshell/dms-plugins/eschatonRollback/plugin.json
+["process","settings_read"]
+```
+
+Le plugin se recharge sans `settings_write` (`PLUGIN_RELOAD_SUCCESS`, puis
+`status = loaded`, et `DankBar: Plugin loaded: eschatonRollback` au journal).
+
+**Parcours widget — la modale apparaît.** Popout ouvert à la souris, snapshot 48
+sélectionné, bouton passé à « Confirmer le rollback 48 », deuxième clic :
+
+```console
+$ ps -eo pid,args | grep pkexec
+   8812 /usr/bin/pkexec /usr/bin/eschaton-rollback --yes 48   ← en attente
+```
+
+La fenêtre `com.danklinux.dms` « Authentification » s'affiche, titrée
+**« Authentification requise »**, avec le `<message>` exact de la policy —
+« Une autorisation est requise pour restaurer Eschaton. » —, un champ
+*Password:* et deux boutons *Annuler* / *S'authentifier*. Sous la règle
+supprimée, ce même parcours élevait sans rien demander (§16.2). Modale annulée :
+
+```console
+août 28 15:13:03 eschaton pkexec[8812]: seylar: Error executing command as another user:
+    Request dismissed [USER=root] [TTY=unknown] [CWD=/home/seylar]
+    [COMMAND=/usr/bin/eschaton-rollback --yes 48]
+
+$ sudo btrfs subvolume list / | grep avant-rollback
+ID 266 gen 665 top level 5 path @.avant-rollback-20260828-132747   ← l'ancien, inchangé
+$ findmnt -no SOURCE /
+/dev/vda2[/@]
+```
+
+**Même chose en ligne de commande, dans la session graphique.** Un script lancé
+par `hyprctl dispatch 'hl.dsp.exec_cmd("…")'` (donc rattaché à la session
+`seat0`, pas à la console série) :
+
+```console
+$ pkexec /usr/bin/eschaton-rollback --yes 1     # modale → Annuler
+rc=126
+Error executing command as another user: Request dismissed
+```
+
+**Matrice `pkcheck`, mesurée dans la même session :**
+
+```console
+$ pkaction --action-id org.eschaton.rollback --verbose
+  implicit any:      no
+  implicit inactive: no
+  implicit active:   auth_admin
+  annotation:        org.freedesktop.policykit.exec.path -> /usr/bin/eschaton-rollback
+
+$ pkcheck --action-id org.eschaton.rollback --process $$
+polkit\56result=auth_admin
+Authorization requires authentication and -u wasn't passed.     → rc=2
+```
+
+Précision (corrigée en re-revue) : `pkaction` rapporte les autorisations
+implicites du fichier `.policy` — les `rules.d` ne s'y voient pas (elles ne
+jouent qu'à `CheckAuthorization`). La preuve que plus aucune règle ne
+court-circuite l'authentification est ailleurs, et triple : `rules.d` du
+paquet vide (`pacman -Ql`), `pkcheck --process` → `auth_admin`/rc=2 (lui
+passe par les règles), et la modale réelle avec rc=126 à l'annulation.
+
+> **Piloter la souris de la session : le dispatcher a changé de syntaxe.**
+> `hyprctl dispatch movecursor X Y` — la forme notée au §13.4 — est refusée par
+> une configuration **Lua** : `hyprctl` compile son argument en Lua et rend
+> `[string "return hl.dispatch(movecursor 1252 24)"]:1: ')' expected`. La forme
+> qui marche est `hyprctl dispatch 'hl.dsp.cursor.move({ x = 1252, y = 24 })'`,
+> qui positionne au pixel près (vérifié par `hyprctl cursorpos`) — là où
+> `ydotool mousemove --absolute` sature en bord d'écran et où les déplacements
+> relatifs sont déformés par l'accélération du pointeur. Le clic, lui, reste
+> `ydotool click 0xC0` (démon lancé par
+> `sudo systemd-run --unit=… /usr/bin/ydotoold --socket-path=/run/user/1000/.ydotool_socket
+> --socket-perm=0660 --socket-own=1000:1000`). Sur une fenêtre flottante qui
+> vient d'apparaître, **le premier clic ne fait que la focaliser** : il en faut
+> un second, et un micro-déplacement du curseur avant le clic pour que Qt
+> réévalue le survol.
+
+> **Défaut découvert ici, résolu au §14.5 : les pastilles des plugins
+> n'étaient pas rendues après un démarrage frais.** Au démarrage du 14:19, le
+> service de provisioning était
+> `active (exited)`, `dms ipc call plugins status` rend `loaded` pour les deux
+> plugins, `plugin_settings.json` porte `true,true` et `barConfigs[0].rightWidgets` (dans `settings.json` — l'état FICHIER ; l'IPC mémoire, lui, ne les portait pas, cf. §14.5)
+> contient bien `eschatonUpdate` et `eschatonRollback` — mais la capture d'écran
+> prise à 15:04, soit 45 minutes après le démarrage, ne montre que les sept
+> pastilles first-party : aucune des deux pastilles Eschaton. Un
+> `systemctl --user restart dms.service` les fait apparaître immédiatement et
+> définitivement. La capture `bureau-final-published.png` (14:04, avant ce
+> redémarrage) montre la même absence. Les assertions de la Task 7 portaient sur
+> `settings.json` et sur l'IPC, jamais sur le rendu : **l'état de la barre après
+> un démarrage frais n'était donc pas prouvé.** Le pkgrel 9 corrige ce défaut et
+> les deux boots avec le paquet publié du §14.5 ajoutent enfin la preuve visuelle
+> qui manquait.
+
+### 14.5 Recomposition initiale de DankBar — cause et preuve publiée
+
+La piste du scan tardif des plugins était fausse. Une reproduction contrôlée
+avec le pkgrel 8 a donné simultanément, après reboot :
+
+```text
+settings.json rightWidgets = eschatonUpdate + eschatonRollback
+IPC settings barConfigs    = aucun des deux ids
+plugins status             = loaded,loaded
+capture                     = aucune pastille Eschaton
+```
+
+DMS 1.5.3 charge `settings.json` dans `SettingsData.qml` au démarrage et ne le
+surveille pas ensuite. Or le helper doit modifier directement
+`barConfigs[0].rightWidgets` : l'IPC générique `settings set` refuse les objets
+et tableaux, et la cible `bar` n'expose aucune commande d'ajout de widget. Le
+fichier était donc juste, mais la composition de barre déjà en mémoire restait
+ancienne. Recharger les plugins ne recrée pas les `WidgetHost` absents ; un
+restart de DMS, lui, relit la liste complète et fait apparaître les pastilles.
+
+`eschaton-desktop-config` 0.1.0-9 ajoute le contournement minimal : après avoir
+persisté les widgets, stabilisé les deux plugins à `loaded` et posé le stamp, le
+helper compare le `barConfigs` IPC à l'état voulu. S'il manque les ids, il lance
+exactement `systemctl --user --no-block restart dms.service`. Le `--no-block`
+est nécessaire car le oneshot est ordonné après DMS ; attendre le restart
+créerait un blocage. Si une version amont apprend à recharger le tableau,
+l'égalité IPC évitera automatiquement ce restart.
+
+Le correctif `4c91c79` a passé `shellcheck`, les **35 tests Bats**, le build
+local du paquet et la CI bi-architecture complète `33179345260`. La preuve
+ci-dessous utilise l'archive **réellement téléchargée depuis Pages**, pas le
+build local :
+
+```console
+$ pacman -Q eschaton-desktop-config
+eschaton-desktop-config 0.1.0-9
+$ sha256sum /tmp/eschaton-published/eschaton-desktop-config-0.1.0-9-any.pkg.tar.xz
+fe81891f33aafa68e07c64afae33c494317dc1dd871b91d0d9f4e6ea2322d076  …
+```
+
+**Boot 1 — provisioning entièrement frais.** Avant reboot : plugins désactivés,
+ids retirés du fichier et stamp absent. Sans aucune action graphique ou restart
+manuel après reboot :
+
+```text
+service=active
+file_widgets=1,1
+memory_widgets=1,1
+plugin_status=loaded,loaded
+plugin_settings=true,true
+stamp=present
+16:27:32 plugins activés ; redémarrage DMS demandé pour recomposer la barre
+```
+
+La capture `bureau-published9-boot1.png`, SHA-256
+`ce747dd1c0d528ef59c571f85a3bf04319cf668fb0de38d209527d0f7e3cfbc5`,
+montre les deux pastilles à droite de la barre : téléchargement pour update,
+historique circulaire pour rollback.
+
+**Boot 2 — reboot consécutif ordinaire, sans réinitialiser le stamp ni les
+réglages.** La session retrouve `file_widgets=1,1`, `memory_widgets=1,1`,
+`loaded,loaded` et `true,true`. Le journal contient zéro message de recomposition :
+le oneshot commence et finit à 16:29:26, le stamp rend le restart inutile. La
+capture `bureau-published9-boot2.png`, SHA-256
+`66a33b665b5e8e2a8d972bf5104d834d46c38283efb4eca866e1170de131de28`,
+montre encore les deux pastilles.
+
+**Checklist durable pour tout futur test de provisioning frais :** ne plus
+conclure sur les seuls fichiers et IPC. Exiger ensemble un exemplaire de chaque
+id dans `settings.json`, un exemplaire dans le `barConfigs` IPC, deux statuts
+`loaded`, puis une capture d'écran inspectée où les deux pastilles sont
+réellement visibles. Rejouer un second reboot sans retirer le stamp.
+
+## 15. Installation réelle du Bureau (SP2, Task 7)
+
+Installation effectuée depuis le dépôt Pages sur la VM Socle existante :
+
+```console
+$ sudo pacman -Syu --noconfirm
+$ sudo pacman -S --noconfirm eschaton-desktop
+$ sudo reboot
+
+$ loginctl list-sessions --no-legend
+1 1000 seylar seat0 ... user tty1 ...
+
+$ systemctl --user is-active dms.service eschaton-dms-provision.service
+active
+active
+```
+
+Le premier essai du provisioning a révélé un cycle
+`graphical-session.target → eschaton-dms-provision → dms.service →
+graphical-session.target`. Après passage au drop-in `dms.service.d`, le reboot
+rend le helper `active (exited)` avec `status=0/SUCCESS`, sans commande manuelle.
+
+Un test final plus strict a ensuite retiré le stamp, désactivé les deux plugins
+et ôté leurs ids de la barre avant reboot. Il a révélé deux courses successives :
+
+1. `plugins list` répond avant que la cible IPC `bar` n'existe, et DMS rend alors
+   `Target not found.` avec un code de sortie nul. Depuis `desktop-config`
+   pkgrel 6, le helper attend une position valide
+   (`top|bottom|left|right`), puis la cible wallpaper, avec des délais bornés ;
+2. `plugins enable` peut lui aussi rendre un succès pendant l'initialisation,
+   puis le chargement tardif de `plugin_settings.json` rétablit `false`. Le
+   pkgrel 7 active donc les plugins seulement après matérialisation de la barre
+   et n'écrit le stamp qu'après deux observations `loaded` consécutives pour
+   chacun.
+
+Les deux réponses trompeuses ont un test Bats dédié. La validation décisive a
+été rejouée avec le **pkgrel 7 réellement publié** par la CI `33169926022`, pas
+avec l'archive locale : plugins à `false`, widgets retirés, stamp absent, puis
+reboot complet. Résultat :
+
+```console
+$ pacman -Q eschaton-desktop-config
+eschaton-desktop-config 0.1.0-7
+
+$ # assertions groupées après le reboot
+service=active
+update_status=loaded
+rollback_status=loaded
+plugin_settings=true,true
+widget_counts=1,1
+stamp=present
+wallpaper=/usr/share/backgrounds/eschaton/default.png
+
+$ # nouvelle lecture 15 s après la fin du oneshot
+delayed_status=loaded,loaded
+delayed_settings=[true,true]
+```
+
+Le journal borne aussi le comportement : démarrage du provisioning à
+14:19:17, succès à 14:19:24, sans intervention manuelle.
+
+Arbitrages écran en main :
+
+- **wallpaper** : `dms ipc call wallpaper get` est vide quand DMS montre son
+  repli interne. Le helper pose alors
+  `/usr/share/backgrounds/eschaton/default.png` par l'IPC officiel. Toute valeur
+  utilisateur non vide est préservée ; le dégradé ne montre pas de banding
+  gênant sur la capture 1280×800 ;
+- **FileChooser** : la VM n'avait que `hyprland.portal`, qui ne déclare que
+  Screenshot, ScreenCast, GlobalShortcuts et InputCapture. Le meta ajoute
+  `xdg-desktop-portal-gtk` pour les interfaces génériques manquantes ;
+- **emoji** : aucune glyphe tofu observée, donc `noto-fonts-emoji` reste absent ;
+- **audio** : PipeWire, WirePlumber et le socket Pulse sont actifs. La VM a été
+  créée avec `-audio none`, donc l'absence de périphérique ne permet pas un test
+  matériel et ne justifie pas de prétendre le contraire ;
+- **clavier Lua** : `hyprctl getoption input:kb_layout` reste vide parce que la
+  valeur française est injectée par `XKB_DEFAULT_LAYOUT=fr` dans l'environnement
+  du processus Hyprland. L'exemple du plan qui attendait littéralement `fr` dans
+  `getoption` était donc faux ; la config Lua et la disposition effective sont
+  néanmoins bien celles attendues.
+
+## 16. Tests réels Update et Rollback (SP2, Task 8)
+
+### 16.1 Mise à jour depuis le widget
+
+Une version ancienne de `eschaton-base` a d'abord été installée pour provoquer
+une mise à jour. Elle contenait précisément l'ancien bug qui transmettait
+`--yes` à Pacman et ne pouvait donc pas s'auto-réparer. Le test honnête a consisté
+à remettre le helper corrigé, puis à laisser `eschaton-desktop-config 3 → 4`
+comme mise à jour réelle. Depuis le bouton **Installer** :
+
+```console
+$ pgrep -af 'pacman -Syu'
+5282 sudo pacman -Syu --noconfirm
+
+$ pacman -Q eschaton-base eschaton-desktop-config
+eschaton-base 0.1.0-12
+eschaton-desktop-config 0.1.0-4
+
+$ snapper -c root list | tail -n 2
+32 │ pre  │ ... │ pacman -Syu --noconfirm
+33 │ post │ 32  │ ... │ eschaton-desktop-config
+```
+
+`/boot/limine.conf` contient également les entrées 32 et 33, avec
+`rootflags=subvol=/@snapshots/<n>/snapshot` et les copies de kernel historisées.
+
+Ce test a trouvé un défaut du dépôt : la CI reconstruisait et republiait des
+octets différents sous le même `pkgrel`, invalidant les caches Pacman. Le build
+charge désormais l'index public, vérifie les SHA-256 et réutilise octet pour
+octet toute archive dont le nom de version existe déjà. Un bump reste nécessaire
+pour publier un contenu différent.
+
+### 16.2 Rollback depuis le widget
+
+Après l'update :
+
+```console
+$ touch ~/MARQUEUR-AVANT
+$ sudo pacman -S --noconfirm cowsay
+# snapshots 34 (pre) et 35 (post)
+```
+
+Le widget a été actualisé, le snapshot **33** sélectionné, puis le bouton
+**Confirmer le rollback 33** actionné. Polkit a autorisé l'action sans rien
+demander — *c'était la règle `rules.d` du paquet 0.1.0-2, supprimée depuis :
+le même parcours ouvre désormais une modale d'authentification (§14.3, preuve
+au §14.4)* — et l'ancien état a été conservé sous
+`@.avant-rollback-20260828-132747`. Après reboot :
+
+```console
+$ pacman -Q cowsay
+erreur : le paquet « cowsay » n'a pas été trouvé
+$ test -f ~/MARQUEUR-AVANT && echo HOME_MARKER_PRESENT
+HOME_MARKER_PRESENT
+$ findmnt -no SOURCE /
+/dev/vda2[/@]
+```
+
+Le rollback système, l'exclusion de `/home`, le redémarrage sur la racine
+normale et la conservation récupérable de l'ancien sous-volume sont donc tous
+prouvés par le parcours du widget.
+
+## 17. État de clôture SP2 (Task 9)
+
+Les six critères de la spec Bureau §6 sont déroulés dans sa table §6.1. La
+réserve honnête est matérielle : une VM sans périphérique audio ne peut pas
+prouver la sélection d'une sortie réelle. Elle prouve la pile et l'interface,
+pas le matériel. Les parcours différenciants update et rollback, eux, ont été
+faits à la souris et vérifiés côté système.
+
+La branche de livraison reste `bureau`. Ni fusion vers `main` ni tag `v0.2.0`
+ne sont faits avant la revue Claude demandée ; les créer maintenant transformerait
+un jalon de review en fausse release finale.
+
+## 18. Contre-test de l'invariant Lua (spec §6.4, 2026-08-28)
+
+Le second membre du critère §6.4 — « suppression volontaire du `-c` → constat
+que la config serait ignorée » — n'avait jamais été joué. Il l'a été ici, et
+**il réfute l'énoncé du critère.**
+
+### 18.1 Ce que la spec affirmait
+
+Spec Bureau §4.1 : « sans `-c`, la config Lua est ignorée silencieusement ».
+`eschaton-session` porte la même phrase en commentaire. La session de référence
+lance bien la forme complète :
+
+```console
+$ tr '\0' ' ' < /proc/$(pgrep -x Hyprland)/cmdline
+Hyprland --watchdog-fd 4 -c /home/seylar/.config/hypr/hyprland.lua
+
+$ grep '\[cfg\]' /run/user/1000/hypr/*/hyprland.log
+[cfg] Config is either explicit or special.
+[cfg] Config is lua, loading lua mgr
+```
+
+### 18.2 Méthode — instances jetables, session de référence intacte
+
+Hyprland 0.56.1 accepte de tourner **imbriqué** dans la session existante : il
+suffit de lui donner `WAYLAND_DISPLAY=wayland-1`, de lui retirer
+`HYPRLAND_INSTANCE_SIGNATURE` (il en tire une nouvelle) et de garder le repli
+logiciel de cette VM. Ni le siège, ni le DRM, ni la session greetd ne sont
+touchés — la session de référence a survécu aux cinq lancements.
+
+```bash
+env -u HYPRLAND_INSTANCE_SIGNATURE -u XKB_DEFAULT_LAYOUT \
+    XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 \
+    LIBGL_ALWAYS_SOFTWARE=1 setsid nohup Hyprland > /tmp/ct.log 2>&1 &
+```
+
+Inventaire de `~/.config/hypr/` relevé avant (`find … | sort`), rejoué après
+chaque étape : **identique à l'octet près à la fin**, aucun fichier laissé.
+
+### 18.3 Résultats
+
+| # | Ce qui est lancé | `~/.config/hypr` | Ce que le log dit | `misc:disable_hyprland_logo` |
+|---|---|---|---|---|
+| réf. | `Hyprland -c …/hyprland.lua` | lua seul | `Config is explicit` + `Config is lua, loading lua mgr` | `true` (défaut Eschaton) |
+| 1 | `Hyprland` **sans `-c`** | lua seul | `[cfg] Regular config at …/hyprland.lua` + `[cfg] Using lua config found at …` | **`true`** |
+| 2 | `Hyprland` **sans `-c`** | lua **+ un `hyprland.conf` leurre** posé exprès (`disable_hyprland_logo = false`, `kb_layout = us`) | idem — `Using lua config found at …/hyprland.lua` | **`true`** |
+| 3 | `Hyprland` sans `-c`, `HOME` vierge | rien | `WARN: No config file found; attempting to generate.` puis `Using lua config found at …` | `false` |
+| 4 | **`start-hyprland` sans `-- -c`** (la vraie forme de production, amputée) | lua seul | `[cfg] Regular config at …/hyprland.lua` + `Using lua config found at …` | **`true`** |
+
+Le cas 4 est celui que le critère décrit : `start-hyprland` sans son `-- -c`
+exécute `Hyprland --watchdog-fd 4`, et cette instance **charge quand même**
+`~/.config/hypr/hyprland.lua`, défauts Eschaton compris.
+
+Trois constats en découlent :
+
+1. **La phrase de la spec est fausse sur Hyprland 0.56.1.** Sans `-c`, la
+   découverte automatique trouve `hyprland.lua` dans `~/.config/hypr/` et la
+   charge. Le chemin de code diffère (`Regular config` au lieu de
+   `Config is either explicit or special`), le résultat non.
+2. **`hyprland.lua` gagne sur `hyprland.conf`** (cas 2). Un `hyprland.conf`
+   égaré ne détourne pas la configuration ; l'hypothèse inverse, qui aurait pu
+   justifier la phrase, ne tient pas non plus.
+3. **Le fichier auto-généré est un `.lua`, pas un `.conf`** (cas 3) : sur un
+   compte vierge, 0.56.1 écrit `~/.config/hypr/hyprland.lua`
+   (`hl.config({ autogenerated = true })`, 364 lignes) et non l'ancien
+   `hyprland.conf` hyprlang. La migration amont est plus avancée que la veille
+   ne le supposait.
+
+Un seul écart de comportement subsiste entre les instances jetables et la
+référence : le clavier (`English (US)` contre `French`). Il ne vient pas de
+`-c` mais de `XKB_DEFAULT_LAYOUT`, que ces lancements retirent volontairement
+et que `/usr/bin/eschaton-session` pose. `input:kb_layout` vaut `""` des deux
+côtés — c'est bien l'environnement de session, et lui seul, qui décide de la
+disposition.
+
+### 18.4 Ce que le `-c` vaut réellement
+
+Pas « la différence entre chargé et ignoré » — mais l'**explicite** :
+`eschaton-session` nomme le fichier qu'il veut, indépendamment de l'ordre de
+découverte d'Hyprland, lequel a déjà changé une fois (le `.lua` généré par
+défaut en est la preuve) et peut rechanger d'ici la suppression d'hyprlang en
+0.57. Le garder coûte huit caractères ; s'en remettre à la découverte
+reviendrait à parier sur une heuristique amont non contractuelle. **L'invariant
+reste donc en vigueur — mais sa justification, dans la spec comme dans le
+commentaire d'`eschaton-session`, devait être corrigée : elle décrivait un
+comportement qui n'existe pas.**
+
+### 18.5 Nettoyage
+
+Instances jetables tuées, répertoires `/run/user/1000/hypr/<sig>` correspondants
+supprimés, `hyprland.conf` leurre retiré, `HOME` de test effacé. Vérifications
+finales : un seul `Hyprland` en vie (`-c …/hyprland.lua`), une seule signature
+sous `/run/user/1000/hypr/`, `diff` de l'inventaire de `~/.config/hypr` vide,
+`dms.service` toujours `active`, pastilles et fond d'écran inchangés à la
+capture.

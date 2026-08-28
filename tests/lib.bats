@@ -23,6 +23,13 @@ setup() { source "$BATS_TEST_DIRNAME/../packages/eschaton-base/lib.sh"; }
   [ "$status" -eq 1 ]
 }
 
+@test "pacman_update_args traduit l'interface Eschaton --yes" {
+  run pacman_update_args --yes --needed
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "--noconfirm" ]
+  [ "${lines[1]}" = "--needed" ]
+}
+
 # Les quatre suivantes couvrent le remplacement de sous-volume d'eschaton-rollback
 # (Task 10) : `snapper rollback` refuse la disposition Arch d'Eschaton, la
 # restauration se fait donc en manipulant les noms de sous-volumes à la main.
@@ -70,4 +77,17 @@ setup() { source "$BATS_TEST_DIRNAME/../packages/eschaton-base/lib.sh"; }
   run valid_snapshot_number 0;      [ "$status" -eq 1 ]
   run valid_snapshot_number "";     [ "$status" -eq 1 ]
   run valid_snapshot_number "3; rm -rf /"; [ "$status" -eq 1 ]
+}
+
+@test "noninteractive_rollback_number n'accepte que --yes suivi d'un snapshot" {
+  run noninteractive_rollback_number --yes 42
+  [ "$status" -eq 0 ]
+  [ "$output" = "42" ]
+
+  run noninteractive_rollback_number --yes 0
+  [ "$status" -eq 1 ]
+  run noninteractive_rollback_number --force 42
+  [ "$status" -eq 1 ]
+  run noninteractive_rollback_number --yes 42 extra
+  [ "$status" -eq 1 ]
 }

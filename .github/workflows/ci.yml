@@ -5,6 +5,15 @@ on:
     branches: [main]
   pull_request:
 
+# La sérialisation doit couvrir les BUILDS, pas seulement le déploiement Pages.
+# Sinon deux pushes rapprochés peuvent chacun reconstruire un nouveau pkgrel
+# avant que le premier soit public, puis publier deux archives différentes sous
+# le même nom. Les PR attendent aussi leur tour : ce dépôt privilégie
+# l'immutabilité de ses paquets à quelques minutes de latence CI.
+concurrency:
+  group: eschaton-repository-ci
+  cancel-in-progress: false
+
 # Permissions minimales par défaut ; seul le job de publication est élevé.
 permissions:
   contents: read
@@ -14,18 +23,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: sudo apt-get update && sudo apt-get install -y shellcheck bats
+      # curl et jq sont préinstallés sur ubuntu-latest ; on les demande quand même
+      # pour que la dépendance de `tools/check-desktop-deps` soit lisible ici.
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck bats curl jq
       - name: shellcheck
         run: |
           shellcheck \
             tools/sandbox tools/build-pkg tools/provision-gradle \
+            tools/check-desktop-deps \
             repo/build-repo \
             installer/lib.sh installer/eschaton-install \
             packages/eschaton-base/lib.sh \
             packages/eschaton-base/eschaton-update \
-            packages/eschaton-base/eschaton-rollback
+            packages/eschaton-base/eschaton-rollback \
+            packages/eschaton-desktop-config/eschaton-session \
+            packages/eschaton-desktop-config/eschaton-dms-provision
+      # `tools/vm-serial` n'a pas d'extension .py et échappe à tout linter de
+      # paquet : au minimum, il doit compiler.
+      - name: py_compile
+        run: python3 -m py_compile tools/vm-serial
       - name: bats
         run: bats tests/
+      # En dernier : seule étape du job qui sorte sur le réseau. `eschaton-desktop`
+      # est un meta `arch=(any)` — les deux jobs de build le construisent à
+      # l'identique et ne prouvent RIEN sur la disponibilité de ce qu'il déclare.
+      # Une dépendance présente côté Arch x86_64 mais absente d'ALARM aarch64
+      # passerait toute la CI pour n'échouer qu'à l'installation sur la machine
+      # ARM ; cette garde la rattrape ici.
+      - name: dépendances du bureau (Arch x86_64 + ALARM aarch64)
+        run: tools/check-desktop-deps
 
   # Un job de build PAR ARCHITECTURE (spec §5.3) : les deux paquets vendorés
   # sont des binaires natifs compilés par GraalVM, pas des paquets `any`. Chaque
@@ -46,6 +72,11 @@ jobs:
         run: pacman -Syu --noconfirm --needed --disable-sandbox git
       - uses: actions/checkout@v7
       - name: build-repo
+        env:
+          # Ne jamais republier des octets différents sous le même pkgrel : les
+          # caches Pacman existants deviendraient invalides. Le build réutilise
+          # les archives dont le nom est déjà présent dans le dépôt public.
+          ESCHATON_REPO_SEED_URL: https://seylar.github.io/eschaton/x86_64
         run: repo/build-repo
       - uses: actions/upload-artifact@v7
         with:
@@ -63,6 +94,8 @@ jobs:
         run: pacman -Syu --noconfirm --needed --disable-sandbox git
       - uses: actions/checkout@v7
       - name: build-repo
+        env:
+          ESCHATON_REPO_SEED_URL: https://seylar.github.io/eschaton/aarch64
         run: repo/build-repo
       - uses: actions/upload-artifact@v7
         with:
@@ -75,8 +108,7 @@ jobs:
   # choisit le répertoire.
   publish:
     needs: [build-x86_64, build-aarch64]
-    # La branche de travail publie aussi : les Tasks 9 et 11 installent depuis
-    # Publication depuis `main` uniquement (bascule post-fusion du Socle).
+    # Publication depuis `main` uniquement (bascule post-fusion SP2).
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

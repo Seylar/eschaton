@@ -1,0 +1,65 @@
+pkgname=eschaton-desktop-config
+pkgver=0.1.0
+pkgrel=9
+pkgdesc="Configuration du bureau Eschaton : session Wayland, greetd, défauts Hyprland"
+arch=(any)
+license=(MIT)
+depends=(hyprland dms-shell greetd bash jq)
+backup=(etc/eschaton/greetd.toml)
+# LICENSE est un lien symbolique vers le LICENSE partagé à la racine du dépôt :
+# makepkg réduit toute entrée locale de source=() à son basename, donc un chemin
+# relatif ("../../LICENSE") n'est pas résoluble — cf. get_filename() dans
+# /usr/share/makepkg/util/source.sh. Le lien conserve une licence unique.
+source=(eschaton-session eschaton.desktop greetd-eschaton.toml greetd-override.conf
+        51-eschaton-desktop.preset 90-eschaton-desktop-preset.hook hyprland-session.target
+        eschaton-dms-provision eschaton-dms-provision.service eschaton-dms-provision.conf
+        seed-hyprland.lua eschaton-defaults.lua LICENSE)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+
+package() {
+  install -Dm755 eschaton-session "$pkgdir/usr/bin/eschaton-session"
+  install -Dm644 eschaton.desktop "$pkgdir/usr/share/wayland-sessions/eschaton.desktop"
+
+  # Défauts Eschaton : pacman-owned, jamais copiés sous ~/.config/hypr/, qui
+  # appartient en entier à DMS (spec Bureau §4.2). `seed-hyprland.lua` est la
+  # seule exception, et c'est eschaton-session qui la copie — une fois, au
+  # premier démarrage d'un compte, sous le nom que l'invariant §4.1 impose.
+  install -Dm644 seed-hyprland.lua "$pkgdir/usr/share/eschaton/hypr/hyprland.lua"
+  install -Dm644 eschaton-defaults.lua "$pkgdir/usr/share/eschaton/hypr/eschaton-defaults.lua"
+
+  install -Dm644 greetd-eschaton.toml "$pkgdir/etc/eschaton/greetd.toml"
+  install -Dm644 greetd-override.conf "$pkgdir/usr/lib/systemd/system/greetd.service.d/eschaton.conf"
+  install -Dm644 51-eschaton-desktop.preset "$pkgdir/usr/lib/systemd/system-preset/51-eschaton-desktop.preset"
+  # …et le crochet qui l'applique. Sans lui le préset ci-dessus n'est lu par
+  # personne sur un système déjà installé : rien dans pacman ni dans Arch ne joue
+  # `systemctl preset`. Numéroté 90- pour passer APRÈS les crochets systemd d'Arch
+  # (20- à 35-), donc après le `daemon-reload`. Voir l'en-tête du fichier pour la
+  # justification complète (exception versionnée de la spec du Socle §3).
+  install -Dm644 90-eschaton-desktop-preset.hook "$pkgdir/usr/share/libalpm/hooks/90-eschaton-desktop-preset.hook"
+
+  # dms.service est livré `disabled` par dms-shell alors que son préset vaut
+  # `enabled` : rien n'applique jamais les présets d'unités UTILISATEUR
+  # (`systemctl preset-all` est de portée système, et aucun hook alpm d'Arch ne
+  # fait l'équivalent en --global). Un fichier dans /usr/lib/systemd/user-preset/
+  # ne servirait donc à rien. Le lien .wants, lui, crée la dépendance pour tout
+  # compte dès l'installation, sans rien écrire dans /etc — motif des paquets qui
+  # livrent une unité utilisateur active par défaut. Attention à la lecture :
+  # `systemctl --user list-unit-files dms.service` continue d'afficher
+  # « disabled » (cet état ne regarde que les liens de /etc et de ~/.config) ;
+  # la preuve est du côté de la cible —
+  # `systemctl --user show graphical-session.target -p Wants` → `dms.service`.
+  install -Dm644 hyprland-session.target "$pkgdir/usr/lib/systemd/user/hyprland-session.target"
+  install -d "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants"
+  ln -s ../dms.service "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/dms.service"
+
+  # Les plugins système sont découverts mais désactivés par défaut dans DMS.
+  # Ce oneshot les active et les ajoute une fois à la barre via l'IPC officiel,
+  # sans réécrire ensuite les choix de l'utilisateur.
+  install -Dm755 eschaton-dms-provision "$pkgdir/usr/lib/eschaton/eschaton-dms-provision"
+  install -Dm644 eschaton-dms-provision.service \
+    "$pkgdir/usr/lib/systemd/user/eschaton-dms-provision.service"
+  install -Dm644 eschaton-dms-provision.conf \
+    "$pkgdir/usr/lib/systemd/user/dms.service.d/eschaton-dms-provision.conf"
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

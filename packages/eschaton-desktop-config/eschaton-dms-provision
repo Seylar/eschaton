@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+log() { printf 'eschaton-dms-provision: %s\n' "$*" >&2; }
+
+wallpaper_needs_seed() { # $1=wallpaper DMS courant $2=fichier Eschaton
+  [[ -z $1 && -r $2 ]]
+}
+
+valid_bar_position() { # $1=réponse de `bar getPosition`
+  case ${1:-} in top|bottom|left|right) return 0 ;; *) return 1 ;; esac
+}
+
+wait_for_bar_position() { # $1=dms $2=essais (défaut 45) $3=délai (défaut 1)
+  local dms_bin=$1 attempts=${2:-45} delay=${3:-1} position
+  local attempt
+  for ((attempt = 0; attempt < attempts; attempt++)); do
+    position=$("$dms_bin" ipc call bar getPosition index 0 2>/dev/null) || position=
+    if valid_bar_position "$position"; then
+      printf '%s\n' "$position"
+      return 0
+    fi
+    sleep "$delay"
+  done
+  return 1
+}
+
+wait_for_wallpaper() { # $1=dms $2=essais (défaut 15) $3=délai (défaut 1)
+  local dms_bin=$1 attempts=${2:-15} delay=${3:-1} wallpaper
+  local attempt
+  for ((attempt = 0; attempt < attempts; attempt++)); do
+    if wallpaper=$("$dms_bin" ipc call wallpaper get 2>/dev/null) \
+      && [[ $wallpaper != "Target not found." ]]; then
+      printf '%s\n' "$wallpaper"
+      return 0
+    fi
+    sleep "$delay"
+  done
+  return 1
+}
+
+ensure_plugin_loaded() { # $1=dms $2=plugin $3=essais (défaut 15) $4=délai (défaut 1)
+  local dms_bin=$1 plugin=$2 attempts=${3:-15} delay=${4:-1}
+  local attempt output status consecutive=0
+  for ((attempt = 0; attempt < attempts; attempt++)); do
+    status=$("$dms_bin" ipc call plugins status "$plugin" 2>/dev/null) || status=
+    if [[ $status == loaded ]]; then
+      consecutive=$((consecutive + 1))
+      # Un succès isolé ne suffit pas : au démarrage, DMS peut encore recharger
+      # plugin_settings.json et annuler une activation acceptée trop tôt.
+      ((consecutive >= 2)) && return 0
+    else
+      consecutive=0
+      output=$("$dms_bin" ipc call plugins enable "$plugin" 2>&1) || \
+        log "activation de $plugin pas encore possible : $output"
+    fi
+    sleep "$delay"
+  done
+  return 1
+}
+
+dms_bar_has_eschaton_widgets() { # $1=dms
+  "$1" ipc call settings get barConfigs 2>/dev/null \
+    | jq -e '
+      .[0].rightWidgets as $widgets
+      | ($widgets | index("eschatonUpdate")) != null
+        and ($widgets | index("eschatonRollback")) != null
+    ' >/dev/null
+}
+
+request_dms_recompose() { # $1=systemctl
+  # Le provisioning est ordonné après dms.service. Attendre ici un restart
+  # créerait un deadlock avec cet ordre ; --no-block laisse systemd redémarrer
+  # DMS dès que le oneshot courant a rendu la main.
+  "$1" --user --no-block restart dms.service
+}
+
+add_eschaton_widgets() { # $1=settings.json
+  local settings=$1 config_dir tmp mode
+  config_dir=$(dirname "$settings")
+  tmp=$(mktemp "$config_dir/.settings.XXXXXX")
+  if ! jq '
+    .barConfigs[0].rightWidgets = (
+      (.barConfigs[0].rightWidgets // [])
+      | if index("eschatonUpdate") then . else . + ["eschatonUpdate"] end
+      | if index("eschatonRollback") then . else . + ["eschatonRollback"] end
+    )' "$settings" > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! mode=$(stat -c %a "$settings" 2>/dev/null); then
+    mode=$(stat -f %Lp "$settings")
+  fi
+  chmod "$mode" "$tmp"
+  mv "$tmp" "$settings"
+}
+
+main() {
+  local config_dir settings stamp dms_bin systemctl_bin position current_wallpaper
+  local eschaton_wallpaper=/usr/share/backgrounds/eschaton/default.png
+  local ready=false
+  config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/DankMaterialShell"
+  settings="$config_dir/settings.json"
+  stamp="$config_dir/.eschaton-plugins-provisioned"
+  dms_bin="${ESCHATON_DMS_BIN:-/usr/bin/dms}"
+  systemctl_bin="${ESCHATON_SYSTEMCTL_BIN:-/usr/bin/systemctl}"
+
+  [[ ! -e "$stamp" ]] || return 0
+  [[ -r "$settings" ]] || {
+    log "$settings est absent ; provisioning reporté à la prochaine session"
+    return 1
+  }
+
+  # dms.service peut être actif avant que le serveur IPC et le scan des plugins
+  # ne soient prêts. La temporisation est bornée ; aucun marqueur n'est posé en
+  # cas d'échec, donc une session ultérieure retentera proprement.
+  for _ in {1..45}; do
+    if "$dms_bin" ipc call plugins list >/dev/null 2>&1; then
+      ready=true
+      break
+    fi
+    sleep 1
+  done
+  "$ready" || { log "IPC DMS indisponible après 45 s"; return 1; }
+
+  # Forcer une écriture par DMS matérialise dans settings.json sa configuration
+  # par défaut complète. On peut alors n'ajouter que nos IDs sans recopier ni
+  # figer la longue liste de défauts amont.
+  position=$(wait_for_bar_position "$dms_bin") || {
+    log "cible IPC bar indisponible après 45 s"
+    return 1
+  }
+  "$dms_bin" ipc call bar setPosition index 0 "$position" >/dev/null
+
+  # Le wallpaper amont est un repli interne de DMS : `wallpaper get` rend une
+  # chaîne vide, même si une image DMS apparaît. Sur un compte neuf, poser le
+  # fond Eschaton via l'IPC officiel. Un choix utilisateur non vide gagne.
+  current_wallpaper=$(wait_for_wallpaper "$dms_bin") || {
+    log "cible IPC wallpaper indisponible après 15 s"
+    return 1
+  }
+  if wallpaper_needs_seed "$current_wallpaper" "$eschaton_wallpaper"; then
+    "$dms_bin" ipc call wallpaper set "$eschaton_wallpaper" >/dev/null || {
+      log "activation du fond d'écran Eschaton impossible"
+      return 1
+    }
+  fi
+
+  for _ in {1..10}; do
+    if jq -e '.barConfigs[0].rightWidgets | arrays' "$settings" >/dev/null 2>&1; then
+      add_eschaton_widgets "$settings"
+
+      # L'activation vient volontairement après la matérialisation de la barre.
+      # `plugins enable` peut rendre 0 pendant que DMS initialise encore ses
+      # réglages, puis être annulé par le chargement tardif de plugin_settings.
+      # Seul un état `loaded` stable autorise donc le marqueur one-shot.
+      for plugin in eschatonUpdate eschatonRollback; do
+        ensure_plugin_loaded "$dms_bin" "$plugin" || {
+          log "$plugin n'est pas resté chargé après 15 s"
+          return 1
+        }
+      done
+
+      : > "$stamp"
+
+      # settings.json n'est pas rechargé à chaud par DMS 1.5.3. Le fichier
+      # contient donc nos IDs tandis que le barConfig en mémoire conserve la
+      # liste antérieure ; un reload des plugins ne peut pas créer des
+      # WidgetHost absents. L'IPC settings refuse les tableaux, donc aucune API
+      # officielle ne permet de mettre rightWidgets à jour en mémoire. Rejouer
+      # DMS une seule fois après avoir persisté widgets ET activation recompose
+      # la barre depuis l'état complet. Si une version amont apprend un jour à
+      # recharger le tableau, le test IPC ci-dessous évitera ce restart.
+      if ! dms_bar_has_eschaton_widgets "$dms_bin"; then
+        if ! request_dms_recompose "$systemctl_bin"; then
+          rm -f "$stamp"
+          log "recomposition de la barre DMS impossible"
+          return 1
+        fi
+        log "plugins activés ; redémarrage DMS demandé pour recomposer la barre"
+        return 0
+      fi
+
+      log "plugins Eschaton activés et ajoutés à la barre"
+      return 0
+    fi
+    sleep 1
+  done
+
+  log "DMS n'a pas matérialisé barConfigs dans $settings"
+  return 1
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  main "$@"
+fi

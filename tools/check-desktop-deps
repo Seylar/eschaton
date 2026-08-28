@@ -1,0 +1,319 @@
+#!/usr/bin/env bash
+# Usage: tools/check-desktop-deps [--pkgbuild CHEMIN] [--extra-dep NOM]...
+#
+# Garde CI bi-architecture des dépendances du bureau (recommandation de veille
+# §7.3). Le meta-paquet `eschaton-desktop` est `arch=(any)` : il se construit
+# identiquement des deux côtés et ne prouve donc RIEN sur la disponibilité de ce
+# qu'il déclare. Une dépendance présente dans `extra` x86_64 mais absente de
+# l'aarch64 d'Arch Linux ARM passerait les deux jobs de build sans un mot, et ne
+# se découvrirait qu'à l'installation sur la machine ARM. Ce script ferme ce
+# trou : il échoue si une dépendance externe manque d'un des deux dépôts.
+#
+# MÉTHODES DE VÉRIFICATION (docs/veille/2026-08-28-sp2-bureau.md §2.1)
+#   Arch x86_64  : API JSON officielle
+#                  https://archlinux.org/packages/search/json/?name=<pkg>
+#                  — résultat non vide = paquet publié.
+#   ALARM aarch64: index de fichiers du miroir, core/ et extra/. Un fichier
+#                  <pkg>-<ver>-<rel>-<arch>.pkg.tar.xz publié EST un paquet
+#                  installable : preuve plus forte qu'une page de recherche, et
+#                  il n'existe pas d'API JSON côté ALARM.
+#
+# CE QUI N'EST PAS VÉRIFIÉ ICI, ET POURQUOI
+#   - Les paquets servis par notre propre dépôt sont exclus : les jobs
+#     build-x86_64 / build-aarch64 les publient, ils n'ont pas à exister en
+#     amont. Deux règles, détaillées au §1b — celles construites ici (relevées
+#     dans le monorepo, ce qui couvre les vendorés du Socle, sans préfixe
+#     `eschaton-`) et celles de notre espace de noms `eschaton-*` (ce qui couvre
+#     celles qui sont déclarées avant d'être écrites).
+#   - Les dépendances transitives ne sont pas suivies. pacman les résoudra ; le
+#     risque visé est celui d'un paquet DÉCLARÉ PAR NOUS qui n'existe pas d'un
+#     côté, pas celui d'un dépôt incohérent avec lui-même.
+#   - Les versions sont affichées mais jamais comparées : un écart de version
+#     entre les deux architectures est normal (hyprland avait 3 semaines de
+#     retard côté ALARM au 2026-08-28) et n'est pas une erreur.
+set -euo pipefail
+
+readonly ARCH_API='https://archlinux.org/packages/search/json/'
+# Ce script est la seule étape du job lint qui sorte sur le réseau, vers deux
+# services tiers : sans réessai, un 5xx passager suffirait à faire échouer une CI
+# par ailleurs saine. `--retry` ne réessaie QUE les erreurs transitoires (5xx,
+# expirations, connexion refusée) — un 404, lui, reste un 404 du premier coup.
+readonly CURL=(curl -fsS --retry 3 --retry-delay 2 --retry-connrefused --max-time 60)
+# HTTP et non HTTPS : le certificat de mirror.archlinuxarm.org ne couvre pas ce
+# nom (« no alternative certificate subject name matches ») et la redirection
+# géographique aboutit à des miroirs en clair. Ce n'est ici qu'un test
+# d'existence — rien n'est téléchargé ni exécuté à partir de cette réponse.
+alarm_mirror="${ESCHATON_ALARM_MIRROR:-http://mirror.archlinuxarm.org/aarch64}"
+readonly ALARM_REPOS=(core extra)
+
+self_dir="$(cd "$(dirname "$0")" && pwd)"
+pkgbuild="$self_dir/../packages/eschaton-desktop/PKGBUILD"
+extra_deps=()
+
+while (($# > 0)); do
+	case "$1" in
+	--pkgbuild)
+		if (($# < 2)); then
+			echo "check-desktop-deps : --pkgbuild attend un chemin." >&2
+			exit 2
+		fi
+		pkgbuild="$2"
+		shift
+		;;
+	# Option de TEST : ajoute un nom à la liste vérifiée sans toucher au
+	# PKGBUILD. Sert à éprouver le chemin d'échec (`--extra-dep un-nom-bidon`)
+	# et le chemin des noms virtuels, sans avoir à casser un fichier du dépôt.
+	--extra-dep)
+		if (($# < 2)); then
+			echo "check-desktop-deps : --extra-dep attend un nom de paquet." >&2
+			exit 2
+		fi
+		extra_deps+=("$2")
+		shift
+		;;
+	-h | --help)
+		sed -n '2p' "$0"
+		exit 0
+		;;
+	*)
+		echo "check-desktop-deps : option inconnue « $1 »" >&2
+		exit 2
+		;;
+	esac
+	shift
+done
+
+for outil in curl jq; do
+	command -v "$outil" >/dev/null ||
+		{ echo "check-desktop-deps : $outil est requis." >&2; exit 2; }
+done
+[[ -r "$pkgbuild" ]] ||
+	{ echo "check-desktop-deps : PKGBUILD illisible : $pkgbuild" >&2; exit 2; }
+
+# --- 1. Extraction des dépendances -------------------------------------------
+# On SOURCE le PKGBUILD dans un bash séparé au lieu de le parser. Le tableau
+# `depends=()` du meta porte une justification EN COMMENTAIRE entre ses entrées
+# (c'est la raison d'être de ce paquet) ; un awk/grep qui découpe entre
+# `depends=(` et `)` devrait ensuite ré-implémenter le retrait des commentaires,
+# des continuations de ligne et des guillemets — soit réécrire un interpréteur
+# bash approximatif. bash est l'interpréteur DE RÉFÉRENCE du format, et le
+# fichier est le nôtre : il ne fait que définir des variables plus une fonction
+# `package()` qui n'est jamais appelée ici. Le sourcing se fait dans un
+# processus séparé pour qu'aucune de ses variables (`arch`, `source`,
+# `license`…) ne retombe dans ce script.
+# shellcheck disable=SC2016  # $1/${depends[@]} sont évalués par le bash appelé
+if ! deps_brutes=$(bash -c 'set -euo pipefail
+	. "$1"
+	[[ ${depends+defini} == defini ]] || { echo "depends=() absent de $1" >&2; exit 1; }
+	printf "%s\n" "${depends[@]}"' _ "$pkgbuild"); then
+	echo "check-desktop-deps : lecture des dépendances impossible." >&2
+	exit 2
+fi
+
+# --- 1b. Paquets servis par NOTRE dépôt ---------------------------------------
+# Énumération identique à celle de repo/build-repo (packages/*/ et
+# packages/vendor/*/ porteurs d'un PKGBUILD) : ce que la CI publie est
+# exactement ce qui n'a pas à exister en amont. Même méthode d'extraction qu'au
+# §1, et pour la même raison.
+racine="$(cd "$self_dir/.." && pwd)"
+locaux=()
+shopt -s nullglob
+for d in "$racine"/packages/*/ "$racine"/packages/vendor/*/; do
+	[[ -f "$d/PKGBUILD" ]] || continue
+	# shellcheck disable=SC2016  # évalué par le bash appelé
+	if ! noms_locaux=$(bash -c 'set -euo pipefail
+		. "$1"
+		[[ ${pkgname+defini} == defini ]] || { echo "pkgname absent de $1" >&2; exit 1; }
+		printf "%s\n" "${pkgname[@]}"' _ "$d/PKGBUILD"); then
+		echo "check-desktop-deps : lecture du paquet local impossible : $d/PKGBUILD" >&2
+		exit 2
+	fi
+	while IFS= read -r n; do
+		if [[ -n "$n" ]]; then locaux+=("$n"); fi
+	done <<<"$noms_locaux"
+done
+shopt -u nullglob
+
+# « Servi par notre dépôt » = deux règles, dont aucune ne suffit seule :
+#   1. le paquet est construit ici — couvre les vendorés (`limine-snapper-sync`,
+#      `limine-mkinitcpio-hook`), qui ne portent pas notre préfixe ;
+#   2. le nom est dans notre espace de noms `eschaton-*` — couvre les paquets
+#      DÉCLARÉS mais pas encore écrits, et `eschaton-desktop` en a deux au
+#      moment où ceci s'écrit (`eschaton-dms-plugin-update` et
+#      `-rollback`, Tasks 5 et 6 du Bureau). Sans cette règle la garde
+#      exigerait d'eux qu'ils existent en amont : faux rouge garanti.
+est_a_nous() {
+	local n
+	case "$1" in eschaton-*) return 0 ;; esac
+	for n in ${locaux[@]+"${locaux[@]}"}; do
+		[[ "$n" == "$1" ]] && return 0
+	done
+	return 1
+}
+
+deps=()
+exclues=()
+while IFS= read -r d; do
+	[[ -n "$d" ]] || continue
+	# Une contrainte de version (`foo>=1.2`) n'est pas un nom de paquet : on ne
+	# garde que le nom. Aucune entrée n'en porte aujourd'hui ; la précaution
+	# évite qu'en ajouter un jour ne transforme la garde en faux rouge.
+	d="${d%%[<>=]*}"
+	if est_a_nous "$d"; then
+		exclues+=("$d")
+		continue
+	fi
+	deps+=("$d")
+done <<<"$deps_brutes"
+
+deps+=(${extra_deps[@]+"${extra_deps[@]}"})
+((${#deps[@]} > 0)) ||
+	{ echo "check-desktop-deps : aucune dépendance externe à vérifier." >&2; exit 2; }
+
+echo "==> $pkgbuild"
+printf '    %d dépendances externes ; %d exclue(s) (servies par notre dépôt) : %s\n' \
+	"${#deps[@]}" "${#exclues[@]}" "${exclues[*]-}"
+
+# --- 2. Index ALARM, téléchargé UNE fois ---------------------------------------
+# ~4 Mo pour `extra` : un téléchargement par run, pas un par paquet. L'index est
+# aplati en lignes « nom version-release dépôt », le nom étant obtenu en retirant
+# les trois derniers champs du fichier (version, release, architecture) — un
+# pkgver ne peut pas contenir de tiret, la découpe est donc exacte. C'est ce qui
+# distingue `pipewire` de `pipewire-audio`, qu'un `grep '^pipewire-'` confondrait.
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+index="$tmp/alarm"
+: >"$index"
+for repo in "${ALARM_REPOS[@]}"; do
+	# `.zst` accepté en plus de `.xz` : ALARM publie en xz aujourd'hui, un
+	# changement de compression ne doit pas transformer la garde en faux rouge.
+	# Les deux dernières substitutions décodent ce que l'index de fichiers
+	# encode : `+` et `:` sont pourcent-encodés dans les href. Le `:` n'est
+	# qu'un epoch (cosmétique), mais le `+` est dans des NOMS de paquets
+	# (`gtk+`, `libc++`…) : sans décodage, une telle dépendance serait
+	# introuvable dans l'index et signalée absente à tort.
+	# -L : mirror.archlinuxarm.org redirige vers un miroir géographique. Le second
+	# --max-time l'emporte sur celui de $CURL (curl retient la dernière
+	# occurrence) : quelques mégaoctets méritent mieux que 60 s.
+	statut=0
+	"${CURL[@]}" -L --max-time 300 "$alarm_mirror/$repo/" |
+		grep -oE 'href="[^"]+\.pkg\.tar\.(xz|zst)"' |
+		sed -E -e 's/^href="//' -e 's/"$//' \
+			-e "s/^(.*)-([^-]+)-([^-]+)-[^-]+\.pkg\.tar\.(xz|zst)\$/\1 \2-\3 $repo/" \
+			-e 's/%2B/+/g' -e 's/%3A/:/g' \
+			>"$tmp/$repo" || statut=$?
+	# Échec du téléchargement (pipefail rend la chaîne non nulle, donc un
+	# transfert coupé compte), ou sortie vide (miroir servi sans listage de
+	# répertoire). Sans ce garde-fou la méthode s'effondrerait en silence et
+	# déclarerait TOUTES les dépendances absentes d'ALARM : une avalanche de faux
+	# rouges, dont la cause ne serait pas dans le message. On échoue donc en 2
+	# (erreur d'outillage) et non en 1 (verdict sur les paquets).
+	if ((statut != 0)) || [[ ! -s "$tmp/$repo" ]]; then
+		printf 'check-desktop-deps : index ALARM inexploitable pour « %s » (%s/%s/, statut de chaîne %d ; curl a détaillé ci-dessus) — miroir injoignable ou sans listage de répertoire.\n' \
+			"$repo" "$alarm_mirror" "$repo" "$statut" >&2
+		exit 2
+	fi
+	cat "$tmp/$repo" >>"$index"
+done
+sort -u -o "$index" "$index"
+printf '==> Index ALARM aarch64 (%s) : %d paquets — %s\n' \
+	"${ALARM_REPOS[*]}" "$(wc -l <"$index")" "$alarm_mirror"
+
+# Version publiée côté ALARM, ou rien si le paquet est absent de l'index.
+alarm_version() {
+	awk -v n="$1" '$1 == n { print $2" ("$3")"; exit }' "$index"
+}
+
+# --- 3. Vérification, paquet par paquet ---------------------------------------
+manquants_arch=()
+manquants_alarm=()
+largeur=0
+for p in "${deps[@]}"; do
+	if ((${#p} > largeur)); then largeur=${#p}; fi
+done
+
+printf '\n    %-*s  %-26s  %s\n' "$largeur" 'PAQUET' 'ARCH x86_64' 'ALARM aarch64'
+for p in "${deps[@]}"; do
+	# `+` est un caractère légal d'un nom de paquet (`gtk+`) mais vaut « espace »
+	# dans une chaîne de requête : sans encodage, l'API chercherait « gtk ».
+	p_url="${p//+/%2B}"
+	if ! json=$("${CURL[@]}" "$ARCH_API?name=$p_url"); then
+		printf 'check-desktop-deps : API Arch injoignable pour « %s » — verdict impossible.\n' "$p" >&2
+		exit 2
+	fi
+	if ! etat_arch=$(jq -r '
+		if (.results | length) == 0 then ""
+		else (.results[0] |
+			(if .epoch > 0 then "\(.epoch):" else "" end) +
+			"\(.pkgver)-\(.pkgrel) (\(.repo))")
+		end' <<<"$json"); then
+		printf 'check-desktop-deps : réponse Arch invalide pour « %s » — verdict impossible.\n' "$p" >&2
+		exit 2
+	fi
+
+	# Nom VIRTUEL : `?name=` ne cherche que les pkgname et ne trouvera jamais une
+	# provision (`dms-shell-compositor`, `pipewire-session-manager`…). `?q=`, lui,
+	# cherche aussi dans les `provides` ; on re-filtre sur une égalité EXACTE du
+	# nom fourni pour ne pas prendre une simple correspondance textuelle pour une
+	# provision. Attention : `?provides=` n'existe PAS comme filtre — l'API ignore
+	# le paramètre inconnu et renvoie le catalogue entier, ce qui donnerait un
+	# faux vert sur n'importe quel nom.
+	# Limite connue : `?q=` est plafonné à 250 résultats. Un virtuel très courant
+	# dont aucun fournisseur ne tomberait dans ces 250 serait déclaré absent —
+	# faux ROUGE, jamais faux vert. Le sens de l'erreur est le bon.
+	fournisseurs=()
+	if [[ -z "$etat_arch" ]]; then
+		if ! json_fournisseurs=$("${CURL[@]}" "$ARCH_API?q=$p_url"); then
+			printf 'check-desktop-deps : recherche des fournisseurs Arch impossible pour « %s ».\n' "$p" >&2
+			exit 2
+		fi
+		if ! noms_fournisseurs=$(jq -r --arg p "$p" '
+			[.results[]
+			 | select(((.provides // []) | map(split("=")[0]) | index($p)) != null)
+			 | .pkgname] | unique | .[]' <<<"$json_fournisseurs"); then
+			printf 'check-desktop-deps : réponse fournisseurs invalide pour « %s ».\n' "$p" >&2
+			exit 2
+		fi
+		while IFS= read -r f; do
+			if [[ -n "$f" ]]; then fournisseurs+=("$f"); fi
+		done <<<"$noms_fournisseurs"
+		if ((${#fournisseurs[@]} > 0)); then
+			etat_arch="virtuel < ${fournisseurs[*]}"
+		fi
+	fi
+
+	# Côté ALARM, l'index de fichiers ne connaît que des noms de paquets : il ne
+	# peut rien dire d'une provision. Un nom virtuel y est donc vérifié par ses
+	# fournisseurs — ALARM reconstruit les PKGBUILD d'Arch, les noms sont les
+	# mêmes — et il suffit qu'UN fournisseur soit publié.
+	etat_alarm=''
+	if ((${#fournisseurs[@]} > 0)); then
+		for f in "${fournisseurs[@]}"; do
+			v="$(alarm_version "$f")"
+			if [[ -n "$v" ]]; then
+				etat_alarm="$f $v"
+				break
+			fi
+		done
+	else
+		etat_alarm="$(alarm_version "$p")"
+	fi
+
+	[[ -n "$etat_arch" ]] || manquants_arch+=("$p")
+	[[ -n "$etat_alarm" ]] || manquants_alarm+=("$p")
+	printf '    %-*s  %-26s  %s\n' \
+		"$largeur" "$p" "${etat_arch:-ABSENT}" "${etat_alarm:-ABSENT}"
+done
+
+# --- 4. Verdict ---------------------------------------------------------------
+if ((${#manquants_arch[@]} == 0 && ${#manquants_alarm[@]} == 0)); then
+	printf '\n==> OK — %d dépendances présentes des deux côtés.\n' "${#deps[@]}"
+	exit 0
+fi
+printf '\n==> ÉCHEC — le bureau déclare des paquets introuvables.\n' >&2
+((${#manquants_arch[@]} == 0)) ||
+	printf '    absents des dépôts Arch x86_64 (API JSON) : %s\n' "${manquants_arch[*]}" >&2
+((${#manquants_alarm[@]} == 0)) ||
+	printf '    absents de l'\''index ALARM aarch64 (%s) : %s\n' \
+		"${ALARM_REPOS[*]}" "${manquants_alarm[*]}" >&2
+exit 1

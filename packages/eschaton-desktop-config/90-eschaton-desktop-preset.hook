@@ -1,0 +1,52 @@
+# Crochet alpm — l'EXCEPTION prévue par la spec du Socle §3 : « si un jour une
+# vraie migration d'état est inévitable, elle vivra dans un hook alpm de paquet,
+# versionnée et idempotente — l'exception, pas l'architecture. » C'en est une :
+# versionnée (elle vit dans ce paquet, elle se retire en le retirant), idempotente
+# (§ ci-dessous), et bornée à une seule unité.
+#
+# CE QU'IL CORRIGE. Personne n'applique jamais les présets système : aucun hook
+# d'Arch ne joue `systemctl preset`, et c'est l'installeur d'Eschaton qui fait
+# `systemctl preset-all` — une fois, à l'installation du Socle. Un
+# `pacman -S eschaton-desktop` posé sur un Socle DÉJÀ installé — le cas
+# d'acceptation §6.2 de la spec Bureau — laisserait donc `greetd` désactivé :
+# le paquet livre bien 51-eschaton-desktop.preset, mais rien ne le lit, et la
+# machine redémarrerait sur un getty au lieu du bureau. (Réserve n° 4 du rapport
+# de la Task 2, tranchée ici.)
+#
+# IDEMPOTENCE. `systemctl preset` est une remise à la politique déclarée, pas un
+# `enable` cumulatif : le second passage ne réécrit rien (mesuré — premier
+# passage « Created symlink /etc/systemd/system/display-manager.service », second
+# passage silencieux, rc=0 les deux fois).
+#
+# CE QU'IL DÉFAIT, ET COMMENT S'EN PROTÉGER. Un `systemctl disable greetd` posé à
+# la main est défait au prochain relèvement de ce paquet (mesuré). C'est le
+# comportement voulu : la politique vit dans les paquets. L'échappatoire durable
+# est une règle de préset dans /etc — mais attention au nom : systemd trie les
+# fichiers de préset par NOM DE FICHIER, toutes arborescences confondues, et la
+# première règle qui correspond gagne. `/etc/systemd/system-preset/00-local.preset`
+# contenant « disable greetd.service » l'emporte donc sur notre
+# 51-eschaton-desktop.preset ; le MÊME contenu nommé 99-local.preset ne l'emporte
+# PAS. Les deux cas ont été mesurés.
+#
+# LA GARDE, ET POURQUOI ELLE N'EST PAS CELLE D'ARCH.
+# /usr/share/libalpm/scripts/systemd-hook saute dès que le système n'est pas
+# « booted » (`systemd-notify --booted`) ou qu'on est en chroot. Copier cette
+# garde ici serait un contresens : le chroot, c'est justement l'installation par
+# pacstrap, où le préset DOIT s'appliquer. Or `systemctl preset` fonctionne hors
+# système démarré — mesuré dans un conteneur non booté (`systemd-notify --booted`
+# rc=1, `systemd-detect-virt --chroot` rc=1) : le lien est bien créé, rc=0.
+# Seule l'absence de `systemctl` fait donc sauter l'action. Le `|| true` final
+# empêche un échec (unité absente si l'on a forcé --nodeps, /etc en lecture
+# seule) de faire échouer la transaction pacman, sans masquer le message, qui
+# reste sur stderr.
+
+[Trigger]
+Type = Package
+Operation = Install
+Operation = Upgrade
+Target = eschaton-desktop-config
+
+[Action]
+Description = Application du préset Eschaton (greetd)...
+When = PostTransaction
+Exec = /bin/sh -c 'if [ -x /usr/bin/systemctl ]; then /usr/bin/systemctl preset greetd.service || true; fi'

@@ -52,6 +52,39 @@ chown builder "$out"
 build_tmp="/tmp/eschaton-build"
 mkdir -p "$build_tmp/build" "$build_tmp/src"
 chown -R builder "$build_tmp"
+
+# Une version Pacman est une promesse immuable. makepkg embarque notamment des
+# métadonnées de build : reconstruire puis republier le même pkgname/pkgver/pkgrel
+# peut donc changer sa somme, alors que les clients ont légitimement gardé
+# l'ancienne archive en cache. Quand la CI fournit le dépôt actuellement publié,
+# on récupère ses paquets et on réutilise octet pour octet toute archive dont le
+# nom sera reconstruit plus bas. Un bump de version/pkgrel produit naturellement
+# un autre nom et conserve donc le nouveau build.
+seed_url="${ESCHATON_REPO_SEED_URL:-}"
+seed_packages="$build_tmp/published"
+if [[ -n "$seed_url" ]]; then
+	echo "==> Récupération des versions déjà publiées ($seed_url)"
+	seed_index="$build_tmp/eschaton.db"
+	seed_index_dir="$build_tmp/eschaton-db"
+	rm -rf "$seed_packages" "$seed_index_dir"
+	mkdir -p "$seed_packages" "$seed_index_dir"
+	curl --fail --silent --show-error --location \
+		"$seed_url/eschaton.db" --output "$seed_index"
+	bsdtar -xf "$seed_index" -C "$seed_index_dir"
+
+	while IFS= read -r desc; do
+		filename="$(awk '$0 == "%FILENAME%" { getline; print; exit }' "$desc")"
+		sha256="$(awk '$0 == "%SHA256SUM%" { getline; print; exit }' "$desc")"
+		if [[ -z "$filename" || -z "$sha256" ]]; then
+			echo "build-repo : index publié invalide ($desc)." >&2
+			exit 1
+		fi
+		curl --fail --silent --show-error --location \
+			"$seed_url/$filename" --output "$seed_packages/$filename"
+		printf '%s  %s\n' "$sha256" "$seed_packages/$filename" | sha256sum --check --status
+	done < <(find "$seed_index_dir" -name desc -type f -print | sort)
+fi
+
 makepkg_env=(
 	env
 	"PKGDEST=$out"
@@ -88,6 +121,19 @@ for d in "$root"/packages/*/ "$root"/packages/vendor/*/; do
 	(cd "$d" && sudo -u builder "${makepkg_env[@]}" makepkg -fd --noconfirm)
 	built=$((built + 1))
 done
+
+# Restaurer les octets publiés seulement lorsque le build courant a produit le
+# même nom de fichier. Les anciennes versions, absentes du build courant, ne
+# sont pas réintroduites dans l'index.
+if [[ -n "$seed_url" ]]; then
+	for published in "$seed_packages"/*.pkg.tar.*; do
+		candidate="$out/$(basename "$published")"
+		if [[ -f "$candidate" ]]; then
+			cp "$published" "$candidate"
+			echo "==> Archive immuable réutilisée : $(basename "$published")"
+		fi
+	done
+fi
 
 # Filet contre les deux façons d'arriver à un dépôt incomplet sans que rien
 # n'échoue : un PKGDEST ignoré (makepkg.conf d'une image qui le fixerait), et

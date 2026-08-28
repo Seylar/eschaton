@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Eschaton
+Comment=Bureau Eschaton (Hyprland + DMS)
+Exec=/usr/bin/eschaton-session
+Type=Application
+DesktopNames=Hyprland
+Keywords=eschaton;hyprland;dms;wayland;tiling;

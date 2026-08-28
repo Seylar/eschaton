@@ -1,0 +1,122 @@
+pkgname=eschaton-desktop
+pkgver=0.1.0
+pkgrel=2
+pkgdesc="Meta-paquet du bureau Eschaton : Hyprland + DMS, session graphique complète"
+arch=(any)
+license=(MIT)
+# Liste croisée entre la spec Bureau §3 (table des paquets) et l'inventaire de ce
+# qui a RÉELLEMENT fait tourner la session du spike (tools/vm-dev.md §12.8), puis
+# corrigée des constats de la Task 2 (rapport §4, vm-dev §13). Chaque écart à la
+# spec est justifié en place.
+depends=(
+  # --- Compositeur et shell ---------------------------------------------------
+  # `dms-shell` ne dépend pas d'un compositeur nommé mais du VIRTUEL
+  # `dms-shell-compositor`, que `dms-shell-hyprland` ET `dms-shell-niri`
+  # fournissent — vérifié dans les deux dépôts. Le compositeur est donc
+  # substituable sans toucher au shell : remplacer la ligne suffirait.
+  # `dms-shell-hyprland` est un méta sans aucun fichier (vm-dev §12.7) qui tire
+  # dms-shell → quickshell + dgop + accountsservice.
+  hyprland
+  dms-shell-hyprland
+
+  # --- Audio ------------------------------------------------------------------
+  # ÉCART ASSUMÉ à l'inventaire du spike, sur pièces. Le spike n'a installé que
+  # `pipewire wireplumber` et le Control Center affichait « Aucun appareil de
+  # sortie » — mis au compte du `-audio none` de QEMU. Ce n'est pas la seule
+  # cause : le paquet `pipewire` ne livre AUCUN greffon SPA audio. Son
+  # /usr/lib/spa-0.2/ ne contient que control, support, v4l2, videoconvert et
+  # videotestsrc ; `libspa-alsa.so` et les codecs bluez5 sont dans
+  # `pipewire-audio`, que NI `pipewire` NI `wireplumber` ne tirent (relevé dans
+  # les index des deux dépôts). Sans lui, aucun périphérique ne peut apparaître,
+  # sur aucune machine — la VM n'aurait donc rien pu prouver ici.
+  # `pipewire-pulse` tire `pipewire-audio` en dépendance dure et ajoute le
+  # serveur d'API PulseAudio dont toute application ordinaire a besoin (le
+  # Control Center de DMS, lui, parle le protocole PipeWire natif par Quickshell
+  # et s'en passerait). `wireplumber` reste explicite : gestionnaire de session
+  # (il fournit le virtuel `pipewire-session-manager`), simple optdepend de
+  # `pipewire` en amont, et `running` sous greetd sans rien ajouter (vm-dev §13.3).
+  # À confirmer sur matériel réel en Task 7 : la VM n'a pas de carte son.
+  # ATTENTION À QUI TOUCHERA CETTE LISTE : `pipewire-audio` n'est pas re-déclaré
+  # parce que `pipewire-pulse` le tire en dépendance dure — si `pipewire-pulse`
+  # sort un jour de la liste, `pipewire-audio` doit y entrer, sans quoi l'audio
+  # disparaît en silence.
+  pipewire
+  pipewire-pulse
+  wireplumber
+
+  # --- Portails XDG -----------------------------------------------------------
+  # Tire xdg-desktop-portal. Simple optdepend d'`hyprland` en amont ; requis chez
+  # nous. Ce back-end implémente EXACTEMENT quatre interfaces, et il les déclare
+  # lui-même dans /usr/share/xdg-desktop-portal/portals/hyprland.portal :
+  #   Interfaces=org.freedesktop.impl.portal.Screenshot;…ScreenCast;
+  #              …GlobalShortcuts;…InputCapture;
+  # Donc : capture d'écran, partage d'écran, raccourcis globaux, capture d'entrée.
+  # PAS de sélecteur de fichiers — `org.freedesktop.impl.portal.FileChooser` n'est
+  # pas dans cette liste.
+  #
+  # Arbitrage Task 7, sur la VM installée par le flux réel : le seul fichier
+  # portals/*.portal était hyprland.portal et sa liste d'interfaces ne contient
+  # PAS FileChooser. Ce n'est pas acceptable pour un bureau généraliste : toute
+  # application sandboxée dépend du portail, même si une application GTK/Qt non
+  # confinée sait encore ouvrir sa propre boîte. Le backend GTK coûte une pile
+  # supplémentaire, mais il est l'implémentation amont disponible des interfaces
+  # génériques manquantes ; le laisser dehors fabriquerait un desktop incomplet
+  # pour économiser les mauvaises dépendances.
+  xdg-desktop-portal-hyprland
+  xdg-desktop-portal-gtk
+
+  # --- Session ----------------------------------------------------------------
+  # greetd + auto-login. Sa configuration, son drop-in, son préset et le crochet
+  # alpm qui applique ce préset sont dans eschaton-desktop-config.
+  greetd
+
+  # --- Élévation de privilège -------------------------------------------------
+  # `polkit` SEUL, et rien de plus. Il faut `polkitd` ; il ne faut AUCUN agent
+  # d'authentification externe. Le « Polkit ····· Not available » de `dms doctor`
+  # est un faux négatif (spec Bureau risque n° 10, fermé par la Task 2) : le
+  # greffon Quickshell_Services_PolkitPlugin est lié dans le `qs` du paquet
+  # `extra`, la modale de DMS s'affiche et l'élévation aboutit (matrice pkcheck,
+  # rapport Task 2 §4). Ajouter `hyprpolkitagent` ou `polkit-gnome` mettrait un
+  # second agent en concurrence d'enregistrement sur la même session, pour
+  # remplacer un agent qui marche et qui est thémé DMS.
+  polkit
+
+  # --- Polices ----------------------------------------------------------------
+  # La mono à glyphes Nerd que DMS attend pour ses icônes, et la couverture
+  # Unicode générale.
+  ttf-jetbrains-mono-nerd
+  noto-fonts
+
+  # --- Paquets Eschaton du bureau ---------------------------------------------
+  # Les deux plugins sont les Tasks 5 et 6. Le plugin rollback remplit la
+  # condition de sortie de btrfs-assistant : liste, confirmation, restauration
+  # et invitation au redémarrage vivent désormais directement dans DMS.
+  eschaton-desktop-config
+  eschaton-dms-plugin-update
+  eschaton-dms-plugin-rollback
+)
+# VOLONTAIREMENT ABSENTS — chacun a été examiné, aucun n'est un oubli :
+# - `seatd` : arrive par `aquamarine`, dépendance d'`hyprland` (vm-dev §12.8) ; et
+#   sous greetd c'est le siège de logind qui sert, plus seatd lancé à la main
+#   (vm-dev §13.3).
+# - `wtype` : instrument de banc d'essai de la Task 2 pour injecter des frappes
+#   dans la session (vm-dev §13.4). En amont ce n'est qu'un optdepend de
+#   `dms-shell` (« Paste from clipboard history and plugins ») : il sert au
+#   presse-papiers, pas à nos deux plugins. Reste installable à la demande.
+# - `hyprpolkitagent`, `polkit-gnome` : voir `polkit` ci-dessus.
+# - `pipewire-alsa` : configure les applications ALSA *héritées* pour qu'elles
+#   passent par PipeWire. Sans effet sur l'apparition des périphériques — c'est
+#   `pipewire-audio` qui la porte. Non prouvé nécessaire, laissé dehors.
+# - `noto-fonts-emoji` : absent du spike, aucun défaut de rendu constaté sur les
+#   captures. À trancher sur constat visuel en Task 7, pas par précaution.
+# - `xdg-desktop-portal` : tiré par le back-end hyprland ci-dessus.
+# LICENSE est un lien symbolique vers le LICENSE partagé à la racine du dépôt :
+# makepkg réduit toute entrée locale de source=() à son basename, donc un chemin
+# relatif ("../../LICENSE") n'est pas résoluble — cf. get_filename() dans
+# /usr/share/makepkg/util/source.sh. Le lien conserve une licence unique.
+source=(LICENSE)
+sha256sums=(SKIP)
+
+package() {
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# Point d'entrée de la session Eschaton — /usr/bin/eschaton-session.
+#
+# Lancé par greetd (/etc/eschaton/greetd.toml) ou par n'importe quel greeter via
+# l'entrée /usr/share/wayland-sessions/eschaton.desktop. Trois rôles, dans cet
+# ordre :
+#
+#   1. poser l'environnement de session (disposition clavier notamment) ;
+#   2. amorcer ~/.config/hypr/ s'il n'existe pas encore — orchestration de
+#      session, pas mutation de config par paquet : aucun fichier de cet arbre
+#      n'appartient à pacman (spec Bureau §4.2) ;
+#   3. exec du lanceur amont avec l'invariant Lua : `start-hyprland -- -c <lua>`
+#      (spec Bureau §4.1).
+#
+# Sur le `-c`, une précision mesurée le 2026-08-28 (contre-test du critère §6.4,
+# tools/vm-dev.md §18) : ce commentaire affirmait que « sans -c, la config Lua
+# est ignorée en silence ». C'est FAUX sur Hyprland 0.56.1 — amputé de son
+# `-- -c`, start-hyprland charge quand même ~/.config/hypr/hyprland.lua par
+# découverte automatique, et le Lua l'emporte même sur un hyprland.conf présent.
+# Le `-c` ne garantit donc pas le chargement : il garantit QUEL fichier est
+# chargé, sans dépendre d'un ordre de découverte amont non contractuel — qui a
+# déjà changé une fois (un compte vierge se voit générer un hyprland.lua, plus
+# un hyprland.conf) et peut rechanger d'ici la suppression d'hyprlang en 0.57.
+# On le garde à ce titre.
+#
+# Le script ne doit JAMAIS refuser d'ouvrir la session : toute étape d'amorçage
+# qui échoue est journalisée sur stderr (donc dans le journal de greetd) et la
+# session part quand même. D'où l'absence de `set -e`.
+set -uo pipefail
+
+log() { printf 'eschaton-session: %s\n' "$*" >&2; }
+
+hypr_dir="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
+entry="$hypr_dir/hyprland.lua"
+binds_user="$hypr_dir/dms/binds-user.lua"
+hook_stamp="$hypr_dir/.eschaton-hook"
+defaults=/usr/share/eschaton/hypr/eschaton-defaults.lua
+hook="dofile(\"$defaults\")"
+dms_config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/DankMaterialShell"
+dms_settings="$dms_config_dir/settings.json"
+
+ensure_dms_settings_seed() {
+  # DMS n'active pas un plugin système et ne l'ajoute pas à la barre par sa
+  # seule présence sous /etc. Le service de provisioning utilise son IPC, qui
+  # ne peut persister la barre que si settings.json a déjà été chargé. Un objet
+  # vide fait charger les valeurs par défaut de DMS sans figer leur copie ici.
+  [[ ! -e "$dms_settings" ]] || return 0
+  mkdir -p "$dms_config_dir" || {
+    log "mkdir $dms_config_dir a échoué"
+    return 0
+  }
+  printf '{}\n' > "$dms_settings" || log "amorçage de $dms_settings impossible"
+}
+
+ensure_eschaton_hook() {
+  # dms/binds-user.lua doit exister : le hyprland.lua de DMS comme notre amorce
+  # le chargent par `require("dms.binds-user")`, et un require manquant fait
+  # échouer toute la configuration.
+  if [[ ! -e "$binds_user" ]]; then
+    mkdir -p "$hypr_dir/dms"
+    printf '%s\n' \
+      '-- Surcharges utilisateur. dms setup ne réécrit jamais ce fichier.' \
+      > "$binds_user" || log "création de $binds_user a échoué"
+  fi
+
+  [[ ! -e "$hook_stamp" ]] || return 0
+
+  # Un hook préexistant prouve que l'amorçage a déjà eu lieu, même si une
+  # ancienne version du paquet n'avait pas encore posé le marqueur. Ne pas
+  # marquer ce cas faisait réapparaître le hook après une suppression voulue.
+  if grep -qF "$hook" "$binds_user" 2>/dev/null; then
+    : > "$hook_stamp" || log "marqueur $hook_stamp non posé"
+    return 0
+  fi
+
+  if printf '%s\n%s\n' \
+       '-- Défauts Eschaton (eschaton-desktop-config) : retirez la ligne suivante' \
+       "$hook" >> "$binds_user"; then
+    : > "$hook_stamp" || log "marqueur $hook_stamp non posé"
+  else
+    log "accroche des défauts Eschaton impossible dans $binds_user"
+  fi
+}
+
+main() {
+  # --- 1. Environnement de session -------------------------------------------
+  export XDG_CURRENT_DESKTOP=Hyprland
+  export XDG_SESSION_DESKTOP=eschaton
+  export XDG_SESSION_TYPE=wayland
+  # Disposition clavier : la config Eschaton laisse `kb_layout` vide pour que
+  # libxkbcommon prenne cette variable (voir eschaton-defaults.lua). Une valeur
+  # déjà posée (par l'utilisateur ou par un greeter) gagne.
+  export XKB_DEFAULT_LAYOUT="${XKB_DEFAULT_LAYOUT:-fr}"
+
+  # --- 2. Amorçage du premier démarrage --------------------------------------
+  # Un compte frais n'a pas de ~/.config/hypr/ ; `start-hyprland -- -c` sur un
+  # fichier absent ne démarrerait pas la session voulue. On déploie donc l'arbre
+  # DMS par ses propres générateurs, puis on pose l'amorce du point d'entrée.
+  if [[ ! -e "$entry" ]]; then
+    log "premier démarrage — génération de $hypr_dir"
+    mkdir -p "$hypr_dir/dms" || log "mkdir $hypr_dir/dms a échoué"
+    # Les sous-commandes de `dms setup` écrivent un fichier chacune, sans aucun
+    # privilège et sans question. Le `dms setup` complet, lui, commence par
+    # `sudo usermod -aG input` et abandonne tout le déploiement si sudo ne peut
+    # pas lire de mot de passe — cas d'une session non interactive.
+    # DMS_PRIVESC évite en prime la détection d'outil d'élévation.
+    for part in colors outputs layout cursor binds windowrules; do
+      DMS_PRIVESC=sudo dms setup "$part" </dev/null >/dev/null \
+        || log "dms setup $part a échoué"
+    done
+    install -Dm644 /usr/share/eschaton/hypr/hyprland.lua "$entry" \
+      || log "installation de l'amorce $entry a échoué"
+  fi
+
+  ensure_dms_settings_seed
+
+  # --- 3. Accroche des défauts Eschaton --------------------------------------
+  # La ligne n'est posée qu'une fois dans la vie du compte : qui la retire a
+  # décidé de se passer des défauts Eschaton, on ne la lui remet pas.
+  ensure_eschaton_hook
+
+  # --- 4. Le compositeur -----------------------------------------------------
+  [[ -e "$entry" ]] || log "ATTENTION : $entry est absent, la session va démarrer sans configuration"
+  exec /usr/bin/start-hyprland -- -c "$entry"
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  main "$@"
+fi

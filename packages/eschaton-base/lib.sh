@@ -9,6 +9,19 @@ running_kernel_missing_modules() { # $1=/usr/lib/modules $2=$(uname -r)
   [[ ! -d "$1/$2" ]]
 }
 
+# `--yes` est l'interface stable d'Eschaton (CLI et plugin DMS), alors que
+# pacman nomme cette option `--noconfirm`. Transmettre `--yes` tel quel fait
+# échouer pacman avant même la résolution des paquets.
+pacman_update_args() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --yes) printf '%s\n' --noconfirm ;;
+      *) printf '%s\n' "$arg" ;;
+    esac
+  done
+}
+
 # `findmnt -no SOURCE` rend « /dev/vda2[/@] » pour un montage de sous-volume
 # btrfs, et « /dev/vda2 » tout court sinon. Les deux moitiés se lisent séparément.
 
@@ -37,6 +50,16 @@ snapshot_subvol_path() { # $1=sous-volume des snapshots $2=numéro
 valid_snapshot_number() { # $1=saisie de l'utilisateur
   [[ $1 =~ ^[0-9]+$ ]] || return 1
   ((10#$1 > 0))
+}
+
+# Interface non interactive volontairement minuscule : pkexec authentifie le
+# PROGRAMME, pas ses arguments. N'accepter que la forme exacte `--yes N`
+# empêche qu'un appel privilégié soit détourné vers une autre opération.
+noninteractive_rollback_number() {
+  (($# == 2)) || return 1
+  [[ $1 == --yes ]] || return 1
+  valid_snapshot_number "$2" || return 1
+  printf '%s\n' "$2"
 }
 
 # Vrai quand la racine vit SOUS le sous-volume des snapshots, c'est-à-dire quand
