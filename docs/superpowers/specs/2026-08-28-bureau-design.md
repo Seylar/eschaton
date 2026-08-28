@@ -40,8 +40,8 @@ Quatre paquets `arch=(any)`, mêmes conventions que le Socle (LICENSE symlink, d
 
 ## 4. Les deux pièges de configuration (veille §3, invariants)
 
-1. **Lua d'entrée de jeu.** `hyprlang` disparaît « 1–2 versions après Hyprland 0.55 » ; la fenêtre est ~0.57 (octobre 2026). Toute config Hyprland d'Eschaton naît en **Lua**, et l'entrée de session packagée lance **`Hyprland -c <chemin du lua>`** — sans `-c`, la config Lua est ignorée silencieusement. Invariant testé par le plan.
-2. **Propriété de `~/.config/hypr/`.** `dms setup` réécrit `~/.config/hypr/dms/*.lua` sans préavis. Règle de partage : **l'arbre `~/.config/hypr/dms/` appartient à DMS** (jamais un fichier Eschaton dedans) ; les défauts Eschaton vivent dans `/usr/share/eschaton/hypr/*.lua` (pacman-owned) ; le `hyprland.lua` de l'utilisateur (amorcé par `/etc/skel`, 3 lignes commentées) fait : `require` défauts Eschaton → `require` arbre DMS → overrides utilisateur. L'utilisateur possède son fichier d'entrée, les mises à jour Eschaton passent par `/usr/share`, DMS régénère son arbre sans rien casser.
+1. **Lua d'entrée de jeu.** `hyprlang` disparaît « 1–2 versions après Hyprland 0.55 » ; la fenêtre est ~0.57 (octobre 2026). Toute config Hyprland d'Eschaton naît en **Lua**, et l'entrée de session packagée lance le lanceur amont : **`start-hyprland -- -c ~/.config/hypr/hyprland.lua`** *(forme constatée au spike Task 1 — confirmée par `[cfg] Config is lua, loading lua mgr`)* — sans `-c`, la config Lua est ignorée silencieusement. Invariant testé par le plan.
+2. **Propriété de `~/.config/hypr/`** *(règle amendée le 2026-08-28 — le spike Task 1 a mesuré le comportement réel, vm-dev §12.6-12.7)*. Constat : `dms setup` possède **aussi `hyprland.lua`** (régénéré avec sauvegarde `.dms-backups/`), et réécrit `dms/binds.lua` sans condition ; seuls les six autres `dms/*.lua` sont sautés s'ils existent. L'amorce `/etc/skel` initialement prévue serait donc écrasée au premier `dms setup`. Règle amendée : **l'arbre `~/.config/hypr/` entier appartient à DMS** ; les défauts Eschaton vivent dans `/usr/share/eschaton/hypr/` (pacman-owned) et s'accrochent par le canal que la Task 2 établit **sur pièces** — candidats par ordre de préférence : (a) point d'inclusion offert par le `hyprland.lua` généré par DMS (à vérifier), (b) `dms/binds-user.lua` (sauté par setup, donc sûr) + variables d'environnement de session pour le reste, (c) ne jamais invoquer `dms setup` et générer l'équivalent nous-mêmes (dernier recours : reprend la migration Lua à notre charge). La décision et sa preuve (un `dms setup` volontaire ne détruit pas la config Eschaton) sont un critère de la Task 2.
 
 ## 5. Flux de session
 
@@ -60,7 +60,7 @@ Quatre paquets `arch=(any)`, mêmes conventions que le Socle (LICENSE symlink, d
 
 | # | Risque | Traitement |
 |---|---|---|
-| 1 | Rendu QtQuick sous virtio-gpu en VM inconnu | Spike en tâche 1 ; repli : rendu logiciel Qt (`QSG_RHI_BACKEND=software`) le temps du diagnostic. |
+| 1 | ~~Rendu QtQuick sous virtio-gpu en VM inconnu~~ | **Levé le 2026-08-28** (spike Task 1, vm-dev §12) : Quickshell/DMS rendent nativement sans variable ; seul Hyprland exige `LIBGL_ALWAYS_SOFTWARE=1` (réglage du banc d'essai VM, hors paquets). Errata : le repli `QSG_RHI_BACKEND=software` initialement nommé ici **n'existe pas** en Qt 6.11 (« Unknown key ») — le vrai serait `QT_QUICK_BACKEND=software` (dégradé : fond d'écran perdu), inutile en pratique. |
 | 2 | Cadence DMS (1.x jeune) et **API de plugins non versionnée** (les plugins importent les internes `qs.*` et héritent de `PluginComponent` — aucune promesse de compatibilité) | Politique de version : suivre **`extra/dms-shell` uniquement** (jamais `-git` ni `master`, qui a ~440 commits d'avance) ; `requires_dms` **obligatoire** dans chaque `plugin.json` Eschaton ; smoke test CI de chargement des plugins ; les 12 plugins first-party servent de canari amont. |
 | 3 | Fenêtre de suppression d'hyprlang (~0.57, oct. 2026) | Lua exclusif dès le premier commit (§4.1) — le risque devient nul pour nous. |
 | 4 | `dms setup` écrase des configs | Règle de propriété §4.2 ; aucun fichier Eschaton sous `~/.config/hypr/dms/`. |
@@ -69,6 +69,7 @@ Quatre paquets `arch=(any)`, mêmes conventions que le Socle (LICENSE symlink, d
 | 7 | Retard `hyprland` sur ALARM (0.56.1 vs 0.56.2) — critique si ALARM traîne quand 0.57 supprimera hyprlang | Intégré à la surveillance ALARM instaurée par le Socle §8 risque 2. |
 | 8 | Night mode DMS inopérant en VM (gamma matériel, issue upstream #2061) | Hors critères d'acceptation SP2 tant que le test réel n'a pas tranché. |
 | 9 | Bus factor Quickshell = 1 (`outfoxxed`) | Surveillance ; atténué par l'empaquetage `extra` et le couplage humain avec DMS (lead DMS = contributeur n°2 de Quickshell). Déclencheur le plus probable du critère 4 de l'ADR 0001. |
+| 10 | **Build `extra` de quickshell sans 5 Quickshell Features, dont Polkit** (constat spike Task 1, vm-dev §12.9) | Peut priver DMS d'un agent polkit de session — impact potentiel sur le plugin rollback « derrière polkit » (§3). La Task 2 tranche sur pièces : agent polkit externe packagé (ex. `polkit-gnome`/`hyprpolkitagent`) ou réévaluation de la surface ; la politique « jamais `-git` » (risque 2) reste non négociable. |
 
 Vérification de non-régression bi-architecture (recommandation de veille) : un script CI léger interroge les deux index de dépôts (API Arch + index miroir ALARM) et échoue si une dépendance d'`eschaton-desktop` manque d'un côté — le pendant SP2 du smoke test x86_64 du Socle.
 
