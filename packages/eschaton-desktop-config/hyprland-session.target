@@ -1,0 +1,15 @@
+[Unit]
+# Cible de session utilisateur pour Hyprland — livrée par Eschaton parce que le
+# paquet `hyprland` ne la livre PAS (vérifié : aucun hyprland-session.target sur
+# le système, alors que le hyprland.lua généré par `dms setup` fait
+# `systemctl --user start hyprland-session.target`). Sans elle, la commande
+# échoue, graphical-session.target ne démarre jamais, et dms.service — dont le
+# [Unit] porte `Requisite=graphical-session.target` — ne peut pas démarrer.
+#
+# Motif standard des sessions Wayland (cf. sway-session.target) : BindsTo tire
+# graphical-session.target au démarrage et la fait tomber avec nous à l'arrêt.
+Description=Session graphique Hyprland (Eschaton)
+Documentation=man:systemd.special(7)
+BindsTo=graphical-session.target
+Wants=graphical-session-pre.target
+After=graphical-session-pre.target

@@ -1,0 +1,26 @@
+# Configuration greetd d'Eschaton — /etc/eschaton/greetd.toml
+#
+# Lue par le drop-in /usr/lib/systemd/system/greetd.service.d/eschaton.conf
+# (`greetd --config /etc/eschaton/greetd.toml`), et NON par /etc/greetd/config.toml
+# qui appartient au paquet greetd : deux paquets ne se disputent pas le même
+# fichier, et une mise à jour de greetd ne réécrit rien d'Eschaton.
+#
+# Ce fichier est en `backup=` : pacman ne l'écrase jamais après édition locale.
+
+[terminal]
+vt = 1
+
+# Auto-login — dette de dogfooding assumée (spec Bureau §7, risque 6) : la
+# session s'ouvre sans mot de passe. Le greeter authentifiant est un livrable
+# SP4. `user` est le compte créé par l'installeur : le changer ici sur une
+# machine dont ce n'est pas le nom, ou supprimer toute la section pour tomber
+# sur [default_session].
+[initial_session]
+command = "/usr/bin/eschaton-session"
+user = "seylar"
+
+# Repli après déconnexion : le greeter texte livré avec greetd. Il demande
+# identifiant et mot de passe, puis lance la même session.
+[default_session]
+command = "agreety --cmd /usr/bin/eschaton-session"
+user = "greeter"

@@ -1,0 +1,45 @@
+pkgname=eschaton-desktop-config
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Configuration du bureau Eschaton : session Wayland, greetd, défauts Hyprland"
+arch=(any)
+license=(MIT)
+depends=(hyprland dms-shell greetd bash)
+backup=(etc/eschaton/greetd.toml)
+# LICENSE est un lien symbolique vers le LICENSE partagé à la racine du dépôt :
+# makepkg réduit toute entrée locale de source=() à son basename, donc un chemin
+# relatif ("../../LICENSE") n'est pas résoluble — cf. get_filename() dans
+# /usr/share/makepkg/util/source.sh. Le lien conserve une licence unique.
+source=(eschaton-session eschaton.desktop greetd-eschaton.toml greetd-override.conf
+        51-eschaton-desktop.preset hyprland-session.target
+        seed-hyprland.lua eschaton-defaults.lua LICENSE)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+
+package() {
+  install -Dm755 eschaton-session "$pkgdir/usr/bin/eschaton-session"
+  install -Dm644 eschaton.desktop "$pkgdir/usr/share/wayland-sessions/eschaton.desktop"
+
+  # Défauts Eschaton : pacman-owned, jamais copiés sous ~/.config/hypr/, qui
+  # appartient en entier à DMS (spec Bureau §4.2). `seed-hyprland.lua` est la
+  # seule exception, et c'est eschaton-session qui la copie — une fois, au
+  # premier démarrage d'un compte, sous le nom que l'invariant §4.1 impose.
+  install -Dm644 seed-hyprland.lua "$pkgdir/usr/share/eschaton/hypr/hyprland.lua"
+  install -Dm644 eschaton-defaults.lua "$pkgdir/usr/share/eschaton/hypr/eschaton-defaults.lua"
+
+  install -Dm644 greetd-eschaton.toml "$pkgdir/etc/eschaton/greetd.toml"
+  install -Dm644 greetd-override.conf "$pkgdir/usr/lib/systemd/system/greetd.service.d/eschaton.conf"
+  install -Dm644 51-eschaton-desktop.preset "$pkgdir/usr/lib/systemd/system-preset/51-eschaton-desktop.preset"
+
+  # dms.service est livré `disabled` par dms-shell alors que son préset vaut
+  # `enabled` : rien n'applique jamais les présets d'unités UTILISATEUR
+  # (`systemctl preset-all` est de portée système, et aucun hook alpm d'Arch ne
+  # fait l'équivalent en --global). Un fichier dans /usr/lib/systemd/user-preset/
+  # ne servirait donc à rien ; le lien .wants, lui, active l'unité pour tout
+  # compte, dès l'installation du paquet — motif employé par les paquets Arch
+  # qui livrent une unité utilisateur active par défaut.
+  install -Dm644 hyprland-session.target "$pkgdir/usr/lib/systemd/user/hyprland-session.target"
+  install -d "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants"
+  ln -s ../dms.service "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/dms.service"
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

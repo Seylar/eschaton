@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Point d'entrée de la session Eschaton — /usr/bin/eschaton-session.
+#
+# Lancé par greetd (/etc/eschaton/greetd.toml) ou par n'importe quel greeter via
+# l'entrée /usr/share/wayland-sessions/eschaton.desktop. Trois rôles, dans cet
+# ordre :
+#
+#   1. poser l'environnement de session (disposition clavier notamment) ;
+#   2. amorcer ~/.config/hypr/ s'il n'existe pas encore — orchestration de
+#      session, pas mutation de config par paquet : aucun fichier de cet arbre
+#      n'appartient à pacman (spec Bureau §4.2) ;
+#   3. exec du lanceur amont avec l'invariant Lua : `start-hyprland -- -c <lua>`
+#      (spec Bureau §4.1 — sans `-c`, la config Lua est ignorée en silence).
+#
+# Le script ne doit JAMAIS refuser d'ouvrir la session : toute étape d'amorçage
+# qui échoue est journalisée sur stderr (donc dans le journal de greetd) et la
+# session part quand même. D'où l'absence de `set -e`.
+set -uo pipefail
+
+log() { printf 'eschaton-session: %s\n' "$*" >&2; }
+
+hypr_dir="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
+entry="$hypr_dir/hyprland.lua"
+binds_user="$hypr_dir/dms/binds-user.lua"
+hook_stamp="$hypr_dir/.eschaton-hook"
+defaults=/usr/share/eschaton/hypr/eschaton-defaults.lua
+hook="dofile(\"$defaults\")"
+
+# --- 1. Environnement de session ---------------------------------------------
+export XDG_CURRENT_DESKTOP=Hyprland
+export XDG_SESSION_DESKTOP=eschaton
+export XDG_SESSION_TYPE=wayland
+# Disposition clavier : la config Eschaton laisse `kb_layout` vide pour que
+# libxkbcommon prenne cette variable (voir eschaton-defaults.lua). Une valeur
+# déjà posée (par l'utilisateur ou par un greeter) gagne.
+export XKB_DEFAULT_LAYOUT="${XKB_DEFAULT_LAYOUT:-fr}"
+
+# --- 2. Amorçage du premier démarrage ----------------------------------------
+# Un compte frais n'a pas de ~/.config/hypr/ ; `start-hyprland -- -c` sur un
+# fichier absent ne démarrerait pas la session voulue. On déploie donc l'arbre
+# DMS par ses propres générateurs, puis on pose l'amorce du point d'entrée.
+if [[ ! -e "$entry" ]]; then
+  log "premier démarrage — génération de $hypr_dir"
+  mkdir -p "$hypr_dir/dms" || log "mkdir $hypr_dir/dms a échoué"
+  # Les sous-commandes de `dms setup` écrivent un fichier chacune, sans aucun
+  # privilège et sans question. Le `dms setup` complet, lui, commence par
+  # `sudo usermod -aG input` et abandonne tout le déploiement si sudo ne peut pas
+  # lire de mot de passe — ce qui est le cas d'une session non interactive.
+  # DMS_PRIVESC évite en prime la détection d'outil d'élévation (bruit inutile).
+  for part in colors outputs layout cursor binds windowrules; do
+    DMS_PRIVESC=sudo dms setup "$part" </dev/null >/dev/null 2>&1 \
+      || log "dms setup $part a échoué"
+  done
+  install -Dm644 /usr/share/eschaton/hypr/hyprland.lua "$entry" \
+    || log "installation de l'amorce $entry a échoué"
+fi
+
+# --- 3. Accroche des défauts Eschaton ----------------------------------------
+# dms/binds-user.lua doit exister : le hyprland.lua de DMS comme notre amorce le
+# chargent par `require("dms.binds-user")`, et un require manquant fait échouer
+# toute la configuration.
+if [[ ! -e "$binds_user" ]]; then
+  mkdir -p "$hypr_dir/dms"
+  printf '%s\n' \
+    '-- Surcharges utilisateur. dms setup ne réécrit jamais ce fichier.' \
+    > "$binds_user" || log "création de $binds_user a échoué"
+fi
+# La ligne d'accroche n'est posée qu'une fois dans la vie du compte : qui la
+# retire a décidé de se passer des défauts Eschaton, on ne la lui remet pas.
+if [[ ! -e "$hook_stamp" ]] && ! grep -qF "$hook" "$binds_user" 2>/dev/null; then
+  if printf '%s\n%s\n' \
+       '-- Défauts Eschaton (eschaton-desktop-config) : retirez la ligne suivante' \
+       "$hook" >> "$binds_user"; then
+    : > "$hook_stamp" || log "marqueur $hook_stamp non posé"
+  else
+    log "accroche des défauts Eschaton impossible dans $binds_user"
+  fi
+fi
+
+# --- 4. Le compositeur -------------------------------------------------------
+[[ -e "$entry" ]] || log "ATTENTION : $entry est absent, la session va démarrer sans configuration"
+exec /usr/bin/start-hyprland -- -c "$entry"
