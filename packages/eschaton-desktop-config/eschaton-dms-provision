@@ -7,6 +7,38 @@ wallpaper_needs_seed() { # $1=wallpaper DMS courant $2=fichier Eschaton
   [[ -z $1 && -r $2 ]]
 }
 
+valid_bar_position() { # $1=réponse de `bar getPosition`
+  case ${1:-} in top|bottom|left|right) return 0 ;; *) return 1 ;; esac
+}
+
+wait_for_bar_position() { # $1=dms $2=essais (défaut 45) $3=délai (défaut 1)
+  local dms_bin=$1 attempts=${2:-45} delay=${3:-1} position
+  local attempt
+  for ((attempt = 0; attempt < attempts; attempt++)); do
+    position=$("$dms_bin" ipc call bar getPosition index 0 2>/dev/null) || position=
+    if valid_bar_position "$position"; then
+      printf '%s\n' "$position"
+      return 0
+    fi
+    sleep "$delay"
+  done
+  return 1
+}
+
+wait_for_wallpaper() { # $1=dms $2=essais (défaut 15) $3=délai (défaut 1)
+  local dms_bin=$1 attempts=${2:-15} delay=${3:-1} wallpaper
+  local attempt
+  for ((attempt = 0; attempt < attempts; attempt++)); do
+    if wallpaper=$("$dms_bin" ipc call wallpaper get 2>/dev/null) \
+      && [[ $wallpaper != "Target not found." ]]; then
+      printf '%s\n' "$wallpaper"
+      return 0
+    fi
+    sleep "$delay"
+  done
+  return 1
+}
+
 add_eschaton_widgets() { # $1=settings.json
   local settings=$1 config_dir tmp mode
   config_dir=$(dirname "$settings")
@@ -64,22 +96,17 @@ main() {
   # Forcer une écriture par DMS matérialise dans settings.json sa configuration
   # par défaut complète. On peut alors n'ajouter que nos IDs sans recopier ni
   # figer la longue liste de défauts amont.
-  position=$("$dms_bin" ipc call bar getPosition index 0) || {
-    log "lecture de la position de barre impossible"
+  position=$(wait_for_bar_position "$dms_bin") || {
+    log "cible IPC bar indisponible après 45 s"
     return 1
   }
-  case "$position" in top|bottom|left|right) ;; *)
-    log "position de barre inattendue : $position"
-    return 1
-    ;;
-  esac
   "$dms_bin" ipc call bar setPosition index 0 "$position" >/dev/null
 
   # Le wallpaper amont est un repli interne de DMS : `wallpaper get` rend une
   # chaîne vide, même si une image DMS apparaît. Sur un compte neuf, poser le
   # fond Eschaton via l'IPC officiel. Un choix utilisateur non vide gagne.
-  current_wallpaper=$("$dms_bin" ipc call wallpaper get) || {
-    log "lecture du fond d'écran DMS impossible"
+  current_wallpaper=$(wait_for_wallpaper "$dms_bin") || {
+    log "cible IPC wallpaper indisponible après 15 s"
     return 1
   }
   if wallpaper_needs_seed "$current_wallpaper" "$eschaton_wallpaper"; then

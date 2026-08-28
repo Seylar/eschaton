@@ -2516,6 +2516,15 @@ Le premier essai du provisioning a révélé un cycle
 graphical-session.target`. Après passage au drop-in `dms.service.d`, le reboot
 rend le helper `active (exited)` avec `status=0/SUCCESS`, sans commande manuelle.
 
+Un test final plus strict a ensuite retiré le stamp, désactivé les deux plugins
+et ôté leurs ids de la barre avant reboot. Il a révélé une seconde course :
+`plugins list` répond avant que la cible IPC `bar` n'existe, et DMS rend alors
+`Target not found.` avec un code de sortie nul. Depuis `desktop-config` pkgrel 6,
+le helper n'utilise plus la disponibilité des plugins comme proxy : il attend
+une position de barre valide (`top|bottom|left|right`), puis la cible wallpaper,
+avec des délais bornés. Un test Bats simule expressément la réponse trompeuse du
+premier appel.
+
 Arbitrages écran en main :
 
 - **wallpaper** : `dms ipc call wallpaper get` est vide quand DMS montre son

@@ -37,7 +37,8 @@ Preuves de référence :
   vraie VM) ;
 - provisioning DMS automatique des plugins et du wallpaper, sans écraser les
   choix utilisateur ; cycle systemd initial supprimé par un drop-in de
-  `dms.service` ;
+  `dms.service`. Le helper attend séparément la cible IPC `bar` : `plugins list`
+  peut réussir plusieurs secondes avant elle et `Target not found.` rend rc=0 ;
 - `xdg-desktop-portal-gtk` ajouté : le backend Hyprland ne fournit pas
   FileChooser ;
 - listes update/rollback rafraîchies à l'ouverture des popouts ;
