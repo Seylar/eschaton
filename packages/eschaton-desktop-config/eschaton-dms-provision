@@ -39,6 +39,26 @@ wait_for_wallpaper() { # $1=dms $2=essais (défaut 15) $3=délai (défaut 1)
   return 1
 }
 
+ensure_plugin_loaded() { # $1=dms $2=plugin $3=essais (défaut 15) $4=délai (défaut 1)
+  local dms_bin=$1 plugin=$2 attempts=${3:-15} delay=${4:-1}
+  local attempt output status consecutive=0
+  for ((attempt = 0; attempt < attempts; attempt++)); do
+    status=$("$dms_bin" ipc call plugins status "$plugin" 2>/dev/null) || status=
+    if [[ $status == loaded ]]; then
+      consecutive=$((consecutive + 1))
+      # Un succès isolé ne suffit pas : au démarrage, DMS peut encore recharger
+      # plugin_settings.json et annuler une activation acceptée trop tôt.
+      ((consecutive >= 2)) && return 0
+    else
+      consecutive=0
+      output=$("$dms_bin" ipc call plugins enable "$plugin" 2>&1) || \
+        log "activation de $plugin pas encore possible : $output"
+    fi
+    sleep "$delay"
+  done
+  return 1
+}
+
 add_eschaton_widgets() { # $1=settings.json
   local settings=$1 config_dir tmp mode
   config_dir=$(dirname "$settings")
@@ -60,7 +80,7 @@ add_eschaton_widgets() { # $1=settings.json
 }
 
 main() {
-  local config_dir settings stamp dms_bin position output current_wallpaper
+  local config_dir settings stamp dms_bin position current_wallpaper
   local eschaton_wallpaper=/usr/share/backgrounds/eschaton/default.png
   local ready=false
   config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/DankMaterialShell"
@@ -85,13 +105,6 @@ main() {
     sleep 1
   done
   "$ready" || { log "IPC DMS indisponible après 45 s"; return 1; }
-
-  for plugin in eschatonUpdate eschatonRollback; do
-    output=$("$dms_bin" ipc call plugins enable "$plugin") || {
-      log "activation de $plugin impossible : $output"
-      return 1
-    }
-  done
 
   # Forcer une écriture par DMS matérialise dans settings.json sa configuration
   # par défaut complète. On peut alors n'ajouter que nos IDs sans recopier ni
@@ -119,6 +132,18 @@ main() {
   for _ in {1..10}; do
     if jq -e '.barConfigs[0].rightWidgets | arrays' "$settings" >/dev/null 2>&1; then
       add_eschaton_widgets "$settings"
+
+      # L'activation vient volontairement après la matérialisation de la barre.
+      # `plugins enable` peut rendre 0 pendant que DMS initialise encore ses
+      # réglages, puis être annulé par le chargement tardif de plugin_settings.
+      # Seul un état `loaded` stable autorise donc le marqueur one-shot.
+      for plugin in eschatonUpdate eschatonRollback; do
+        ensure_plugin_loaded "$dms_bin" "$plugin" || {
+          log "$plugin n'est pas resté chargé après 15 s"
+          return 1
+        }
+      done
+
       : > "$stamp"
       log "plugins Eschaton activés et ajoutés à la barre"
       return 0

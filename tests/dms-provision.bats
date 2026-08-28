@@ -59,3 +59,29 @@ EOF
   [ "$output" = top ]
   [ "$(< "$count")" = 2 ]
 }
+
+@test "le provisioning n'accepte qu'un plugin chargé de façon stable" {
+  count="$BATS_TEST_TMPDIR/plugin-status-attempts"
+  fake_dms="$BATS_TEST_TMPDIR/dms-plugin"
+  cat > "$fake_dms" <<'EOF'
+#!/usr/bin/env bash
+count_file="${BATS_TEST_TMPDIR}/plugin-status-attempts"
+if [[ $4 == enable ]]; then
+  exit 0
+fi
+attempt=0
+[[ ! -f "$count_file" ]] || read -r attempt < "$count_file"
+attempt=$((attempt + 1))
+printf '%s\n' "$attempt" > "$count_file"
+if ((attempt == 1)); then
+  printf '%s\n' disabled
+else
+  printf '%s\n' loaded
+fi
+EOF
+  chmod +x "$fake_dms"
+
+  run ensure_plugin_loaded "$fake_dms" eschatonUpdate 4 0
+  [ "$status" -eq 0 ]
+  [ "$(< "$count")" = 3 ]
+}
