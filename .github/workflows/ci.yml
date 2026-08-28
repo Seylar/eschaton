@@ -2,9 +2,7 @@ name: ci
 
 on:
   push:
-    # `bureau` publie la vague SP2 afin que la VM la teste avant revue/fusion.
-    # À refermer sur main après la revue Claude.
-    branches: [main, bureau]
+    branches: [main]
   pull_request:
 
 # La sérialisation doit couvrir les BUILDS, pas seulement le déploiement Pages.
@@ -110,8 +108,8 @@ jobs:
   # choisit le répertoire.
   publish:
     needs: [build-x86_64, build-aarch64]
-    # Publication de validation SP2 depuis `bureau`, sans fusionner dans main.
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/bureau'
+    # Publication depuis `main` uniquement (bascule post-fusion SP2).
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       pages: write
