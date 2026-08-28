@@ -1,6 +1,6 @@
 # Plan d'implémentation : l'Assistant d'Eschaton (SP3)
 
-> **Exécution : Codex** (directive du 2026-08-28 — heavy lifting), gates de revue et tag : Claude. Les conventions du Bureau s'appliquent intégralement (voir Global Constraints). Chaque tâche se termine par : commits poussés sur `bureau`, CI verte, preuves consignées dans `tools/vm-dev.md` — puis la suivante. Pas de tag, pas de fusion.
+> **Exécution : Codex** (directive du 2026-08-28 — heavy lifting), gates de revue et tag : Claude. Les conventions du Bureau s'appliquent intégralement (voir Global Constraints). Chaque tâche se termine par : commits poussés sur `assistant`, CI verte, preuves consignées dans `tools/vm-dev.md` — puis la suivante. Pas de tag, pas de fusion.
 
 **Goal:** `SUPER+A` ouvre la sidebar assistant dans la VM ; conversation streaming avec ≥ 2 formats de fournisseurs ; les 3 outils du catalogue fermé opèrent en conditions réelles (status, update déclenchée, rollback proposé → modale polkit) ; l'injection par contenu système est prouvée inoffensive.
 
@@ -8,7 +8,7 @@
 
 ## Global Constraints
 
-- Branche `bureau` (SP2 fusionné d'abord si le tag v0.2.0 est passé entre-temps — alors branche `assistant` depuis `main`, mêmes règles). Conventions : `arch=(any)`, motif LICENSE symlink, `sha256sums=(SKIP…)`, `backup=` si éditable, pkgrel bump systématique (immutabilité du dépôt), builds `tools/build-pkg <pkg> -d`, `--disable-sandbox` conteneurs, jamais `ping`, correctifs toujours au repo, VM pilotée par `tools/vm-serial`.
+- Branche `assistant`, créée depuis le `main` portant `v0.2.0`. Conventions : `arch=(any)`, motif LICENSE symlink, `sha256sums=(SKIP…)`, `backup=` si éditable, pkgrel bump systématique (immutabilité du dépôt), builds `tools/build-pkg <pkg> -d`, `--disable-sandbox` conteneurs, jamais `ping`, correctifs toujours au repo, VM pilotée par `tools/vm-serial`.
 - **Interdits de veille (§7.2, contraignants)** : aucun agent CLI en depends ; permissions du manifest jamais citées comme sécurité ; jamais `Quickshell.Networking` pour HTTP (transport = `Process` + `curl`) ; ni litellm ni python-anthropic vendorés ; **jamais de mode auto-approuvé** ; jamais de second chemin privilégié (update/rollback passent par les portes existantes).
 - Le contrat `AssistantCore` (spec §3) est LA frontière interne : l'UI ne parle que `send/onDelta/onToolCall/toolResult/onDone` — c'est ce qui rend l'extraction en démon (trajectoire B) possible sans réécriture.
 - `requires_dms: ">=1.5.0"` ; id `eschatonAssistant` ; `/etc/xdg/quickshell/dms-plugins/eschatonAssistant/`.
@@ -16,6 +16,8 @@
 ---
 
 ### Task 1 : Spike de terrain — `dms-ai-assistant` + coût du streaming QML
+
+**Exécutée le 2026-08-28 — décision : trajectoire A maintenue pour la v1.** Mesures, réserves et nettoyage : `tools/vm-dev.md` §19. Aucun code amont conservé.
 
 Veille risque 12 : aucun plugin IA DMS n'a jamais été installé ; risque 7 : coût du SSE en JavaScript QML inconnu. Sortie : décision documentée, pas de code gardé.
 

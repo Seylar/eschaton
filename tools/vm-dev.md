@@ -2938,3 +2938,117 @@ finales : un seul `Hyprland` en vie (`-c …/hyprland.lua`), une seule signature
 sous `/run/user/1000/hypr/`, `diff` de l'inventaire de `~/.config/hypr` vide,
 `dms.service` toujours `active`, pastilles et fond d'écran inchangés à la
 capture.
+
+## 19. SP3 Task 1 — spike `dms-ai-assistant` et décision A/B (2026-08-28)
+
+### 19.1 Terrain réellement joué
+
+Le plugin utilisateur MIT `devnullvoid/dms-ai-assistant` v1.7.0, commit
+`48c0ad9390c34ac43556ca39c8e4e938d6d3e2c6`, a été cloné dans
+`~/.config/DankMaterialShell/plugins/AIAssistant`, activé et rendu par DMS
+1.5.3. La VM avait 4 vCPU et 3,8 GiB de RAM. Le fournisseur n'était pas un
+mock : `ramalama` 0.24.0 et `podman` 6.1.0, issus des dépôts officiels ALARM,
+servaient en loopback le modèle Q8_0
+`HuggingFaceTB/smollm-135M-instruct-v0.2-Q8_0-GGUF` (138 MiB) sur
+`http://127.0.0.1:8080/v1`.
+
+Deux captures 1280×800 ont été relues côté hôte : ouverture vide
+(`sha256:7ef318ae6313e65126f3dcd033971b64eeaf4fb92a927f79e56c9b5fd6116b8e`)
+et réponse longue rendue
+(`sha256:0f0359b8201cfe6465fc0e4ee9610a14321cf68366ee3d861ba20a3df95e1dbf`).
+Le `DankSlideout` est correctement ancré, la saisie reste utilisable et les
+titres Markdown se rendent sans artefact ni gel visible. Le contenu généré par
+le modèle 135M était mauvais et hors sujet ; ce spike juge le transport et le
+rendu, pas l'intelligence du modèle.
+
+### 19.2 Streaming et mémoire
+
+Une requête `curl -N` indépendante a capturé le SSE brut et une trace réseau :
+
+| Mesure | Résultat |
+|---|---:|
+| premier octet HTTP | 3,369 ms |
+| premier frame SSE contenant un delta | 33,882 ms après l'envoi |
+| réponse brute complète | 1,740859 s |
+| frames `data:` | 259 : rôle, 256 deltas de génération, fin, `[DONE]` |
+| cadence serveur | 149,404 tokens/s |
+| intervalle entre lectures `curl` (256 intervalles) | moyenne 6,667 ms ; p50 6,040 ms ; p95 10,896 ms ; max 43,181 ms |
+
+Le parcours UI, déclenché au clavier virtuel dans la vraie session Wayland, a
+produit 256 tokens et persisté les deux messages avec `status: "ok"`. Le log
+RamaLama borne la requête UI entre 18:02:00.500 et 18:02:02.504 : 1,99998 s,
+134,20 tokens/s, sans erreur HTTP. Il faut être exact sur la limite de la
+mesure : le premier **delta réseau** est chronométré, pas le premier pixel du
+texte. Le renderer n'a pas été instrumenté ; inventer une latence de premier
+paint serait mensonger. La capture finale et l'absence de blocage prouvent le
+comportement, pas une métrique frame-perfect.
+
+RSS de `qs`, toujours relevé avec `ps -o rss` pour ne pas mélanger les méthodes :
+
+| État contrôlé | RSS | Écart au DMS frais |
+|---|---:|---:|
+| DMS frais, plugin absent | 379 968 KiB | — |
+| plugin chargé, panneau fermé | 388 656 KiB | +8,48 MiB |
+| panneau ouvert, avant réponse | 425 080 KiB | +44,05 MiB |
+| après la réponse Markdown de 256 tokens | 441 212 KiB | +59,81 MiB |
+| DMS redémarré après nettoyage | 380 388 KiB | +0,41 MiB |
+
+La hausse de ~16 MiB pendant une seule réponse n'est pas une fuite démontrée,
+mais elle est trop grosse pour être ignorée. Le plugin garde à la fois le flux
+brut cumulatif et le texte rendu ; un soak long reste obligatoire en Task 6.
+Le serveur local coûtait séparément ~224 MiB de RSS vu depuis son conteneur ;
+ce coût modèle n'est pas imputé à QML.
+
+### 19.3 Motifs amont lus, pas copiés aveuglément
+
+À reprendre : `Variants { model: Quickshell.screens }` + `DankSlideout`,
+`Process` + `curl`, tampon de lignes pour reconstruire les frames SSE, et
+séparation nette service/UI.
+
+À ne pas reprendre :
+
+- `StdioCollector` conserve stdout cumulatif et le parse depuis un index ; la
+  v1 doit borner ce tampon ;
+- chaque delta concatène le texte puis appelle `ListModel.setProperty` ; à
+  150 deltas/s Qt les regroupe déjà par frame, mais Eschaton doit le faire
+  explicitement avec un flush borné à 16–33 ms ;
+- les JSON malformés sont ignorés silencieusement ; Eschaton doit compter,
+  journaliser et terminer proprement au-delà d'un seuil ;
+- l'option amont peut écrire une clé API dans `plugin_settings.json` ; elle est
+  interdite ici, `secret-tool` reste l'unique stockage ;
+- l'historique amont persiste entre sessions, alors que la v1 Eschaton ne
+  promet qu'un historique de session ;
+- `finish_reason: "length"` est présenté comme un succès sans signaler la
+  troncature, comportement à corriger ;
+- les `permissions` du manifest ne protègent rien et ne seront jamais citées
+  comme frontière de sécurité.
+
+### 19.4 Décision
+
+**Trajectoire A maintenue pour la v1.** Sur cette VM contrainte, le streaming
+QML tient 134 tokens/s dans le vrai slideout et une réponse de 256 tokens sans
+saccade rédhibitoire ni artefact. Faire remonter le démon B maintenant ajouterait
+un protocole, un service et un cycle de panne sans résoudre un problème observé.
+
+Ce n'est pas un blanc-seing : l'implémentation A doit regrouper les deltas,
+borner flux et historique, annuler proprement `curl`, et la Task 6 doit faire un
+soak mémoire. Croissance RSS non bornée ou pertes de frames feront remonter B ;
+le contrat `AssistantCore` reste donc obligatoire.
+
+### 19.5 Traces et nettoyage
+
+Les captures SSE réelles ont été ramenées côté hôte avant nettoyage :
+`eschaton-sp3-sse.txt` (71 720 octets,
+`sha256:04f43212dd548ac8d96223558ff3ebfdb18494898c1d6b8d0f6c6668f0a7d51a`)
+et sa trace `curl` (97 234 octets,
+`sha256:1be11f8a5997e0e6684485741a4de558ac8c097e2b800b2fccea986654fd12dd`).
+La Task 2 en tirera une fixture minimale ; le verbatim généré n'a aucune valeur
+documentaire.
+
+Le dépôt amont dans la VM était propre avant suppression. Le plugin utilisateur,
+son état de session et sa section `aiAssistant` dans `plugin_settings.json` ont
+été retirés ; les copies transitoires sous `/tmp` ont été supprimées. Le
+conteneur `eschaton-sp3-spike` est arrêté. DMS a été redémarré : service
+`active`, seuls `eschatonUpdate` et `eschatonRollback` sont chargés, RSS revenu
+à 380 388 KiB. `ramalama`, `podman` et le modèle restent installés volontairement
+dans la VM de dogfooding pour les Tasks 2 et 6 ; aucun serveur ne tourne.

@@ -74,7 +74,7 @@ La veille (§7.4) éclaire deux candidats viables ; la spec acte la **trajectoir
 | 4 | python-anthropic absent des deux dépôts, AUR périmé | v1 en QML+curl n'en a pas besoin ; si B (Python) : adaptateur `/v1/messages` sur `python-httpx` — dette avec condition de sortie (remplacer si `python-anthropic` entre dans extra en `any`). |
 | 5 | API interne DMS non versionnée + DankSlideout non garanti | `requires_dms` ; juger sur extra seul ; le contrat `AssistantCore` (§3) rend l'UI jetable et la logique extractible (trajectoire B). |
 | 6 | Volatilité des fournisseurs | Configuration datée, jamais architecture (§4). |
-| 7 | Streaming SSE en QML (JavaScript) — coût inconnu | Spike §6.1 mesure AVANT d'écrire ; si rédhibitoire en VM, l'extraction B remonte dans la v1 (décision au spike, tracée). |
+| 7 | Streaming SSE en QML (JavaScript) — coût inconnu | **Le spike du 2026-08-28 lève le risque bloquant** (`tools/vm-dev.md` §19) : 256 tokens réels rendus sans artefact ni gel, trajectoire A maintenue. Réserve honnête : le high-water RSS a pris ~16 MiB pendant cette réponse ; la v1 doit regrouper les deltas par frame, borner l'historique et refaire un soak en Task 6. B remonte si le RSS croît sans borne ou si des frames sont perdues. |
 | 8 | Érosion continue du différenciateur (Omarchy itère chaque semaine) | Formulation §1 datée ; veille rejouée à l'ouverture du SP4. |
 
 ## 8. Ce que l'Assistant prépare
