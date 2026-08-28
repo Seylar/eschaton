@@ -51,6 +51,18 @@ setup() { source "$BATS_TEST_DIRNAME/../packages/eschaton-base/lib.sh"; }
   [ "$output" = "@snapshots/3/snapshot" ]
 }
 
+@test "booted_on_snapshot distingue le système normal d'un démarrage sur snapshot" {
+  # Menu Limine → entrée « Snapshots » : la racine est SOUS @snapshots. Y lancer
+  # le remplacement de sous-volume abîmerait le magasin au lieu de restaurer @.
+  run booted_on_snapshot "@snapshots/3/snapshot" "@snapshots"
+  [ "$status" -eq 0 ]
+  run booted_on_snapshot "@" "@snapshots"
+  [ "$status" -eq 1 ]
+  # Un sous-volume dont le nom commence pareil n'est pas dedans pour autant.
+  run booted_on_snapshot "@snapshots-old" "@snapshots"
+  [ "$status" -eq 1 ]
+}
+
 @test "valid_snapshot_number refuse 0, le vide et le non-numérique" {
   run valid_snapshot_number 3;      [ "$status" -eq 0 ]
   run valid_snapshot_number 007;    [ "$status" -eq 0 ]

@@ -38,3 +38,11 @@ valid_snapshot_number() { # $1=saisie de l'utilisateur
   [[ $1 =~ ^[0-9]+$ ]] || return 1
   ((10#$1 > 0))
 }
+
+# Vrai quand la racine vit SOUS le sous-volume des snapshots, c'est-à-dire quand
+# on a démarré sur une entrée « Snapshots » du menu Limine. Le remplacement de
+# sous-volume n'a alors aucun sens : il abîmerait le magasin de snapshots au lieu
+# de restaurer `@`. C'est `limine-snapper-restore` qu'il faut, pas celui-ci.
+booted_on_snapshot() { # $1=sous-volume racine $2=sous-volume des snapshots
+  [[ $1 == "$2"/* ]]
+}

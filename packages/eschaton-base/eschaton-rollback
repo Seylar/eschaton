@@ -49,6 +49,14 @@ root_subvol=$(subvol_of_source "$root_src") ||
   die "/ n'est pas monté depuis un sous-volume btrfs ($root_src) — rien à remplacer."
 snaps_subvol=$(subvol_of_source "$snap_src") ||
   die "/.snapshots n'est pas un sous-volume btrfs ($snap_src)."
+if booted_on_snapshot "$root_subvol" "$snaps_subvol"; then
+  echo "eschaton-rollback : le système a démarré sur un snapshot ($root_subvol)." >&2
+  echo "  Cet outil restaure depuis le système normal ; ici il remplacerait le" >&2
+  echo "  snapshot lui-même. Pour rendre permanent l'état sur lequel tu as" >&2
+  echo "  démarré :  sudo limine-snapper-restore" >&2
+  exit 1
+fi
+
 target=$(snapshot_subvol_path "$snaps_subvol" "$num")
 backup="${root_subvol}.avant-rollback-$(date +%Y%m%d-%H%M%S)"
 
