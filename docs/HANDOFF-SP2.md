@@ -162,3 +162,13 @@ Le bloqueur technique est levé. **Ne pas tagger et ne pas fusionner** : la revu
 Claude de ce correctif reste le gate demandé.
 
 **Rappels** : la règle polkit supprimée ne se réintroduit pas (auth_admin par la modale DMS, prouvée) ; immutabilité du dépôt (bump systématique, jamais des octets différents sous un même pkgrel) ; jamais `ping` ; correctifs toujours au repo.
+
+
+## 8. Dossier SP3 pour Codex — l'Assistant (à démarrer APRÈS validation du §7 par la revue Claude)
+
+Le sous-projet 3 est spécifié et planifié :
+- **Spec (autorité)** : `docs/superpowers/specs/2026-08-28-assistant-design.md` — trajectoire A→B, contrat `AssistantCore`, catalogue d'outils fermé, sécurité (permissions DMS décoratives — les frontières réelles sont le catalogue + les portes polkit).
+- **Plan d'exécution (8 tâches)** : `docs/superpowers/plans/2026-08-28-assistant.md` — Task 1 = spike de terrain `dms-ai-assistant` + mesure du streaming QML (décision A vs B-remontée AVANT d'écrire le moteur).
+- **Veille (autorité factuelle, ses §7.2 interdits sont contraignants)** : `docs/veille/2026-08-28-sp3-assistant.md`.
+
+Ordre impératif : finir le §7 (rendu pastilles) → revue Claude → [Claude : fusion + tag v0.2.0] → SP3 Task 1. Mêmes règles que toujours : pousser sur `bureau` (ou la branche que Claude indiquera post-fusion), CI verte à chaque vague, preuves vm-dev, jamais de tag/fusion.
