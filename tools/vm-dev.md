@@ -2600,8 +2600,9 @@ passe par les règles), et la modale réelle avec rc=126 à l'annulation.
 > un second, et un micro-déplacement du curseur avant le clic pour que Qt
 > réévalue le survol.
 
-> **Réserve : les pastilles des plugins ne sont pas rendues après un
-> démarrage.** Au démarrage du 14:19, le service de provisioning est
+> **Défaut découvert ici, résolu au §14.5 : les pastilles des plugins
+> n'étaient pas rendues après un démarrage frais.** Au démarrage du 14:19, le
+> service de provisioning était
 > `active (exited)`, `dms ipc call plugins status` rend `loaded` pour les deux
 > plugins, `plugin_settings.json` porte `true,true` et `barConfigs[0].rightWidgets`
 > contient bien `eschatonUpdate` et `eschatonRollback` — mais la capture d'écran
@@ -2611,9 +2612,82 @@ passe par les règles), et la modale réelle avec rc=126 à l'annulation.
 > définitivement. La capture `bureau-final-published.png` (14:04, avant ce
 > redémarrage) montre la même absence. Les assertions de la Task 7 portaient sur
 > `settings.json` et sur l'IPC, jamais sur le rendu : **l'état de la barre après
-> un démarrage frais n'est donc pas prouvé.** À reprendre avant le tag — c'est
-> le critère « zéro terminal » qui est en jeu, pas la mécanique de restauration,
-> elle-même prouvée ci-dessus.
+> un démarrage frais n'était donc pas prouvé.** Le pkgrel 9 corrige ce défaut et
+> les deux boots avec le paquet publié du §14.5 ajoutent enfin la preuve visuelle
+> qui manquait.
+
+### 14.5 Recomposition initiale de DankBar — cause et preuve publiée
+
+La piste du scan tardif des plugins était fausse. Une reproduction contrôlée
+avec le pkgrel 8 a donné simultanément, après reboot :
+
+```text
+settings.json rightWidgets = eschatonUpdate + eschatonRollback
+IPC settings barConfigs    = aucun des deux ids
+plugins status             = loaded,loaded
+capture                     = aucune pastille Eschaton
+```
+
+DMS 1.5.3 charge `settings.json` dans `SettingsData.qml` au démarrage et ne le
+surveille pas ensuite. Or le helper doit modifier directement
+`barConfigs[0].rightWidgets` : l'IPC générique `settings set` refuse les objets
+et tableaux, et la cible `bar` n'expose aucune commande d'ajout de widget. Le
+fichier était donc juste, mais la composition de barre déjà en mémoire restait
+ancienne. Recharger les plugins ne recrée pas les `WidgetHost` absents ; un
+restart de DMS, lui, relit la liste complète et fait apparaître les pastilles.
+
+`eschaton-desktop-config` 0.1.0-9 ajoute le contournement minimal : après avoir
+persisté les widgets, stabilisé les deux plugins à `loaded` et posé le stamp, le
+helper compare le `barConfigs` IPC à l'état voulu. S'il manque les ids, il lance
+exactement `systemctl --user --no-block restart dms.service`. Le `--no-block`
+est nécessaire car le oneshot est ordonné après DMS ; attendre le restart
+créerait un blocage. Si une version amont apprend à recharger le tableau,
+l'égalité IPC évitera automatiquement ce restart.
+
+Le correctif `4c91c79` a passé `shellcheck`, les **35 tests Bats**, le build
+local du paquet et la CI bi-architecture complète `33179345260`. La preuve
+ci-dessous utilise l'archive **réellement téléchargée depuis Pages**, pas le
+build local :
+
+```console
+$ pacman -Q eschaton-desktop-config
+eschaton-desktop-config 0.1.0-9
+$ sha256sum /tmp/eschaton-published/eschaton-desktop-config-0.1.0-9-any.pkg.tar.xz
+fe81891f33aafa68e07c64afae33c494317dc1dd871b91d0d9f4e6ea2322d076  …
+```
+
+**Boot 1 — provisioning entièrement frais.** Avant reboot : plugins désactivés,
+ids retirés du fichier et stamp absent. Sans aucune action graphique ou restart
+manuel après reboot :
+
+```text
+service=active
+file_widgets=1,1
+memory_widgets=1,1
+plugin_status=loaded,loaded
+plugin_settings=true,true
+stamp=present
+16:27:32 plugins activés ; redémarrage DMS demandé pour recomposer la barre
+```
+
+La capture `bureau-published9-boot1.png`, SHA-256
+`ce747dd1c0d528ef59c571f85a3bf04319cf668fb0de38d209527d0f7e3cfbc5`,
+montre les deux pastilles à droite de la barre : téléchargement pour update,
+historique circulaire pour rollback.
+
+**Boot 2 — reboot consécutif ordinaire, sans réinitialiser le stamp ni les
+réglages.** La session retrouve `file_widgets=1,1`, `memory_widgets=1,1`,
+`loaded,loaded` et `true,true`. Le journal contient zéro message de recomposition :
+le oneshot commence et finit à 16:29:26, le stamp rend le restart inutile. La
+capture `bureau-published9-boot2.png`, SHA-256
+`66a33b665b5e8e2a8d972bf5104d834d46c38283efb4eca866e1170de131de28`,
+montre encore les deux pastilles.
+
+**Checklist durable pour tout futur test de provisioning frais :** ne plus
+conclure sur les seuls fichiers et IPC. Exiger ensemble un exemplaire de chaque
+id dans `settings.json`, un exemplaire dans le `barConfigs` IPC, deux statuts
+`loaded`, puis une capture d'écran inspectée où les deux pastilles sont
+réellement visibles. Rejouer un second reboot sans retirer le stamp.
 
 ## 15. Installation réelle du Bureau (SP2, Task 7)
 

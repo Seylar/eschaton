@@ -96,12 +96,16 @@ ancien état → @.avant-rollback-20260828-132747
 ```
 
 Le service de provisioning après reboot est `active (exited)` avec
-`status=0/SUCCESS`; `dms.service` est `active (running)`. Le test frais final a
-installé `eschaton-desktop-config 0.1.0-7` depuis Pages, forcé plugins à
-`false`, widgets absents et stamp absent, puis rebooté. Les assertions donnent
-`loaded,loaded`, `[true,true]`, un exemplaire de chaque widget et un stamp
-présent ; une seconde lecture 15 s plus tard donne encore le même état. Code :
-`840d0fc`; CI bi-architecture et publication : `33169926022`.
+`status=0/SUCCESS`; `dms.service` est `active (running)`. Le premier test frais
+sur le pkgrel 7 ne prouvait que fichiers et IPC et a donc laissé passer le défaut
+de rendu décrit au §7. La preuve corrigée installe depuis Pages
+`eschaton-desktop-config 0.1.0-9` (SHA-256 publié
+`fe81891f33aafa68e07c64afae33c494317dc1dd871b91d0d9f4e6ea2322d076`),
+force plugins à `false`, widgets absents et stamp absent, puis effectue deux
+boots consécutifs. Les deux donnent `loaded,loaded`, `[true,true]`, un exemplaire
+de chaque widget sur disque **et en mémoire**, et les captures montrent les deux
+pastilles. Code : `4c91c79`; CI bi-architecture et publication : `33179345260` ;
+détail et empreintes des captures : `tools/vm-dev.md` §14.5.
 
 ## 5. Réserves honnêtes
 
@@ -128,17 +132,33 @@ présent ; une seconde lecture 15 s plus tard donne encore le même état. Code 
    dépôt refuse désormais implicitement de remplacer une archive du même nom.
 
 
-## 7. Tâche suivante pour Codex — fix du rendu des pastilles (BLOQUEUR du tag v0.2.0)
+## 7. Résolution Codex — rendu des pastilles au boot frais
 
 *(Section ajoutée par Claude après la re-revue de la vague de fix — le commit précédent l'annonçait par erreur, la voici réellement.)*
 
 **Le constat** (vm-dev §14.4, spec §6.1 ligne 6, confirmé en re-revue sur captures) : au **boot frais**, les deux pastilles Eschaton sont intégralement déclarées actives — IPC `plugins list` → `loaded`, `plugin_settings.json` → `true,true`, `rightWidgets` complet — mais **ne sont pas rendues** dans la DankBar. `systemctl --user restart dms.service` les fait apparaître immédiatement et durablement. `dms ipc call plugins reload <id>` ne répare PAS. La Task 7 n'avait jamais testé le rendu (fichiers+IPC seulement).
 
-**Mission** :
-1. **Diagnostiquer la course** dans la VM (`eschaton-dev`, `tools/vm-serial`) : pourquoi la barre compose-t-elle avant que les plugins système soient visibles au premier démarrage, alors qu'un restart règle tout ? Pistes : ordre `eschaton-dms-provision.service` (Wants/Before de `dms.service`) vs le moment où `PluginService` scanne `/etc/xdg/quickshell/dms-plugins/` ; le chargement tardif de `plugin_settings.json` (mensonge IPC n°2, déjà capturé par `tests/dms-provision.bats`) ; un besoin de re-notification de la barre après enregistrement tardif.
-2. **Corriger dans les paquets** (jamais VM-seulement) — le correctif le plus PETIT qui tient : ordonnancement d'unités, séquence de provisioning, ou signal de recomposition documenté côté DMS s'il existe. Si le défaut est amont (DMS ne recompose pas sur enregistrement tardif d'un plugin système), contournement packagé le plus propre + note upstream consignée.
-3. **Prouver au boot frais** : reboot complet → les 2 pastilles rendues SANS action manuelle (capture, méthode §12.5), **deux boots de suite**. Ajouter l'assertion de rendu à la checklist (vm-dev) pour que le trou de T7 ne se reproduise pas.
-4. pkgrel bump des paquets touchés, push, CI verte, `pacman -Syu` en VM avant preuve. Bats pour toute logique nouvelle.
-5. **Ne pas tagger, ne pas fusionner** — la revue Claude reste le gate du tag.
+**Mission accomplie sur `4c91c79`.** Le problème n'était pas un scan tardif des
+plugins : DMS 1.5.3 ne recharge pas `settings.json`, tandis que son IPC
+`settings set` refuse les tableaux. Le helper ajoutait correctement les ids sur
+disque mais le `barConfigs` en mémoire restait ancien. Un reload de plugin ne
+peut pas créer les hôtes de widgets absents.
+
+Le pkgrel 9 compare désormais l'état mémoire après provisioning et demande, si
+nécessaire, `systemctl --user --no-block restart dms.service`. Le restart est
+unique, différé pour ne pas bloquer l'ordre systemd, et sera automatiquement
+évité si DMS sait un jour recharger la liste. Deux tests Bats couvrent la
+détection et l'appel exact.
+
+Preuve sur le paquet Pages, détaillée dans `tools/vm-dev.md` §14.5 :
+
+1. boot frais après état `false,false`, widgets absents et stamp absent : les
+   deux pastilles sont rendues ; fichier/IPC `1,1`, statuts `loaded,loaded` ;
+2. reboot consécutif sans réinitialisation : les deux pastilles restent rendues
+   et le journal confirme `recompose_messages=0` ;
+3. CI `33179345260` entièrement verte, paquet publié puis réinstallé en VM.
+
+Le bloqueur technique est levé. **Ne pas tagger et ne pas fusionner** : la revue
+Claude de ce correctif reste le gate demandé.
 
 **Rappels** : la règle polkit supprimée ne se réintroduit pas (auth_admin par la modale DMS, prouvée) ; immutabilité du dépôt (bump systématique, jamais des octets différents sous un même pkgrel) ; jamais `ping` ; correctifs toujours au repo.
