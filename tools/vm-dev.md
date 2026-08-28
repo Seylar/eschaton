@@ -986,3 +986,53 @@ $ sha256sum /usr/bin/eschaton-rollback
 
 Le filet fonctionne toujours après le rollback : la transaction a produit ses
 deux snapshots, et `limine.conf` porte les cinq entrées correspondantes.
+
+Même chemin pour la version portant les quatre correctifs — et c'est la
+disparition de l'avertissement qui signe le n°2 :
+
+```console
+$ eschaton-update --noconfirm
+Paquets (1) eschaton-base-0.1.0-10
+(1/2) Performing snapper pre snapshots…   ==> root: 6
+(2/2) Performing snapper post snapshots…  ==> root: 7
+        (plus aucun avertissement sur /etc/sudoers.d)
+
+$ pacman -Q eschaton-base
+eschaton-base 0.1.0-10
+$ sudo pacman -Qkk eschaton-base
+eschaton-base : 26 fichiers au total, 0 fichier modifié
+$ stat -c "%a %n" /etc/sudoers.d
+750 /etc/sudoers.d
+$ sha256sum /usr/bin/eschaton-rollback /usr/lib/eschaton/lib.sh
+60f43921ce32247f19a384ab97cda4acf3658db30220216df85b2c91c18d0d88  /usr/bin/eschaton-rollback
+9719cdb16d60ee69fa6f881f9aba9d3d7c837b502238b73d20c980176e93055a  /usr/lib/eschaton/lib.sh
+```
+
+Empreintes identiques aux fichiers du dépôt.
+
+### 9.9 État de la VM à la fin du test
+
+Elle reste l'installation de référence de la Task 9 : jamais réinstallée, et
+rendue propre.
+
+```console
+$ findmnt -no SOURCE,OPTIONS /
+/dev/vda2[/@] rw,noatime,…,subvolid=266,subvol=/@
+$ sudo btrfs subvolume list / | grep -v "snapshots/"
+ID 257 … @home     ID 258 … @log     ID 259 … @pkg
+ID 260 … @snapshots                  ID 266 … @
+$ grep -n "^default_entry" /boot/limine.conf
+2:default_entry: Eschaton/linux-aarch64
+$ df -h /boot | tail -1
+/dev/vda1          4,0G    255M  3,8G   7% /boot
+$ systemctl --failed --no-legend
+(vide)
+```
+
+Aucun sous-volume `@.avant-rollback-*` résiduel, 7 snapshots et leurs 7 entrées
+de démarrage, `default_entry` sur l'entrée nominale.
+
+> **Le seul écart avec l'installation d'origine** : la racine est le
+> sous-volume 266 et non plus 256, et `/var/lib/machines` comme
+> `/var/lib/portables` y sont des répertoires ordinaires. C'est la trace normale
+> d'un rollback par `replace`, pas un dommage.
