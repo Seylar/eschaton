@@ -34,9 +34,13 @@ package() {
   # `enabled` : rien n'applique jamais les présets d'unités UTILISATEUR
   # (`systemctl preset-all` est de portée système, et aucun hook alpm d'Arch ne
   # fait l'équivalent en --global). Un fichier dans /usr/lib/systemd/user-preset/
-  # ne servirait donc à rien ; le lien .wants, lui, active l'unité pour tout
-  # compte, dès l'installation du paquet — motif employé par les paquets Arch
-  # qui livrent une unité utilisateur active par défaut.
+  # ne servirait donc à rien. Le lien .wants, lui, crée la dépendance pour tout
+  # compte dès l'installation, sans rien écrire dans /etc — motif des paquets qui
+  # livrent une unité utilisateur active par défaut. Attention à la lecture :
+  # `systemctl --user list-unit-files dms.service` continue d'afficher
+  # « disabled » (cet état ne regarde que les liens de /etc et de ~/.config) ;
+  # la preuve est du côté de la cible —
+  # `systemctl --user show graphical-session.target -p Wants` → `dms.service`.
   install -Dm644 hyprland-session.target "$pkgdir/usr/lib/systemd/user/hyprland-session.target"
   install -d "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants"
   ln -s ../dms.service "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/dms.service"

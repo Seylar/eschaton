@@ -2264,6 +2264,24 @@ config Lua.
   `ShortcutInhibitor` relèvent du verrouillage et des raccourcis globaux (non-buts
   v1, différés SP4), `BackgroundBlur` est cosmétique — et de toute façon
   indisponible sans GL matériel (§12.2).
+
+  > **Réserve levée le 2026-08-28 (Task 2) : la ligne `Polkit ····· Not
+  > available` de `dms doctor` est un FAUX NÉGATIF.** Le greffon
+  > `Quickshell_Services_PolkitPlugin` est bien lié dans le `/usr/bin/qs` du
+  > paquet `extra`, l'agent d'authentification de DMS s'enregistre auprès de
+  > `polkitd`, affiche sa modale, et une élévation aboutit :
+  >
+  > ```console
+  > $ pkcheck --action-id org.freedesktop.policykit.exec --process $$ --allow-user-interaction
+  > polkit\56result=auth_admin          → rc=0 après saisie du mot de passe
+  > $ pkcheck --action-id org.freedesktop.policykit.exec --process $$
+  > Authorization requires authentication and -u wasn't passed.   → rc=2
+  > ```
+  >
+  > Mesuré deux fois : dans la session du spike, puis dans la vraie session
+  > greetd du §13. Mauvais mot de passe → la modale reste ouverte, `pkcheck` ne
+  > rend jamais la main (rc=124 par `timeout`). Détail et captures dans le
+  > rapport de la Task 2. **Aucun agent polkit externe n'est à empaqueter.**
 - **Le chemin de session réel.** Le spike démarre le compositeur depuis la
   console série avec `seatd` lancé à la main. Le produit passera par
   `greetd` + auto-login sur une VT, donc par le *seat* de logind : la question
@@ -2277,6 +2295,9 @@ config Lua.
   pipewire context. Errno: 112` — les unités utilisateur de PipeWire ne sont pas
   démarrées. Le Control Center affiche « Aucun appareil de sortie ». À traiter
   par le préset d'`eschaton-desktop-config`, pas un problème de rendu.
+  *(Réserve levée le 2026-08-28, Task 2 : c'était l'absence de session logind,
+  pas une affaire de préset — voir §13.3. Sous greetd, `pipewire.service` et
+  `wireplumber.service` sont `running` sans rien ajouter.)*
 - **La fluidité au sens strict.** Aucun compteur d'images mesuré : le constat est
   « 0 % de CPU au repos, ouverture du Control Center et du lanceur immédiates,
   aucun artefact sur les captures ».
@@ -2288,3 +2309,113 @@ config Lua.
   `dms setup` et un `eschaton.lua` de test. La Task 7 réinstallera par paquets
   par-dessus.
 
+## 13. Session graphique par greetd (SP2, Task 2)
+
+Déroulé le 2026-08-28, toujours par la console série, avec le paquet
+`eschaton-desktop-config` 0.1.0-1 installé par `pacman -U`. La VM démarre
+désormais **sur le bureau** : `greetd` est `enabled` (le préset livré par le
+paquet a été appliqué par `systemctl preset greetd.service`, qui crée
+`/etc/systemd/system/display-manager.service → greetd.service`).
+
+### 13.1 Le réglage de banc d'essai à poser dans le greetd de LA VM
+
+`LIBGL_ALWAYS_SOFTWARE=1` reste indispensable au compositeur sous ce
+virtio-gpu sans virgl (§12.2), et reste **hors des paquets** : sur une machine
+dotée d'un GPU ce serait une régression. La VM le porte dans son propre
+`/etc/eschaton/greetd.toml` — un fichier `backup=`, donc modifiable sans que
+pacman le reprenne :
+
+```toml
+[initial_session]
+command = "env LIBGL_ALWAYS_SOFTWARE=1 /usr/bin/eschaton-session"
+user = "seylar"
+```
+
+(Le fichier livré par le paquet dit `command = "/usr/bin/eschaton-session"` ;
+seul le préfixe `env …` est propre à la VM. greetd n'a pas de section
+d'environnement : `env` est le moyen d'en poser un.) Après édition :
+
+```bash
+sudo rm -f /run/greetd.run && sudo systemctl restart greetd
+```
+
+### 13.2 Piège : l'auto-login ne rejoue pas sur un simple `restart`
+
+greetd retient dans `/run/greetd.run` qu'il a déjà déroulé son
+`[initial_session]`. Un `systemctl restart greetd` **retombe donc sur
+`[default_session]`** — chez nous `agreety`, le greeter texte, qui attend un
+identifiant sur le VT 1 et ne peut pas être piloté depuis la console série. Le
+journal le dit franchement :
+
+```console
+$ journalctl -u greetd | tail -3
+greetd[18587]: pam_unix(greetd:session): session opened for user greeter(uid=965)
+```
+
+Supprimer `/run/greetd.run` avant le `restart` (ou redémarrer la VM) rejoue
+l'auto-login :
+
+```console
+$ sudo rm -f /run/greetd.run && sudo systemctl restart greetd && sleep 18
+$ ps -eo user,pid,comm | grep -E 'Hyprland|qs'
+seylar     19382 Hyprland
+seylar     19410 qs
+```
+
+### 13.3 Ce que la session greetd corrige par rapport au spike
+
+- **Plus de `seatd` à la main.** greetd ouvre une session logind sur `seat0` /
+  `tty1` ; `libseat` prend son back-end logind tout seul. Le contournement du
+  §12.3 n'a plus lieu d'être.
+- **PipeWire démarre.** La réserve du §12.9 tombe : dans une vraie session
+  utilisateur, `pipewire.service` et `wireplumber.service` sont `running` sans
+  qu'aucun préset d'Eschaton n'ait à s'en mêler. Le Control Center affiche
+  toujours « Aucun appareil de sortie », mais c'est le matériel de la VM
+  (`-audio none` côté QEMU), pas la configuration.
+- **`dms.service` est supervisé.** `hyprland-session.target` (livré par
+  `eschaton-desktop-config`, absent du paquet `hyprland`) tire
+  `graphical-session.target`, qui tire `dms.service`.
+
+```console
+$ systemctl --user is-active hyprland-session.target graphical-session.target dms.service
+active
+active
+active
+```
+
+> **Lecture trompeuse.** `systemctl --user list-unit-files dms.service` affiche
+> encore `disabled` : cet état ne regarde que les liens de `/etc/systemd/user/`
+> et de `~/.config/systemd/user/`, pas le `.wants` livré sous `/usr/lib`. La
+> preuve utile est
+> `systemctl --user show graphical-session.target -p Wants` → `dms.service`.
+
+### 13.4 Injecter des frappes dans la session (utile aux tâches 7–9)
+
+Aucun dispatcher `hyprctl` ne tape du texte, et `sendshortcut` ne vise que des
+fenêtres — pas les surfaces layer-shell de DMS, qui portent justement les
+modales. Le moyen qui marche est **`wtype`** (`extra`, 0.4-2, protocole
+virtual-keyboard) :
+
+```bash
+export WAYLAND_DISPLAY=wayland-1
+wtype 'eschaton'; wtype -k Return
+```
+
+C'est un outil de banc d'essai, installé à la main dans la VM ; il n'entre dans
+les `depends` d'aucun paquet Eschaton.
+
+### 13.5 Pousser un fichier de l'hôte vers la VM par la console série
+
+Le §12.5 documente le sens invité → hôte. Le sens inverse tient au même
+procédé, en morceaux (la ligne canonique de l'invité plafonne à 4096 caractères ;
+480 passent sans risque) :
+
+```bash
+b64=$(base64 < paquet.pkg.tar.xz | tr -d '\n')
+# pour chaque morceau de 480 caractères :
+tools/vm-serial send "printf %s '<morceau>' >> /tmp/paquet.b64"
+tools/vm-serial run "base64 -d /tmp/paquet.b64 > /tmp/paquet.pkg.tar.xz; sha256sum /tmp/paquet.pkg.tar.xz"
+```
+
+8 Kio (24 morceaux) passent en une vingtaine de secondes, empreinte vérifiée
+des deux côtés.
