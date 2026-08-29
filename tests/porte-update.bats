@@ -236,6 +236,18 @@ FIN
   run verdict_prevol "$sortie" 0
   [ "$output" = "rien" ]
 
+  # RÉGRESSION, mesurée en VM le 2026-08-30 : après notre refus du
+  # remplacement, pacman n'avait plus rien à faire et l'écrivait SUR LA MÊME
+  # LIGNE que la question. Tester « rien à faire » en premier transformait une
+  # décision humaine en succès silencieux. La ligne ci-dessous est la sortie
+  # réelle, copiée telle quelle.
+  printf ':: Replace eschaton-prevol-ancien with eschatonprevol/eschaton-prevol-nouveau? [Y/n]  there is nothing to do\n' > "$sortie"
+  run verdict_prevol "$sortie" 0
+  [ "$output" = "decision" ] || {
+    echo "un remplacement refusé a été pris pour « rien à faire » : verdict=$output"
+    return 1
+  }
+
   # Résolution impossible, sans aucune question : ce n'est pas une décision
   # humaine, c'est une erreur — et l'interface ne doit pas les confondre.
   printf 'error: failed to prepare transaction (could not satisfy dependencies)\n' > "$sortie"

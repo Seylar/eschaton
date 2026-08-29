@@ -112,16 +112,20 @@ update_marqueur_sommaire() {
 # une décision humaine.
 verdict_prevol() { # $1=fichier de sortie du pré-vol $2=code de retour de pacman
   local invites sommaire
-  if grep -qF 'nothing to do' "$1"; then
-    printf 'rien\n'
-    return 0
-  fi
   invites=$(grep -cE "$(update_marqueurs_invite)" "$1" || true)
   sommaire=$(grep -cF "$(update_marqueur_sommaire)" "$1" || true)
+  # Les questions AVANT « rien à faire », et l'ordre n'est pas cosmétique.
+  # Mesuré le 2026-08-30 sur un vrai remplacement de paquet : après notre refus
+  # du remplacement, pacman n'avait plus rien à faire et écrivait
+  # « there is nothing to do » — sur la même ligne que la question. Tester
+  # « rien à faire » d'abord transformait donc une décision humaine en succès
+  # silencieux, ce qui est précisément le mensonge qu'on veut interdire.
   if ((invites == 1)) && ((sommaire >= 1)); then
     printf 'propre\n'
   elif ((invites >= 1)); then
     printf 'decision\n'
+  elif grep -qF 'nothing to do' "$1"; then
+    printf 'rien\n'
   elif (($2 != 0)); then
     printf 'erreur\n'
   else
