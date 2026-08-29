@@ -5,25 +5,32 @@ set -euo pipefail
 # shellcheck source=/dev/null
 source /usr/lib/eschaton/lib.sh
 
+die() { echo "eschaton-update : $*" >&2; exit 1; }
+
+# Deux modes, une seule invocation de pacman par mode.
+#
+#   (défaut)        un humain, dans un terminal. pacman lui pose ses questions.
+#   --transaction   la charge de l'unité systemd transitoire, démarrée par
+#                   eschaton-update-helper après la modale polkit.
+mode=terminal
+if (($# > 0)) && [[ $1 == --transaction ]]; then
+  mode=transaction
+  shift
+fi
+
 # Validation d'abord : `pacman_update_args` rend les arguments inchangés ou
 # échoue. On ne passe PAS par `mapfile < <(…)`, qui perdrait dans le sous-shell
 # le code de retour de la validation — l'option interdite serait alors
 # transmise à pacman après un message d'erreur ignoré.
 pacman_update_args "$@" > /dev/null || exit 1
 
-# Une question de pacman doit atteindre un humain, ou la transaction n'a pas
-# lieu.
-#
-# Sans terminal sur l'entrée standard, pacman lit EOF et applique la réponse
-# PAR DÉFAUT à chaque invite : c'est la même auto-approbation que
-# `--noconfirm`, simplement sans l'écrire. Tant que l'interface graphique ne
-# sait pas relayer les questions (plan Tasks 4-5), le seul mode sûr est « un
-# humain devant un terminal ».
-if [[ ! -t 0 ]]; then
+if [[ $mode == transaction ]]; then
+  ((EUID == 0)) || die "le mode --transaction est celui de l'unité systemd ; il doit être lancé comme root."
+elif [[ ! -t 0 ]]; then
   echo "eschaton-update : pas de terminal sur l'entrée standard." >&2
-  echo "  pacman appliquerait ses réponses par défaut sans que personne ne les" >&2
-  echo "  voie ni ne les décide. Lance la mise à jour depuis un terminal, ou" >&2
-  echo "  depuis le panneau Eschaton." >&2
+  echo "  pacman ne pourrait poser ses questions à personne et s'arrêterait." >&2
+  echo "  Lance la mise à jour depuis un terminal, ou depuis le panneau" >&2
+  echo "  Eschaton." >&2
   exit 1
 fi
 
@@ -33,9 +40,149 @@ if ! check_free_space_kb "$avail_kb" "$min_kb"; then
   echo "eschaton-update : moins de 1 Gio libre sur /, libère de l'espace d'abord." >&2
   exit 1
 fi
-echo "==> Mise à jour (Arch + [eschaton]). Snapshot automatique via snap-pac."
-echo "    Les questions de pacman sont posées ICI : personne n'y répond à ta place."
-sudo pacman -Syu "$@"
-if running_kernel_missing_modules /usr/lib/modules "$(uname -r)"; then
-  echo "==> Le kernel a été mis à jour : redémarre pour l'utiliser (sudo reboot)."
+
+if [[ $mode == terminal ]]; then
+  echo "==> Mise à jour (Arch + [eschaton]). Snapshot automatique via snap-pac."
+  echo "    Les questions de pacman sont posées ICI : personne n'y répond à ta place."
+  sudo pacman -Syu "$@"
+  if running_kernel_missing_modules /usr/lib/modules "$(uname -r)"; then
+    echo "==> Le kernel a été mis à jour : redémarre pour l'utiliser (sudo reboot)."
+  fi
+  exit 0
 fi
+
+# ═══════════════════ mode --transaction (unité systemd) ═══════════════════
+#
+# Deux phases, et la première est ce qui rend la seconde honnête.
+#
+# PHASE A — un pré-vol qui ne modifie rien (`--print`), entrée standard sur
+# /dev/null. Source pacman relue le 2026-08-30 (`src/pacman/util.c`) : sur EOF,
+# `question()` tombe sur `return 0`, c'est-à-dire **NON** — une ligne vide
+# rendrait le défaut, mais EOF n'est pas une ligne vide. Le pré-vol ne peut donc
+# rien approuver. On y cherche deux choses : un échec de résolution, et la
+# TRACE d'une question posée. Le marqueur est générique (`[Y/n]`, `[y/N]`,
+# `Enter a number`, `Enter a selection`) : il attrape aussi bien un
+# remplacement, un conflit, un choix de fournisseur qu'une invite future que
+# personne n'aurait pensé à énumérer.
+#
+# PHASE B — la transaction, à laquelle on transmet **une seule** réponse « y ».
+# Ce n'est pas une auto-approbation : le pré-vol vient de prouver qu'aucune
+# question ne précède « Proceed with installation? », et cette question-là a
+# déjà été tranchée par l'humain devant la modale polkit. Toute question
+# ultérieure (import de clé PGP, archive corrompue) tombe sur EOF, donc sur
+# NON, et fait échouer la transaction. Une seule approbation, celle qui a été
+# authentifiée, et rien d'autre.
+#
+# La locale est forcée, et ce n'est pas cosmétique : `question()` compare la
+# réponse à `_("Y")`, la traduction locale. En français, `_("Y")` vaut « O » —
+# un « y » y est compris comme « ni oui ni non », donc NON (mesuré :
+# tools/vm-dev.md §29). Une transaction qui se croirait approuvée serait en
+# réalité refusée à chaque fois. `C.UTF-8` rend le jeton déterministe tout en
+# gardant l'UTF-8 ; le journal de la transaction est donc en anglais, ce qui a
+# l'avantage collatéral de correspondre mot pour mot aux nouvelles Arch.
+readonly LOCALE_TRANSACTION=C.UTF-8
+
+etat_dir=/run/eschaton-update
+etat="$etat_dir/etat"
+prevol="$etat_dir/prevol.txt"
+install -d -m755 "$etat_dir"
+
+# Pourquoi un fichier d'état alors que systemd tient déjà l'état de l'unité :
+# une unité transitoire qui a RÉUSSI est ramassée par systemd et disparaît.
+# « terminée avec succès » et « n'a jamais tourné » seraient alors
+# indiscernables pour l'interface.
+ecrire_etat() { # $1=résultat $2=code
+  local tmp="$etat.tmp"
+  {
+    printf 'resultat=%s\n' "$1"
+    printf 'code=%s\n' "$2"
+    printf 'fin=%s\n' "$(date -Is)"
+    printf 'noyau_a_recharger=%s\n' \
+      "$(running_kernel_missing_modules /usr/lib/modules "$(uname -r)" && echo oui || echo non)"
+  } > "$tmp"
+  # Renommage atomique : l'interface ne lit jamais un état à moitié écrit.
+  mv -f "$tmp" "$etat"
+  chmod 644 "$etat"
+}
+
+# Une annulation n'est pas un échec. `systemctl stop` envoie SIGTERM à tout le
+# groupe de contrôle : pacman le traite lui-même et sort, puis ce piège
+# s'exécute — bash diffère les pièges jusqu'à la fin de la commande en avant-plan.
+annulee=false
+on_term() { annulee=true; }
+trap on_term TERM INT
+
+# Un `pacman` tué en pleine récupération de paquets laisse son verrou derrière
+# lui. On ne le retire que lorsque plus aucun pacman ne tourne — sinon on
+# volerait le verrou d'une transaction légitime lancée ailleurs.
+readonly VERROU_PACMAN=/var/lib/pacman/db.lck
+liberer_verrou_orphelin() {
+  local vivants
+  vivants=$(pgrep -c -x pacman 2>/dev/null || true)
+  if verrou_pacman_orphelin "$VERROU_PACMAN" "${vivants:-0}"; then
+    rm -f "$VERROU_PACMAN"
+    echo "==> Verrou pacman orphelin retiré ($VERROU_PACMAN)."
+  elif [[ -e $VERROU_PACMAN ]]; then
+    echo "==> Verrou pacman laissé en place : un autre pacman tourne." >&2
+  fi
+}
+
+{
+  printf 'resultat=en-cours\n'
+  printf 'debut=%s\n' "$(date -Is)"
+} > "$etat"
+chmod 644 "$etat"
+
+# Une transaction précédente tuée sans ménagement (SIGKILL après
+# TimeoutStopSec, coupure de courant) n'a pas pu faire son propre ménage.
+liberer_verrou_orphelin
+
+echo "==> Pré-vol : résolution de la transaction, sans rien modifier."
+prevol_rc=0
+LC_ALL="$LOCALE_TRANSACTION" pacman -Syu --print "$@" < /dev/null > "$prevol" 2>&1 || prevol_rc=$?
+chmod 644 "$prevol"
+cat "$prevol"
+
+if "$annulee"; then
+  ecrire_etat annule 0
+  echo "==> Mise à jour annulée avant toute modification."
+  exit 0
+fi
+
+if ((prevol_rc != 0)); then
+  ecrire_etat echec-prevol "$prevol_rc"
+  echo "==> La transaction ne se résout pas (code $prevol_rc). Rien n'a été modifié." >&2
+  echo "    La sortie exacte de pacman est ci-dessus, telle quelle." >&2
+  exit "$prevol_rc"
+fi
+
+if prevol_exige_decision_humaine "$prevol"; then
+  ecrire_etat decision-humaine 1
+  echo "==> Cette mise à jour demande une décision humaine que l'interface ne sait" >&2
+  echo "    pas encore poser. Rien n'a été modifié : Eschaton préfère s'arrêter" >&2
+  echo "    plutôt que de répondre à ta place." >&2
+  echo "    La question posée par pacman est dans la sortie ci-dessus." >&2
+  exit 1
+fi
+
+echo "==> Transaction. Snapshot automatique via snap-pac."
+# `-Su` sans `-y` : le pré-vol vient de synchroniser les bases, et la
+# transaction doit se jouer sur CELLES-LÀ. Un second `-y` rouvrirait la fenêtre
+# entre ce qui a été vérifié et ce qui est installé.
+rc=0
+printf 'y\n' | LC_ALL="$LOCALE_TRANSACTION" pacman -Su "$@" || rc=$?
+
+if "$annulee"; then
+  # pacman a été tué en vol : c'est ici, et seulement ici, que le verrou reste.
+  liberer_verrou_orphelin
+  ecrire_etat annule "$rc"
+  echo "==> Mise à jour annulée à la demande de l'utilisateur."
+  exit 0
+fi
+if ((rc != 0)); then
+  ecrire_etat echec "$rc"
+  echo "==> La mise à jour a échoué (code $rc). Rien n'a été approuvé à ta place." >&2
+  exit "$rc"
+fi
+ecrire_etat succes 0
+echo "==> Mise à jour terminée."

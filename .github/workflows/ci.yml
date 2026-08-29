@@ -37,6 +37,7 @@ jobs:
             installer/lib.sh installer/eschaton-install \
             packages/eschaton-base/lib.sh \
             packages/eschaton-base/eschaton-update \
+            packages/eschaton-base/eschaton-update-helper \
             packages/eschaton-base/eschaton-rollback \
             packages/eschaton-desktop-config/eschaton-session \
             packages/eschaton-desktop-config/eschaton-dms-provision \

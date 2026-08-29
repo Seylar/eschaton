@@ -4065,4 +4065,208 @@ matière à la preuve de bout en bout de la Task 6.
 > **État de la VM à consigner** : `/usr/lib/eschaton/lib.sh` et
 > `/usr/bin/eschaton-update` sont pour l'instant *hors paquet* —
 > `pacman -Qkk eschaton-base` les comptera comme modifiés jusqu'à
-> l'installation du paquet `0.1.0-13` en Task 6.
+> l'installation du paquet en Task 6.
+
+## 29. Update graphique — le trou §8.1 de la veille, refermé (2026-08-30)
+
+La veille laissait ouvert « ce que `--noconfirm` répond à chaque invite, et
+comment détecter à l'avance qu'une décision humaine est requise » (§8.1). Trois
+mesures et une lecture de source le referment pour notre usage.
+
+### 29.1 Sur EOF, pacman répond NON — pas la réponse par défaut
+
+Hypothèse de départ (la mienne) : entrée standard vide ⇒ pacman applique le
+défaut ⇒ auto-approbation par la bande. **Faux.**
+
+```console
+$ sudo pacman -S cowsay < /dev/null
+Paquets (1) cowsay-3.8.4-1
+:: Procéder à l'installation ? [O/n] rc=1
+$ pacman -Q cowsay        → absent
+```
+
+Source amont, `src/pacman/util.c`, `question()` (relue le 2026-08-30) :
+
+```c
+	if(safe_fgets_stdin(response, sizeof(response))) {
+		size_t len = strtrim(response);
+		if(len == 0) { return preset; }          /* ligne vide -> defaut */
+		…
+	}
+	return 0;                                    /* EOF -> NON */
+```
+
+**EOF n'est pas une ligne vide** : il tombe sur `return 0`. Toute question Y/N
+d'une transaction sans entrée standard est donc répondue **non** — y compris
+l'import d'une clé PGP, qui survient pourtant *après* le sommaire.
+
+Seule exception, `select_question()` (choix de fournisseur) : sur EOF elle rend
+`preset - 1`, c'est-à-dire **le premier fournisseur, silencieusement**. Mais ce
+choix précède « Procéder à l'installation ? », qui, elle, échoue : rien n'est
+installé. Le défaut silencieux existe, il n'a aucun effet.
+
+### 29.2 Corollaire : sans entrée standard, aucune mise à jour ne passe
+
+Ce qui protège rend aussi la transaction impossible : `pacman -Syu` demande
+toujours confirmation du sommaire. Une unité en `StandardInput=null` échouerait
+donc à **chaque** mise à jour, y compris parfaitement propre.
+
+D'où la conception à deux phases retenue (`eschaton-update --transaction`) :
+
+1. **Pré-vol** `pacman -Syu --print` — entrée sur `/dev/null`, ne modifie rien.
+   Mesuré propre : `rc=0`, 17 lignes de cibles, **stderr vide, aucun marqueur
+   d'invite**. Un échec de résolution ou la simple *trace* d'une question
+   (`[Y/n]`, `[y/N]`, `Enter a number`, `Enter a selection`) arrête tout.
+2. **Transaction** `pacman -Su`, à laquelle on transmet **une seule** réponse.
+   Le pré-vol vient de prouver qu'aucune question ne précède le sommaire ; cette
+   réponse ne peut donc atterrir que là, sur la question que l'humain a déjà
+   tranchée devant la modale polkit. Toute question ultérieure tombe sur EOF,
+   donc sur NON.
+
+### 29.3 Le piège de la locale, qui aurait tout cassé en silence
+
+`question()` compare la réponse à `_("Y")` — la **traduction**. Mesuré :
+
+```console
+$ printf 'y\n' | sudo pacman -S cowsay                  # locale fr_FR
+:: Procéder à l'installation ? [O/n] y
+$ pacman -Q cowsay        → absent                       # « y » = ni O ni N = NON
+
+$ printf 'y\n' | sudo env LC_ALL=C.UTF-8 pacman -S cowsay
+installing cowsay...
+$ pacman -Q cowsay        → cowsay 3.8.4-1
+```
+
+En français, `_("Y")` vaut « O » : un `y` codé en dur y signifie **non**. La
+transaction force donc `LC_ALL=C.UTF-8` sur ses deux phases. Le défaut est
+« sûr » (elle refuserait au lieu d'approuver), mais il aurait rendu la mise à
+jour graphique inopérante sur toute machine non anglophone — c'est-à-dire la
+nôtre.
+
+## 30. Update graphique — Task 3, la porte privilégiée en réel (2026-08-30)
+
+Fichiers posés dans la VM (empreintes vérifiées des deux côtés) :
+`lib.sh`, `eschaton-update`, `eschaton-update-helper`,
+`/usr/share/polkit-1/actions/org.eschaton.update.policy`.
+
+```console
+$ pkaction --action-id org.eschaton.update --verbose
+org.eschaton.update:
+  implicit any:      no
+  implicit inactive: no
+  implicit active:   auth_admin
+  annotation:        org.freedesktop.policykit.exec.path -> /usr/bin/eschaton-update-helper
+```
+
+### 30.1 Les refus
+
+```console
+$ pkexec /usr/bin/eschaton-update-helper --apply          # session série, sans siège
+Error executing command as another user: Not authorized
+$ pkexec /usr/bin/eschaton-update-helper --apply --force
+Error executing command as another user: Not authorized
+$ eschaton-update-helper --status
+usage: eschaton-update-helper --apply|--cancel            (rc=2)
+$ eschaton-update-helper --apply
+eschaton-update-helper : doit être lancé comme root (par pkexec).   (rc=1)
+```
+
+Le refus de `pkexec` depuis la console série est **le comportement voulu** :
+une session sans siège n'est pas « locale » pour polkit, donc `allow_any=no`
+s'applique. La modale graphique se prouve dans la session Wayland (Task 6).
+
+### 30.2 La transaction, portée par systemd, et un vrai `-Syu` de bout en bout
+
+```console
+$ sudo /usr/bin/eschaton-update-helper --apply
+apply rc=0
+$ systemctl is-active eschaton-update.service        → active
+$ ps -o pid,ppid,user,args -p $(systemctl show eschaton-update.service -p MainPID --value)
+   6973       1 root     bash /usr/bin/eschaton-update --transaction
+```
+
+**PPID = 1.** Journal de l'unité, lu **sans privilège** :
+
+```text
+==> Pré-vol : résolution de la transaction, sans rien modifier.
+:: Synchronizing package databases...
+…11 cibles…
+==> Transaction. Snapshot automatique via snap-pac.
+Packages (11) gst-plugins-base-libs-1.28.6-2 … linux-aarch64-7.2.2-1 … qt6-base-6.11.2-3
+:: Proceed with installation? [Y/n] y        <- l'unique reponse transmise
+(1/2) Performing snapper pre snapshots …  ==> root: 91
+(2/2) Waiting for limine-snapper-sync to finish...
+(3/4) Updating linux initcpios...
+(4/4) Performing snapper post snapshots …  ==> root: 92
+==> Mise à jour terminée.
+eschaton-update.service: Deactivated successfully.
+eschaton-update.service: Consumed 7.969s CPU time over 17.350s wall clock time
+```
+
+`/run/eschaton-update/etat` → `resultat=succes`, `code=0`,
+`noyau_a_recharger=oui`. `checkupdates` rend ensuite 0. **Une mise à jour réelle
+de 11 paquets, dont le noyau, sans terminal et sans auto-approbation.** Reboot
+effectué : `uname -r` = `7.2.0-1-aarch64-ARCH`, modules présents, racine
+`/dev/vda2[/@]`.
+
+### 30.3 Deux défauts trouvés par la mesure, et corrigés
+
+**(a) Annuler ce qui est déjà fini remontait une erreur systemd.** Une
+transaction terminée pendant que l'utilisateur clique « Annuler » donnait :
+
+```console
+Failed to stop eschaton-update.service: Unit eschaton-update.service not loaded.
+cancel rc=5
+```
+
+`--cancel` est devenu idempotent — l'état visé est atteint, ce n'est pas une
+erreur :
+
+```console
+$ sudo eschaton-update-helper --cancel
+eschaton-update-helper : aucune mise à jour en cours.      (rc=0)
+```
+
+**(b) L'annulation laissait un verrou pacman orphelin** — exactement ce que la
+définition de terminé interdit. Matière de test : `qt6-base` redescendu en
+`6.11.2-2`, son archive `6.11.2-3` retirée du cache pour forcer un
+téléchargement.
+
+```console
+--- verrou apres annulation (avant correctif) ---
+/var/lib/pacman/db.lck            <- orphelin, aucun pacman vivant
+```
+
+Un `pacman` tué par SIGTERM pendant « Retrieving packages… » ne retire pas son
+verrou. La transaction le libère désormais, **et seulement** quand plus aucun
+pacman ne tourne (`pgrep -c -x pacman`), au démarrage comme après une
+annulation.
+
+### 30.4 L'annulation, après correctif
+
+```console
+$ sudo eschaton-update-helper --apply ; sleep 3 ; sudo eschaton-update-helper --cancel
+cancel rc=0
+--- apres ---
+inactive        ; is-failed: inactive        <- une annulation n'est PAS un echec
+resultat=annule
+code=143
+--- verrou apres ---
+ls: impossible d'accéder à '/var/lib/pacman/db.lck': Aucun fichier…
+aucun pacman
+qt6-base 6.11.2-2                            <- rien n'a ete installe
+```
+
+Journal correspondant :
+
+```text
+:: Proceed with installation? [Y/n] y
+:: Retrieving packages...
+Stopping Mise à jour Eschaton...
+==> Verrou pacman orphelin retiré (/var/lib/pacman/db.lck).
+==> Mise à jour annulée à la demande de l'utilisateur.
+eschaton-update.service: Deactivated successfully.
+```
+
+`qt6-base 6.11.2-2 -> 6.11.2-3` **reste en attente exprès** : c'est la matière
+de la preuve graphique de la Task 6.

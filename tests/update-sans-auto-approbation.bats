@@ -35,9 +35,11 @@ setup() {
   CHEMIN=(
     "packages/eschaton-base/PKGBUILD"
     "packages/eschaton-base/eschaton-update"
+    "packages/eschaton-base/eschaton-update-helper"
     "packages/eschaton-base/lib.sh"
     "packages/eschaton-dms-plugin-assistant/ToolExecutor.qml"
     "packages/eschaton-dms-plugin-update/EschatonUpdateWidget.qml"
+    "packages/eschaton-dms-plugin-update/org.eschaton.update.policy"
   )
 }
 

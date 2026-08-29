@@ -53,6 +53,42 @@ pacman_update_args() {
   (($# == 0)) || printf '%s\n' "$@"
 }
 
+# ————————— Pré-vol : « cette transaction demande-t-elle une décision ? » —————
+#
+# `checkupdates` répond à « y a-t-il des mises à jour ? », jamais à « faut-il
+# une décision humaine ? ». La seconde question est celle qui conditionne le
+# zéro-terminal, et on y répond en faisant tourner la résolution à blanc
+# (`pacman -Syu --print`) puis en cherchant la TRACE d'une question.
+#
+# Viser les marqueurs plutôt que d'énumérer les messages : toute question de
+# pacman passe par `question()` ou `select_question()` (src/pacman/util.c), qui
+# impriment l'un de ces quatre motifs. Une invite ajoutée en amont demain sera
+# donc attrapée sans que personne n'ait à mettre cette liste à jour.
+#
+# Suppose une locale déterministe côté appelant (`LC_ALL=C.UTF-8`) : ces textes
+# sont traduits.
+update_marqueurs_invite() {
+  printf '%s\n' '\[Y/n\]|\[y/N\]|Enter a number|Enter a selection'
+}
+
+# Vrai quand la sortie d'un pré-vol montre qu'une question a été posée.
+prevol_exige_decision_humaine() { # $1=fichier de sortie du pré-vol
+  grep -qE "$(update_marqueurs_invite)" "$1"
+}
+
+# Un verrou pacman sans processus pacman est un verrou orphelin.
+#
+# Mesuré le 2026-08-30 : un `pacman` tué par SIGTERM pendant « Retrieving
+# packages… » ne retire PAS `/var/lib/pacman/db.lck` — l'annulation laissait
+# donc derrière elle exactement l'orphelin que la définition de terminé
+# interdit. pacman lui-même dit à l'utilisateur de supprimer ce fichier « si tu
+# es sûr qu'aucun gestionnaire de paquets ne tourne » : la condition est
+# précisément celle-ci, et on la vérifie au lieu de la supposer.
+verrou_pacman_orphelin() { # $1=chemin du verrou $2=nombre de pacman vivants
+  [[ -e $1 ]] || return 1
+  (($2 == 0))
+}
+
 # `findmnt -no SOURCE` rend « /dev/vda2[/@] » pour un montage de sous-volume
 # btrfs, et « /dev/vda2 » tout court sinon. Les deux moitiés se lisent séparément.
 

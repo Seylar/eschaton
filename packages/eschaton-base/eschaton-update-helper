@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+set -euo pipefail
+#
+# La porte privilégiée de la mise à jour Eschaton.
+#
+# Lancé par `pkexec` derrière l'action polkit `org.eschaton.update`
+# (`auth_admin`, sans `_keep` : une mise à jour = une authentification), ce
+# programme ne fait qu'UNE chose : confier la transaction à une unité systemd
+# transitoire, puis rendre la main. **Il ne porte jamais la transaction
+# lui-même.**
+#
+# Pourquoi ce détour, alors que `pkexec` pourrait lancer `pacman` directement —
+# mesuré en VM le 2026-08-30, cf. tools/vm-dev.md §27.3 :
+#
+#   - une interface non privilégiée ne peut pas signaler un processus root
+#     (`kill` rend EPERM). Une transaction portée par `pkexec` ne serait donc
+#     ANNULABLE que par un second chemin privilégié — ce que les invariants du
+#     projet interdisent. Portée par une unité, elle s'arrête par la même
+#     porte ;
+#   - la sortie d'un enfant de `pkexec` ne vit que par un tube tenu par
+#     l'appelant. L'unité, elle, journalise : le panneau lit le journal, sans
+#     que la transaction dépende de sa durée de vie.
+#
+# `systemd-run` appelé ICI ne déclenche aucun contrôle polkit, puisqu'on est
+# déjà root (mesuré, §27.1). C'est tout l'intérêt du montage : l'utilisateur ne
+# reçoit JAMAIS le droit `org.freedesktop.systemd1.manage-units`, qui serait un
+# passe-partout sur toutes les unités du système.
+#
+# Surface d'attaque : `pkexec` authentifie le PROGRAMME, pas ses arguments.
+# L'argv accepté est donc un ensemble fermé de deux formes exactes, et AUCUN
+# argument n'est interpolé dans la commande privilégiée : le nom de l'unité et
+# sa ligne de commande sont des constantes de ce fichier.
+
+readonly UNITE=eschaton-update
+readonly SERVICE="${UNITE}.service"
+
+usage() {
+  echo "usage: eschaton-update-helper --apply|--cancel" >&2
+  exit 2
+}
+
+die() { echo "eschaton-update-helper : $*" >&2; exit 1; }
+
+# Une seule forme, un seul mot. Tout le reste est refusé avant le moindre effet.
+(($# == 1)) || usage
+case "$1" in
+  --apply) action=apply ;;
+  --cancel) action=cancel ;;
+  *) usage ;;
+esac
+
+# Validation côté exécution : le programme privilégié ne fait jamais confiance
+# à son appelant pour avoir vérifié quoi que ce soit.
+((EUID == 0)) || die "doit être lancé comme root (par pkexec)."
+
+case "$action" in
+  apply)
+    if systemctl is-active --quiet "$SERVICE"; then
+      die "une mise à jour est déjà en cours."
+    fi
+    # Un échec précédent laisse l'unité en état `failed` et bloquerait le
+    # démarrage suivant. On le solde, sans effacer le journal qui, lui, garde
+    # la trace de cet échec.
+    systemctl reset-failed "$SERVICE" 2>/dev/null || true
+    # `--collect` n'est PAS utilisé : après un échec, l'unité doit rester
+    # visible pour l'interface. Le prochain `--apply` la solde ci-dessus.
+    exec systemd-run --system --quiet \
+      --unit="$UNITE" \
+      --description="Mise à jour Eschaton" \
+      --property=StandardInput=null \
+      --property=TimeoutStopSec=5min \
+      /usr/bin/eschaton-update --transaction
+    ;;
+  cancel)
+    # Annuler ce qui est déjà terminé n'est pas une erreur : l'état visé — plus
+    # de transaction en cours — est atteint. Sans ce garde, une transaction qui
+    # se termine pendant que l'utilisateur clique « Annuler » ferait remonter
+    # « Failed to stop … : Unit not loaded » (rc=5) dans l'interface, pour un
+    # non-événement. Mesuré, tools/vm-dev.md §30.
+    if ! systemctl is-active --quiet "$SERVICE"; then
+      echo "eschaton-update-helper : aucune mise à jour en cours."
+      exit 0
+    fi
+    # `systemctl stop` envoie SIGTERM à tout le groupe de contrôle : pacman le
+    # traite lui-même et sort proprement, puis la transaction écrit son état
+    # « annulé ». Une annulation n'est PAS un échec.
+    exec systemctl stop "$SERVICE"
+    ;;
+esac

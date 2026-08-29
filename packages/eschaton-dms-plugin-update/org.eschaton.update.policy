@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+  "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  La porte privilégiée de la mise à jour. Calquée sur org.eschaton.rollback,
+  volontairement — c'est le modèle déjà prouvé sur ce système.
+
+  1. `auth_admin`, SANS `_keep`. `polkit(8)` définit `auth_admin_keep` comme
+     « l'autorisation est conservée pendant une brève période » et précise que
+     les contrôles suivants pour la même action et le même sujet réussissent
+     « même si les variables transmises avec le contrôle sont différentes ».
+     Une autorisation mémorisée couvrirait donc un appel privilégié ultérieur
+     que personne n'aurait vu passer. Une mise à jour = une authentification.
+     C'est là que nous divergeons délibérément de pamac, qui a choisi `keep`
+     pour le confort d'enchaîner les opérations.
+
+  2. `allow_any` et `allow_inactive` à `no` : une session distante ou inactive
+     n'a même pas de chemin d'authentification. (Conséquence mesurée le
+     2026-08-30 : une session série n'ayant pas de siège n'est pas « locale »
+     pour polkit, donc `allow_any` s'y applique — et refuse. Une mise à jour
+     graphique se déclenche depuis la session graphique, pas depuis un port
+     série.)
+
+  3. AUCUNE règle `rules.d` n'est livrée. Les `<defaults>` suffisent, et
+     l'agent d'authentification de DMS affiche déjà sa modale dans la session
+     Wayland (prouvé, tools/vm-dev.md §12.9 et §14.4). Desserrer plus tard est
+     un ajout de fichier ; resserrer sur des machines déjà installées ne l'est
+     pas. On part fermé.
+
+  4. L'annotation `exec.path` épingle le PROGRAMME, et c'est le seul mécanisme
+     qui le fasse : les détails qu'un `StartTransientUnit()` transmet à polkit
+     se limitent au nom de l'unité et au verbe — jamais à sa ligne de commande
+     (mesuré le 2026-08-30, tools/vm-dev.md §27.1). Une politique qui
+     autoriserait « l'unité de mise à jour » n'autoriserait pas une commande,
+     mais n'importe laquelle.
+
+  Conséquence assumée : annuler une mise à jour coûte, elle aussi, une
+  authentification. Arrêter une transaction de paquets en vol est une action
+  privilégiée comme une autre, et elle passe par la même porte — il n'existe
+  pas de second chemin.
+-->
+<policyconfig>
+  <vendor>Eschaton</vendor>
+  <vendor_url>https://github.com/seylar/eschaton</vendor_url>
+  <action id="org.eschaton.update">
+    <description>Mettre à jour Eschaton</description>
+    <description xml:lang="en">Update Eschaton</description>
+    <message>Une autorisation est requise pour mettre à jour Eschaton.</message>
+    <message xml:lang="en">Authentication is required to update Eschaton.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/eschaton-update-helper</annotate>
+  </action>
+</policyconfig>

@@ -1,6 +1,6 @@
 pkgname=eschaton-base
 pkgver=0.1.0
-pkgrel=13
+pkgrel=14
 pkgdesc="Meta-paquet du socle Eschaton : dépendances système et configuration par défaut"
 arch=(any)
 license=(MIT)
@@ -24,8 +24,8 @@ backup=(etc/pacman.d/eschaton.conf etc/snapper/configs/root etc/default/limine)
 # relatif ("../../LICENSE") n'est pas résoluble — cf. get_filename() dans
 # /usr/share/makepkg/util/source.sh. Le lien conserve une licence unique.
 source=(eschaton-repo.conf snapper-root.conf zram-generator.conf 10-wheel.sudoers 50-eschaton.preset LICENSE
-        lib.sh eschaton-update eschaton-rollback limine-default.conf)
-sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+        lib.sh eschaton-update eschaton-update-helper eschaton-rollback limine-default.conf)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
 
 package() {
   install -Dm644 eschaton-repo.conf "$pkgdir/etc/pacman.d/eschaton.conf"
@@ -47,5 +47,9 @@ package() {
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 lib.sh "$pkgdir/usr/lib/eschaton/lib.sh"
   install -Dm755 eschaton-update "$pkgdir/usr/bin/eschaton-update"
+  # Cible de `pkexec` derrière l'action polkit `org.eschaton.update`, livrée
+  # par eschaton-dms-plugin-update. Le binaire vit ici, avec les autres outils
+  # système du socle, comme eschaton-rollback l'est déjà de sa propre action.
+  install -Dm755 eschaton-update-helper "$pkgdir/usr/bin/eschaton-update-helper"
   install -Dm755 eschaton-rollback "$pkgdir/usr/bin/eschaton-rollback"
 }
