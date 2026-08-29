@@ -54,13 +54,21 @@ Onze arbitrages de produit, classés par **risque de désaccord**, pas par ordre
 
 ## 🟠 Orange — promesse entamée, friction ajoutée
 
-### O1. Les mises à jour ouvrent un terminal visible et demandent sudo — ⛔ VETO REÇU (2026-08-29)
+### O1. Les mises à jour ouvrent un terminal visible et demandent sudo — ⛔ VETO REÇU (2026-08-29) · ✅ CORRIGÉ, EN ATTENTE DE TA REVUE (2026-08-30)
 
-> **Verdict utilisateur** : « pour update, faut taper le sudo dans le terminal, c'est non. » Arbitrage **rejeté**. L'update doit passer par une **modale polkit graphique**, exactement comme le rollback. Re-spécification en cours (veille datée `update-graphique` lancée le 2026-08-29, ADR 0002). **Le tag v0.3.0 attendra la nouvelle conception.**
+> **Verdict utilisateur** : « pour update, faut taper le sudo dans le terminal, c'est non. » Arbitrage **rejeté**. L'update doit passer par une **modale polkit graphique**, exactement comme le rollback. **Le tag v0.3.0 attendra la nouvelle conception.**
 
 - **Motif (rejeté)** : jamais de second chemin privilégié ; réutilisation du flux existant ; l'humain authentifie — mais l'authentification passait par le terminal, ce qui est le point rejeté.
 - **Coût constaté** : le « zéro terminal » était entamé **à l'endroit le plus fréquent** de la vie d'un système.
-- **Nouvelle direction** : porte polkit graphique dédiée à l'update, sortie streamée dans l'interface, sans terminal. Coût réel à établir par la veille (le piège = `pacman -Syu` interactif).
+- **Livré le 2026-08-30** : action polkit `org.eschaton.update` (`auth_admin`, sans `_keep`), assistant privilégié minuscule, transaction portée par une **unité systemd** — plus aucun terminal. Progression = le journal de l'unité, affiché tel quel dans le panneau. Prouvé de bout en bout en VM : pastille → modale graphique → journal → « Mise à jour installée » ([`tools/vm-dev.md` §31](../tools/vm-dev.md)).
+- **Ce qu'il reste à décider, et qui t'appartient** : **annuler une mise à jour coûte une seconde authentification**, parce qu'il n'existe volontairement pas de second chemin privilégié. Et une mise à jour qui demande une décision humaine (renommage de paquet, conflit) **s'arrête** au lieu de choisir à ta place : tu vois la question de pacman, mot pour mot, et un bouton « Revenir à l'état d'avant ». **Le veto n'est levé que par ta revue, pas par ce document.**
+
+### O1bis. La mise à jour était **auto-approuvée** — défaut jamais arbitré, découvert le 2026-08-29
+
+- **Ce qui existait** : `lib.sh` traduisait `--yes` (interface Eschaton) en `pacman --noconfirm`, et le widget comme `trigger_update` passaient `--yes`. La mise à jour répondait donc « oui » toute seule aux remplacements de paquets, aux retraits de conflits et aux imports de clés.
+- **Ce que ça vaut** : c'est exactement l'anti-modèle Omarchy que R1 refuse pour l'assistant — actif, en production, sur le chemin le plus fréquent du système. **Personne ne l'avait décidé** : il est né d'une commodité d'implémentation et a traversé deux vagues de revue sans être vu.
+- **Corrigé le 2026-08-30** : toute option qui répondrait à la place de l'utilisateur est **refusée** ; un pré-vol joue la transaction à blanc et s'arrête si une question précède le sommaire ; une garde de dépôt, contre-testée, empêche le retour du défaut.
+- **Rien à arbitrer** — c'est consigné ici parce qu'un défaut de cette nature mérite d'être vu, pas parce qu'il ouvre une question.
 
 ### O2. Auto-login sans mot de passe au démarrage
 
