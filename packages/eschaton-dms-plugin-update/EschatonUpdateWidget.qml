@@ -514,6 +514,7 @@ PluginComponent {
                     // rangée de boutons qui sort du cadre, et la porte de
                     // sortie devient inatteignable au moment où elle sert.
                     height: root.phase === "termine" && root.resultatEstUnEchec ? 150 : 250
+                    visible: root.phase !== ""
                     radius: Theme.cornerRadius
                     color: Theme.surfaceContainerHigh
 

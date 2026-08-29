@@ -383,6 +383,15 @@ FIN
   run grep -E '"/usr/bin/(ba)?sh"|"-lc"|"-c"' "$WIDGET"
   [ "$status" -eq 1 ]
 
+  # La boîte du journal n'existe QUE pendant et après une transaction. Un
+  # `visible:` perdu lors d'une retouche l'a laissée affichée, vide, sur le
+  # panneau au repos (constaté le 2026-08-30).
+  bloc=$(awk '/La sortie de pacman, telle quelle/,/^                }/' "$WIDGET")
+  [[ "$bloc" == *'visible: root.phase !== ""'* ]] || {
+    echo "la boîte du journal n'est plus conditionnée à une transaction"
+    return 1
+  }
+
   # À la fin, le journal est RELU en entier, sans `-f`. Mesuré le 2026-08-30 :
   # arrêter le suiveur à l'instant où l'unité s'éteint perdait la fin du
   # journal, et le panneau du cas « décision humaine » affichait tout sauf LA
