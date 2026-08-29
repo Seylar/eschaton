@@ -1,0 +1,26 @@
+
+  Eschaton — média d'installation
+
+  Installer :
+
+      eschaton-install --disk /dev/DISQUE --user NOM [--hostname NOM]
+
+      Le disque est EFFACÉ intégralement (sgdisk --zap-all). Vérifier
+      d'abord la cible :  lsblk -o NAME,SIZE,MODEL,TYPE
+      Répétition à blanc, sans rien écrire :  --dry-run
+
+  Réseau :
+
+      Ethernet en DHCP automatiquement. Wi-Fi avec iwctl :
+          iwctl station wlan0 scan
+          iwctl station wlan0 get-networks
+          iwctl station wlan0 connect NOM_DU_RESEAU
+      Test :  curl -fsI https://archlinux.org     (ping ne prouve rien)
+
+  Clavier : AZERTY (fr) par défaut.  QWERTY :  loadkeys us
+
+  SSH est installé mais ARRÊTÉ. Pour l'ouvrir :  passwd && systemctl start sshd
+
+  Amorçage UEFI uniquement — l'installeur refuse de démarrer en BIOS hérité.
+  Secure Boot non supporté : le désactiver dans le firmware.
+

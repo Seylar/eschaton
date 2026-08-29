@@ -1,0 +1,6 @@
+# Miroir du dépôt [eschaton] (spec §5.3 du Socle).
+# `$arch` est LITTÉRAL : c'est pacman qui le substitue. Le dépôt est publié par
+# architecture — les paquets vendorés sont des binaires natifs, pas des `any`.
+# Fichier identique à celui qu'écrit `eschaton-install` dans l'environnement
+# live : l'installeur reste donc idempotent sur ce média.
+Server = https://seylar.github.io/eschaton/$arch
