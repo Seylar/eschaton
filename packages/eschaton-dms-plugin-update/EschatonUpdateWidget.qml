@@ -25,13 +25,20 @@ PluginComponent {
 
     // "" (rien en cours) · "authentification" · "en-cours" · "termine"
     property string phase: ""
-    // "" · succes · echec · echec-prevol · decision-humaine · annule · interrompu
+    // "" · succes · succes-degrade · echec · echec-prevol · decision-humaine
+    // · annule · interrompu
     property string resultat: ""
     property int codeResultat: 0
     property bool noyauARecharger: false
     property bool annulationEnCours: false
     property string erreurPorte: ""
     property bool _uniteActive: false
+    // Le point de retour calculé par la transaction avant d'agir. C'est lui
+    // qui rend l'échec réversible sans ligne de commande.
+    property int snapshotAvant: 0
+    property string unitesEnEchec: ""
+    property bool confirmRestauration: false
+    property bool restaurationEnCours: false
 
     property int maxLignes: 600
 
@@ -48,6 +55,10 @@ PluginComponent {
             return noyauARecharger
                 ? "Mise à jour installée. Redémarrez pour utiliser le nouveau noyau."
                 : "Mise à jour installée.";
+        case "succes-degrade":
+            // Archétype dovecot 2.4 : pacman réussit, le service ne repart pas.
+            // Le code de retour dirait « succès » ; nous, non.
+            return "Paquets installés, mais des services ne démarrent plus : " + unitesEnEchec;
         case "annule":
             return "Mise à jour annulée. Rien n'a été installé.";
         case "decision-humaine":
@@ -66,6 +77,14 @@ PluginComponent {
     readonly property bool resultatEstUnEchec:
         resultat === "echec" || resultat === "echec-prevol"
         || resultat === "decision-humaine" || resultat === "interrompu"
+        || resultat === "succes-degrade"
+
+    // La restauration n'est proposée que lorsqu'elle a un sens : quelque chose
+    // a été modifié, et un point de retour existe. Après un échec de pré-vol,
+    // rien n'a bougé — proposer un rollback y serait du bruit alarmiste.
+    readonly property bool restaurationUtile:
+        (resultat === "echec" || resultat === "succes-degrade" || resultat === "interrompu")
+        && snapshotAvant > 0
 
     // ————————————————————————— actions —————————————————————————
     function refresh() {
@@ -85,6 +104,9 @@ PluginComponent {
         noyauARecharger = false;
         erreurPorte = "";
         annulationEnCours = false;
+        snapshotAvant = 0;
+        unitesEnEchec = "";
+        confirmRestauration = false;
         phase = "authentification";
         // `--since` sur l'instant du clic : on ne rejoue pas le journal des
         // transactions précédentes, et on ne rate pas les premières lignes de
@@ -107,6 +129,26 @@ PluginComponent {
             return;
         annulationEnCours = true;
         cancelProcess.running = true;
+    }
+
+    // La porte de sortie de la spec §4 : l'échec reste réversible sans ligne de
+    // commande. On emprunte EXACTEMENT la commande du panneau de restauration —
+    // même binaire, même action polkit `org.eschaton.rollback`. Aucun second
+    // chemin privilégié n'est ouvert ici ; seule la cible est déjà connue,
+    // puisque la transaction l'a calculée avant d'agir.
+    function restaurerAvantMiseAJour() {
+        if (!restaurationUtile || restaurationEnCours)
+            return;
+        if (!confirmRestauration) {
+            confirmRestauration = true;
+            return;
+        }
+        restaurationEnCours = true;
+        restoreProcess.command = [
+            "/usr/bin/pkexec", "/usr/bin/eschaton-rollback",
+            "--yes", String(snapshotAvant)
+        ];
+        restoreProcess.running = true;
     }
 
     // Le journal est la seule source de progression : il n'est jamais résumé
@@ -137,16 +179,21 @@ PluginComponent {
     function terminer(nouveauResultat, code) {
         journalProcess.running = false;
         annulationEnCours = false;
+        confirmRestauration = false;
         phase = "termine";
         resultat = nouveauResultat;
         codeResultat = code;
         Qt.callLater(root.refresh);
-        if (nouveauResultat === "succes")
+        if (nouveauResultat === "succes") {
             ToastService.showInfo("Eschaton est à jour", root.resumeResultat);
-        else if (nouveauResultat === "annule")
+        } else if (nouveauResultat === "annule") {
             ToastService.showInfo("Mise à jour annulée", "Rien n'a été installé.");
-        else
+        } else if (nouveauResultat === "succes-degrade") {
+            // Le code de retour disait « succès ». On ne le répète pas.
+            ToastService.showError("Mise à jour installée, système dégradé", root.resumeResultat);
+        } else {
             ToastService.showError("La mise à jour a échoué", root.resumeResultat);
+        }
     }
 
     Component.onCompleted: Qt.callLater(root.refresh)
@@ -245,6 +292,33 @@ PluginComponent {
         }
     }
 
+    // La porte de sortie. Même binaire et même action polkit que le panneau de
+    // restauration : `org.eschaton.rollback`, `auth_admin` sans `_keep`.
+    Process {
+        id: restoreProcess
+        running: false
+        stdout: StdioCollector { id: restoreOutput }
+        stderr: StdioCollector { id: restoreError }
+
+        onExited: function(exitCode, exitStatus) {
+            root.restaurationEnCours = false;
+            root.confirmRestauration = false;
+            if (exitCode === 0) {
+                ToastService.showInfo(
+                    "Restauration prête",
+                    "Redémarrez pour démarrer sur le snapshot " + root.snapshotAvant + "."
+                );
+            } else if (exitCode === 126 || exitCode === 127) {
+                ToastService.showInfo("Restauration non lancée",
+                                      "L'authentification a été refusée ou annulée.");
+            } else {
+                ToastService.showError("Restauration impossible",
+                                       restoreError.text.trim() || restoreOutput.text.trim()
+                                       || ("eschaton-rollback a quitté avec le code " + exitCode + "."));
+            }
+        }
+    }
+
     // Le suiveur de journal appartient à l'interface, pas à la transaction :
     // le tuer, ou perdre le panneau, n'a aucun effet sur `pacman`.
     Process {
@@ -283,6 +357,8 @@ PluginComponent {
         onExited: function(exitCode, exitStatus) {
             const champs = exitCode === 0 ? root.lireEtat(etatOutput.text) : ({});
             root.noyauARecharger = champs.noyau_a_recharger === "oui";
+            root.snapshotAvant = parseInt(champs.snapshot_avant || "0") || 0;
+            root.unitesEnEchec = champs.unites_en_echec || "";
             if (root._uniteActive)
                 return;
             if (root.phase !== "en-cours")
@@ -439,9 +515,32 @@ PluginComponent {
                 StyledText {
                     width: parent.width
                     visible: root.phase === "termine" && root.resultatEstUnEchec
-                    text: "Rien n'a été approuvé à votre place. Si le système s'est dégradé, la restauration d'un snapshot est disponible dans le panneau « Restauration Eschaton »."
+                    text: {
+                        if (root.resultat === "succes-degrade")
+                            return "Les paquets sont installés, mais " + root.unitesEnEchec
+                                + " ne démarre(nt) plus. Le code de retour de pacman disait « succès » — pas nous.";
+                        if (root.resultat === "decision-humaine")
+                            return "pacman a posé une question à laquelle Eschaton refuse de répondre à votre place. La question exacte est dans le journal ci-dessus, ainsi que, le cas échéant, la nouvelle Arch qui la documente. Rien n'a été modifié.";
+                        return "Rien n'a été approuvé à votre place. La sortie exacte de pacman est ci-dessus, telle quelle.";
+                    }
                     wrapMode: Text.WordWrap
                     color: Theme.error
+                    font.pixelSize: Theme.fontSizeSmall
+                }
+
+                // L'échec reste réversible SANS ligne de commande : c'est ce que
+                // personne d'autre n'offre, et c'est ce qui rend tenable de
+                // refuser de répondre à la place de l'utilisateur.
+                StyledText {
+                    width: parent.width
+                    visible: root.restaurationUtile
+                    text: root.confirmRestauration
+                        ? "Le système redémarrera sur l'état d'avant la mise à jour (snapshot "
+                          + root.snapshotAvant + "). L'état actuel n'est pas détruit : il est mis de côté."
+                        : "Un point de retour existe : l'état d'avant cette mise à jour (snapshot "
+                          + root.snapshotAvant + ")."
+                    wrapMode: Text.WordWrap
+                    color: Theme.surfaceVariantText
                     font.pixelSize: Theme.fontSizeSmall
                 }
 
@@ -472,6 +571,19 @@ PluginComponent {
                         backgroundColor: Theme.error
                         textColor: Theme.surface
                         onClicked: root.cancelUpdate()
+                    }
+
+                    DankButton {
+                        text: root.restaurationEnCours ? "Restauration…"
+                            : (root.confirmRestauration
+                               ? "Confirmer le retour au snapshot " + root.snapshotAvant
+                               : "Revenir à l'état d'avant")
+                        iconName: root.confirmRestauration ? "warning" : "restore"
+                        visible: root.restaurationUtile
+                        enabled: !root.restaurationEnCours
+                        backgroundColor: root.confirmRestauration ? Theme.error : Theme.primary
+                        textColor: root.confirmRestauration ? Theme.surface : Theme.onPrimary
+                        onClicked: root.restaurerAvantMiseAJour()
                     }
                 }
             }

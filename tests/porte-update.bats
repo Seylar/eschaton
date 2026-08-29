@@ -329,6 +329,100 @@ FIN
   [ "$status" -eq 1 ]
 }
 
+@test "un service tombé pendant la transaction n'est pas un succès (archétype dovecot)" {
+  source "$RACINE/packages/eschaton-base/lib.sh"
+
+  # dovecot 2.4 (nouvelle Arch du 2025-10-31) : pacman réussit, le service ne
+  # redémarre plus. Seules les unités NOUVELLEMENT en échec comptent — celles
+  # qui étaient déjà cassées ne sont pas le fait de cette mise à jour.
+  avant=$'systemd-vconsole-setup.service'
+  apres=$'dovecot.service\nsystemd-vconsole-setup.service'
+  run unites_nouvellement_en_echec "$avant" "$apres"
+  [ "$output" = "dovecot.service" ]
+
+  # Rien de neuf : rien à signaler, même si des unités sont en échec.
+  run unites_nouvellement_en_echec "$avant" "$avant"
+  [ -z "$output" ]
+
+  # Une unité réparée par la mise à jour ne doit pas être signalée non plus.
+  run unites_nouvellement_en_echec "$apres" "$avant"
+  [ -z "$output" ]
+
+  # Listes vides des deux côtés : pas de faux positif dû aux lignes vides.
+  run unites_nouvellement_en_echec "" ""
+  [ -z "$output" ]
+  run unites_nouvellement_en_echec "" $'dovecot.service'
+  [ "$output" = "dovecot.service" ]
+}
+
+@test "la transaction publie de quoi revenir en arrière, et n'annonce pas un succès dégradé" {
+  MAJ="$RACINE/packages/eschaton-base/eschaton-update"
+
+  # Le point de retour est calculé AVANT d'agir : après coup, il serait trop
+  # tard pour distinguer l'état d'avant de l'état d'après.
+  ligne_snapshot=$(grep -n -F 'snapshot_avant=$(dernier_snapshot)' "$MAJ" | head -1 | cut -d: -f1)
+  ligne_transaction=$(grep -n -F -- 'pacman -Su "$@"' "$MAJ" | head -1 | cut -d: -f1)
+  [ -n "$ligne_snapshot" ] && [ -n "$ligne_transaction" ]
+  [ "$ligne_snapshot" -lt "$ligne_transaction" ] || {
+    echo "le point de retour est calculé après la transaction"
+    return 1
+  }
+  # …et il est publié dans le fichier d'état, sinon l'interface ne saurait pas
+  # quoi proposer.
+  run grep -F 'snapshot_avant=%s' "$MAJ"
+  [ "$status" -eq 0 ]
+
+  # Le verdict « succes » n'est atteint qu'après le contrôle des services.
+  ligne_degrade=$(grep -n -F 'ecrire_etat succes-degrade 0' "$MAJ" | head -1 | cut -d: -f1)
+  ligne_succes=$(grep -n -F 'ecrire_etat succes 0' "$MAJ" | tail -1 | cut -d: -f1)
+  [ -n "$ligne_degrade" ] && [ -n "$ligne_succes" ]
+  [ "$ligne_degrade" -lt "$ligne_succes" ] || {
+    echo "le succès est écrit avant le contrôle des services"
+    return 1
+  }
+  run grep -F 'unites_nouvellement_en_echec "$echecs_avant" "$echecs_apres"' "$MAJ"
+  [ "$status" -eq 0 ]
+}
+
+@test "après un échec, le panneau propose le retour en arrière par la porte du rollback" {
+  WIDGET="$RACINE/packages/eschaton-dms-plugin-update/EschatonUpdateWidget.qml"
+
+  # Exactement l'argv du panneau de restauration : même binaire, même action
+  # polkit. Aucun second chemin privilégié n'est ouvert pour cette porte de
+  # sortie.
+  run grep -F '"/usr/bin/pkexec", "/usr/bin/eschaton-rollback",' "$WIDGET"
+  [ "$status" -eq 0 ]
+  run grep -F '"--yes", String(snapshotAvant)' "$WIDGET"
+  [ "$status" -eq 0 ]
+  # Deux clics, comme le panneau de restauration : l'action est destructive.
+  run grep -F 'confirmRestauration' "$WIDGET"
+  [ "$status" -eq 0 ]
+
+  # Elle n'est proposée que quand elle a un sens : après un pré-vol qui n'a
+  # rien modifié, proposer un rollback serait du bruit alarmiste.
+  bloc=$(awk '/readonly property bool restaurationUtile/,/snapshotAvant > 0/' "$WIDGET")
+  [[ "$bloc" == *'"echec"'* ]]
+  [[ "$bloc" == *'"succes-degrade"'* ]]
+  [[ "$bloc" != *'"echec-prevol"'* ]] || {
+    echo "le rollback est proposé alors que rien n'a été modifié"
+    return 1
+  }
+  [[ "$bloc" == *"snapshotAvant > 0"* ]]
+
+  # Un succès dégradé n'est jamais annoncé comme un succès.
+  run grep -F 'Mise à jour installée, système dégradé' "$WIDGET"
+  [ "$status" -eq 0 ]
+  bloc_echec=$(awk '/readonly property bool resultatEstUnEchec/,/^$/' "$WIDGET")
+  [[ "$bloc_echec" == *'"succes-degrade"'* ]] || {
+    echo "un succès dégradé n'est pas traité comme un échec par l'interface"
+    return 1
+  }
+
+  # Et le paquet déclare la dépendance qui fournit l'action `org.eschaton.rollback`.
+  run grep -F 'eschaton-dms-plugin-rollback' "$RACINE/packages/eschaton-dms-plugin-update/PKGBUILD"
+  [ "$status" -eq 0 ]
+}
+
 @test "eschaton-update refuse le mode transaction à un appelant non privilégié" {
   if [ "$EUID" -eq 0 ]; then
     skip "test écrit pour un appelant non privilégié"

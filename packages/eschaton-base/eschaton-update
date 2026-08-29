@@ -91,6 +91,9 @@ install -d -m755 "$etat_dir"
 # une unité transitoire qui a RÉUSSI est ramassée par systemd et disparaît.
 # « terminée avec succès » et « n'a jamais tourné » seraient alors
 # indiscernables pour l'interface.
+snapshot_avant=0
+unites_en_echec=""
+
 ecrire_etat() { # $1=résultat $2=code
   local tmp="$etat.tmp"
   {
@@ -99,10 +102,28 @@ ecrire_etat() { # $1=résultat $2=code
     printf 'fin=%s\n' "$(date -Is)"
     printf 'noyau_a_recharger=%s\n' \
       "$(running_kernel_missing_modules /usr/lib/modules "$(uname -r)" && echo oui || echo non)"
+    # Le point de retour, calculé AVANT la transaction : c'est lui qui rend
+    # l'échec réversible sans ligne de commande.
+    printf 'snapshot_avant=%s\n' "$snapshot_avant"
+    printf 'unites_en_echec=%s\n' "$unites_en_echec"
   } > "$tmp"
   # Renommage atomique : l'interface ne lit jamais un état à moitié écrit.
   mv -f "$tmp" "$etat"
   chmod 644 "$etat"
+}
+
+# Le dernier snapshot existant avant que nous ne touchions à quoi que ce soit.
+# snap-pac en créera un autre (« pre ») pendant la transaction ; celui-ci
+# suffit et ne demande aucune analyse du type de snapshot.
+dernier_snapshot() {
+  local n
+  n=$(snapper --config root list --columns number 2>/dev/null | tail -1 | tr -d ' ')
+  valid_snapshot_number "${n:-0}" && printf '%s\n' "$n" || printf '0\n'
+}
+
+lister_unites_en_echec() {
+  systemctl list-units --state=failed --plain --no-legend --no-pager 2>/dev/null \
+    | awk '{print $1}'
 }
 
 # Une annulation n'est pas un échec. `systemctl stop` envoie SIGTERM à tout le
@@ -165,7 +186,10 @@ if prevol_exige_decision_humaine "$prevol"; then
   exit 1
 fi
 
+snapshot_avant=$(dernier_snapshot)
+echecs_avant=$(lister_unites_en_echec)
 echo "==> Transaction. Snapshot automatique via snap-pac."
+echo "    Point de retour avant transaction : snapshot $snapshot_avant."
 # `-Su` sans `-y` : le pré-vol vient de synchroniser les bases, et la
 # transaction doit se jouer sur CELLES-LÀ. Un second `-y` rouvrirait la fenêtre
 # entre ce qui a été vérifié et ce qui est installé.
@@ -182,7 +206,24 @@ fi
 if ((rc != 0)); then
   ecrire_etat echec "$rc"
   echo "==> La mise à jour a échoué (code $rc). Rien n'a été approuvé à ta place." >&2
+  echo "    Point de retour disponible : snapshot $snapshot_avant." >&2
   exit "$rc"
 fi
+
+# Le code de retour de pacman ne suffit pas. Archétype `dovecot 2.4` : la
+# transaction réussit et c'est le service qui ne redémarre plus. On laisse aux
+# unités relancées par les hooks le temps de tomber, puis on compare.
+sleep 3
+echecs_apres=$(lister_unites_en_echec)
+unites_en_echec=$(unites_nouvellement_en_echec "$echecs_avant" "$echecs_apres" | tr '\n' ' ')
+unites_en_echec=${unites_en_echec% }
+if [[ -n $unites_en_echec ]]; then
+  ecrire_etat succes-degrade 0
+  echo "==> Les paquets sont installés, MAIS des services ne démarrent plus :" >&2
+  echo "      $unites_en_echec" >&2
+  echo "    Ce n'est pas un succès. Point de retour : snapshot $snapshot_avant." >&2
+  exit 0
+fi
+
 ecrire_etat succes 0
 echo "==> Mise à jour terminée."

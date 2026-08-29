@@ -1,6 +1,6 @@
 pkgname=eschaton-dms-plugin-update
 pkgver=0.1.0
-pkgrel=7
+pkgrel=8
 pkgdesc="Plugin DMS Eschaton : disponibilité et installation des mises à jour"
 arch=(any)
 license=(MIT)
@@ -11,7 +11,13 @@ license=(MIT)
 # `foot` a disparu des dépendances le 2026-08-30 : le panneau n'ouvre plus de
 # terminal, il suit le journal de l'unité de transaction. `systemctl`,
 # `journalctl` et `cat` viennent de `base`, déjà tiré par eschaton-base.
-depends=(dms-shell pacman-contrib fakeroot polkit eschaton-base)
+#
+# `eschaton-dms-plugin-rollback` est requis pour l'ACTION polkit
+# `org.eschaton.rollback` qu'il livre : après un échec, le panneau propose le
+# retour à l'état d'avant la mise à jour, par cette action et ce binaire —
+# jamais par un chemin privilégié à lui. C'est le cœur de la spec §4 :
+# l'échec reste réversible sans ligne de commande.
+depends=(dms-shell pacman-contrib fakeroot polkit eschaton-base eschaton-dms-plugin-rollback)
 source=(plugin.json EschatonUpdateWidget.qml EschatonUpdateSettings.qml
         org.eschaton.update.policy LICENSE)
 sha256sums=(SKIP SKIP SKIP SKIP SKIP)

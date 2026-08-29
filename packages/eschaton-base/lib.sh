@@ -89,6 +89,19 @@ verrou_pacman_orphelin() { # $1=chemin du verrou $2=nombre de pacman vivants
   (($2 == 0))
 }
 
+# Un service en échec après une transaction réussie n'est PAS un succès.
+#
+# Archétype `dovecot >= 2.4` (nouvelle Arch du 2025-10-31) : `pacman` réussit,
+# et c'est le service qui ne redémarre plus, faute de migration de sa
+# configuration. Un updater qui ne lit que le code de retour annonce un succès
+# franc. On compare donc la liste des unités en échec avant et après, et on ne
+# retient QUE les nouvelles — celles qui étaient déjà cassées avant ne sont pas
+# le fait de cette mise à jour.
+unites_nouvellement_en_echec() { # $1=liste avant $2=liste après (une unité par ligne)
+  comm -13 <(printf '%s\n' "$1" | sed '/^[[:space:]]*$/d' | sort -u) \
+           <(printf '%s\n' "$2" | sed '/^[[:space:]]*$/d' | sort -u)
+}
+
 # `findmnt -no SOURCE` rend « /dev/vda2[/@] » pour un montage de sous-volume
 # btrfs, et « /dev/vda2 » tout court sinon. Les deux moitiés se lisent séparément.
 
