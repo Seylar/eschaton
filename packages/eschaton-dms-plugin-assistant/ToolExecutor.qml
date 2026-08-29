@@ -238,6 +238,8 @@ Item {
     }
 
     function finishStatusSource(source, exitCode) {
+        if (!_currentCall || _currentCall.name !== "system_status")
+            return;
         if (_statusFinished[source])
             return;
         _statusFinished[source] = true;

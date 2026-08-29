@@ -138,6 +138,28 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "un exit tardif du statut ne termine jamais l'appel suivant" {
+  executor="$assistant_dir/ToolExecutor.qml"
+  run awk '
+    /function finishStatusSource\(source, exitCode\)/ {
+      in_function = 1
+      next
+    }
+    in_function && /if \(!_currentCall \|\| _currentCall.name !== "system_status"\)/ {
+      guard = NR
+    }
+    in_function && /if \(_statusFinished\[source\]\)/ {
+      first_state_access = NR
+      exit
+    }
+    END {
+      if (!guard || !first_state_access || guard >= first_state_access)
+        exit 1
+    }
+  ' "$executor"
+  [ "$status" -eq 0 ]
+}
+
 @test "rollback exige l'intention visible puis polkit sans auto-approve" {
   executor="$assistant_dir/ToolExecutor.qml"
   panel="$assistant_dir/EschatonAssistantPanel.qml"
