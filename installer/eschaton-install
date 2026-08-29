@@ -1,23 +1,44 @@
 #!/usr/bin/env bash
 # Installeur Eschaton — spec docs/superpowers/specs/2026-08-27-socle-design.md §4.
-# S'exécute depuis un environnement live Arch (archboot aarch64 / ISO officielle x86_64).
+# S'exécute depuis un environnement live Arch : l'ISO Eschaton (SP4b-1), où il est
+# déjà présent en /usr/local/bin, ou un live tiers (archboot aarch64, ISO Arch x86_64).
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib.sh
 source "$(dirname "$0")/lib.sh"
 
+usage() {
+  echo "usage: eschaton-install [--dry-run] --disk /dev/X --user NOM [--hostname H]" >&2
+}
+
 DRY_RUN=0; DISK=""; HOSTNAME_="eschaton"; USERNAME=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
-    --disk) DISK="$2"; shift ;;
-    --hostname) HOSTNAME_="$2"; shift ;;
-    --user) USERNAME="$2"; shift ;;
-    *) echo "option inconnue : $1" >&2; exit 1 ;;
+    # `$# -ge 2` avant de consommer $2 : sans ce test, `--disk` en DERNIER token
+    # fait échouer le script sur « $2: unbound variable » sous `set -u` — un
+    # message de bash, pas de nous, qui n'apprend rien à celui qui installe.
+    --disk)     [[ $# -ge 2 ]] || { echo "eschaton-install : --disk attend un argument." >&2; usage; exit 1; }; DISK="$2"; shift ;;
+    --hostname) [[ $# -ge 2 ]] || { echo "eschaton-install : --hostname attend un argument." >&2; usage; exit 1; }; HOSTNAME_="$2"; shift ;;
+    --user)     [[ $# -ge 2 ]] || { echo "eschaton-install : --user attend un argument." >&2; usage; exit 1; }; USERNAME="$2"; shift ;;
+    *) echo "option inconnue : $1" >&2; usage; exit 1 ;;
   esac; shift
 done
 export DRY_RUN
-[[ -n "$DISK" && -n "$USERNAME" ]] || { echo "usage: eschaton-install [--dry-run] --disk /dev/X --user NOM [--hostname H]" >&2; exit 1; }
+[[ -n "$DISK" && -n "$USERNAME" ]] || { usage; exit 1; }
+
+# Validation AVANT toute écriture : ces trois valeurs finissent dans des
+# commandes privilégiées et dans des fichiers de configuration du système cible.
+# Le disque, en plus, est effacé sans confirmation à l'étape 1 — se tromper de
+# cible est la seule erreur de cet installeur qui ne se rattrape pas.
+valider_utilisateur "$USERNAME"
+valider_hote "$HOSTNAME_"
+if [[ "$DRY_RUN" == "0" && ! -b "$DISK" ]]; then
+  echo "eschaton-install : « $DISK » n'est pas un périphérique bloc." >&2
+  echo "  Attendu un disque ENTIER (/dev/sda, /dev/nvme0n1, /dev/vda), pas une" >&2
+  echo "  partition ni un fichier. Pour lister les candidats : lsblk -dno NAME,SIZE,MODEL" >&2
+  exit 1
+fi
 
 # Précondition spec §4.2 : boot UEFI uniquement
 if [[ "$DRY_RUN" == "0" && ! -d /sys/firmware/efi ]]; then
@@ -36,10 +57,22 @@ fi
 # au-delà de LIMIT_USAGE_PERCENT (85 % par défaut) de l'ESP, et chaque snapshot
 # amarré au menu y stocke son kernel et son initramfs. Trop petit = filet de
 # sécurité qui s'arrête en silence.
+part() { [[ "$DISK" == *[0-9] ]] && echo "${DISK}p$1" || echo "${DISK}$1"; }
 run_cmd sgdisk --zap-all "$DISK"
 run_cmd sgdisk -n1:0:+4G -t1:ef00 -c1:ESP "$DISK"
 run_cmd sgdisk -n2:0:0 -t2:8300 -c2:eschaton "$DISK"
-part() { [[ "$DISK" == *[0-9] ]] && echo "${DISK}p$1" || echo "${DISK}$1"; }
+
+# La relecture de la table de partitions par le noyau est ASYNCHRONE. `sgdisk`
+# rend la main avant que /dev/<disque>1 n'existe : sans attente, le `mkfs.vfat`
+# ci-dessous échoue par intermittence, et d'autant plus rarement que la machine
+# est rapide — donc jamais en VM et parfois sur du vrai matériel.
+# `udevadm settle` d'abord (il vide la file d'événements udev), puis une attente
+# explicite du nœud : `settle` ne garantit pas que l'événement d'ajout de
+# partition soit DÉJÀ dans la file au moment où on l'appelle.
+run_cmd udevadm settle
+run_cmd attendre_bloc "$(part 1)"
+run_cmd attendre_bloc "$(part 2)"
+
 run_cmd mkfs.vfat -F32 -n ESP "$(part 1)"
 run_cmd mkfs.btrfs -f -L eschaton "$(part 2)"
 
@@ -57,6 +90,9 @@ run_cmd mount -o "subvol=@snapshots,$opts" "$(part 2)" /mnt/.snapshots
 run_cmd mount "$(part 1)" /mnt/boot
 
 # 3. Dépôt [eschaton] dans le live env, puis pacstrap
+# Idempotent : sur l'ISO Eschaton le dépôt est DÉJÀ déclaré (le profil archiso
+# livre le même bloc et le même fichier de miroir), les deux commandes ne font
+# alors que constater. Sur un live tiers, elles l'installent.
 run_cmd bash -c 'grep -q "^\[eschaton\]" /etc/pacman.conf || printf "\n[eschaton]\nSigLevel = Optional TrustAll\nInclude = /etc/pacman.d/eschaton-mirror\n" >> /etc/pacman.conf'
 # Le `\$` est indispensable : `$arch` doit atterrir LITTÉRALEMENT dans le
 # fichier, c'est pacman qui le substitue (dépôt publié par architecture,
@@ -80,7 +116,9 @@ chroot_cmd 'pacman-key --init && pacman-key --populate'
 chroot_cmd 'ln -sf /usr/share/zoneinfo/Europe/Paris /etc/localtime && hwclock --systohc || true'
 chroot_cmd 'sed -i "s/^#fr_FR.UTF-8/fr_FR.UTF-8/; s/^#en_US.UTF-8/en_US.UTF-8/" /etc/locale.gen && locale-gen'
 chroot_cmd 'echo LANG=fr_FR.UTF-8 > /etc/locale.conf && echo KEYMAP=fr > /etc/vconsole.conf'
-run_cmd bash -c "echo '$HOSTNAME_' > /mnt/etc/hostname"
+# `write_file` et non `bash -c "echo '$HOSTNAME_' > …"` : plus aucune valeur
+# fournie par l'utilisateur n'est interpolée dans du code shell (cf. lib.sh).
+write_file /mnt/etc/hostname "$HOSTNAME_"
 # `rm -f` d'abord : /etc/os-release est un LIEN SYMBOLIQUE vers
 # ../usr/lib/os-release (paquet `filesystem`). Sans la suppression, le `cp` suit
 # le lien et écrase /usr/lib/os-release — un fichier que `filesystem` possède et
@@ -92,7 +130,9 @@ chroot_cmd 'rm -f /etc/os-release && cp /usr/share/eschaton/os-release /etc/os-r
 # Provisioning autorisé (spec §3) : activer le dépôt [eschaton] sur le système cible
 chroot_cmd 'grep -q "eschaton.conf" /etc/pacman.conf || printf "\nInclude = /etc/pacman.d/eschaton.conf\n" >> /etc/pacman.conf'
 chroot_cmd 'sed -i "s/^SNAPPER_CONFIGS=.*/SNAPPER_CONFIGS=\"root\"/" /etc/conf.d/snapper'
-chroot_cmd "useradd -m -G wheel $USERNAME"
+# Appel direct, sans `bash -c` : le nom d'utilisateur n'est plus interpolé dans
+# une chaîne de commande, il est passé comme argument.
+run_cmd arch-chroot /mnt useradd -m -G wheel "$USERNAME"
 if [[ "$DRY_RUN" == "0" ]]; then arch-chroot /mnt passwd "$USERNAME"; else echo "DRY: passwd $USERNAME"; fi
 chroot_cmd 'systemctl preset-all'
 
