@@ -4,7 +4,29 @@ set -euo pipefail
 # suivre depuis le dépôt, où elle vit à packages/eschaton-base/lib.sh.
 # shellcheck source=/dev/null
 source /usr/lib/eschaton/lib.sh
-mapfile -t pacman_args < <(pacman_update_args "$@")
+
+# Validation d'abord : `pacman_update_args` rend les arguments inchangés ou
+# échoue. On ne passe PAS par `mapfile < <(…)`, qui perdrait dans le sous-shell
+# le code de retour de la validation — l'option interdite serait alors
+# transmise à pacman après un message d'erreur ignoré.
+pacman_update_args "$@" > /dev/null || exit 1
+
+# Une question de pacman doit atteindre un humain, ou la transaction n'a pas
+# lieu.
+#
+# Sans terminal sur l'entrée standard, pacman lit EOF et applique la réponse
+# PAR DÉFAUT à chaque invite : c'est la même auto-approbation que
+# `--noconfirm`, simplement sans l'écrire. Tant que l'interface graphique ne
+# sait pas relayer les questions (plan Tasks 4-5), le seul mode sûr est « un
+# humain devant un terminal ».
+if [[ ! -t 0 ]]; then
+  echo "eschaton-update : pas de terminal sur l'entrée standard." >&2
+  echo "  pacman appliquerait ses réponses par défaut sans que personne ne les" >&2
+  echo "  voie ni ne les décide. Lance la mise à jour depuis un terminal, ou" >&2
+  echo "  depuis le panneau Eschaton." >&2
+  exit 1
+fi
+
 min_kb=1048576  # 1 Gio de marge avant update
 avail_kb=$(df --output=avail -k / | tail -1 | tr -d ' ')
 if ! check_free_space_kb "$avail_kb" "$min_kb"; then
@@ -12,7 +34,8 @@ if ! check_free_space_kb "$avail_kb" "$min_kb"; then
   exit 1
 fi
 echo "==> Mise à jour (Arch + [eschaton]). Snapshot automatique via snap-pac."
-sudo pacman -Syu "${pacman_args[@]}"
+echo "    Les questions de pacman sont posées ICI : personne n'y répond à ta place."
+sudo pacman -Syu "$@"
 if running_kernel_missing_modules /usr/lib/modules "$(uname -r)"; then
   echo "==> Le kernel a été mis à jour : redémarre pour l'utiliser (sudo reboot)."
 fi

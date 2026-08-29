@@ -19,7 +19,7 @@
       "type": "function",
       "function": {
         "name": "trigger_update",
-        "description": "Ouvre le flux de mise à jour Eschaton existant. L'utilisateur voit le terminal et authentifie lui-même l'action privilégiée.",
+        "description": "Ouvre le flux de mise à jour Eschaton existant. L'utilisateur voit le terminal, authentifie lui-même l'action privilégiée et répond lui-même aux questions de pacman : rien n'est approuvé à sa place.",
         "strict": true,
         "parameters": {
           "type": "object",

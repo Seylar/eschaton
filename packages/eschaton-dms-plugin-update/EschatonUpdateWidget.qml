@@ -66,14 +66,19 @@ PluginComponent {
         }
     }
 
+    // Aucune option d'auto-approbation n'est passée : jusqu'au 2026-08-30, le
+    // « --yes » qui se trouvait ici devenait `pacman --noconfirm`, et la mise à
+    // jour répondait donc oui toute seule aux remplacements, aux conflits et
+    // aux imports de clés. Le terminal reste, provisoirement, la surface où
+    // pacman pose ses questions à un humain ; il disparaîtra quand l'interface
+    // saura les relayer (plan update graphique, Tasks 4-5).
     Process {
         id: updateProcess
         command: [
             "/usr/bin/foot",
             "--hold",
             "--title=Eschaton · Mise à jour",
-            "/usr/bin/eschaton-update",
-            "--yes"
+            "/usr/bin/eschaton-update"
         ]
         running: false
 

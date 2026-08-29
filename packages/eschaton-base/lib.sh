@@ -9,17 +9,48 @@ running_kernel_missing_modules() { # $1=/usr/lib/modules $2=$(uname -r)
   [[ ! -d "$1/$2" ]]
 }
 
-# `--yes` est l'interface stable d'Eschaton (CLI et plugin DMS), alors que
-# pacman nomme cette option `--noconfirm`. Transmettre `--yes` tel quel fait
-# échouer pacman avant même la résolution des paquets.
+# ————— Interdiction d'auto-approbation dans le chemin de mise à jour —————
+#
+# Jusqu'au 2026-08-30, cette fonction traduisait `--yes` — l'interface stable
+# d'Eschaton — en `--noconfirm`. Autrement dit, la mise à jour d'Eschaton
+# répondait « oui » à la place de l'utilisateur : aux remplacements de paquets,
+# aux retraits de conflits, aux imports de clés. C'est l'anti-modèle que le
+# projet bannit partout ailleurs, et il était actif ici, y compris par l'outil
+# `trigger_update` de l'assistant. La traduction est supprimée.
+#
+# Les options sont désormais REFUSÉES, pas ignorées. Une option silencieusement
+# ignorée laisse croire à l'appelant qu'elle a pris effet, et le prochain
+# lecteur la remet ; un refus rend la faute visible au premier appel.
+pacman_auto_approve_arg() { # $1=argument ; rc=0 si l'option répond à la place de l'humain
+  case "$1" in
+    # Répond à toutes les questions.
+    --noconfirm|--yes) return 0 ;;
+    # `--ask` préremplit les réponses par un masque de bits : même effet, moins
+    # lisible encore.
+    --ask|--ask=*) return 0 ;;
+    # `--overwrite` fait passer outre un conflit de fichiers — exactement la
+    # décision humaine de l'archétype `linux-firmware` (spec §4). La porte de
+    # secours de ce cas est `pacman` dans un terminal, jamais une option
+    # d'`eschaton-update` : l'ajouter « par robustesse » écraserait des fichiers
+    # que personne n'a examinés.
+    --overwrite|--overwrite=*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Rend les arguments destinés à pacman, inchangés, ou échoue si l'un d'eux
+# supprime une question. Rien n'est écrit sur la sortie standard en cas
+# d'échec : l'appelant n'a jamais à filtrer un résultat partiel.
 pacman_update_args() {
   local arg
   for arg in "$@"; do
-    case "$arg" in
-      --yes) printf '%s\n' --noconfirm ;;
-      *) printf '%s\n' "$arg" ;;
-    esac
+    if pacman_auto_approve_arg "$arg"; then
+      printf 'eschaton-update : option interdite dans le chemin de mise à jour : %s\n' "$arg" >&2
+      printf "  Une mise à jour ne répond jamais à la place de l'utilisateur.\n" >&2
+      return 1
+    fi
   done
+  (($# == 0)) || printf '%s\n' "$@"
 }
 
 # `findmnt -no SOURCE` rend « /dev/vda2[/@] » pour un montage de sous-volume

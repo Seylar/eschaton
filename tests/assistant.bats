@@ -187,8 +187,16 @@ setup() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"ToolExecutor.qml"* ]]
   [[ "$output" == *"EschatonUpdateWidget.qml"* ]]
-  run grep -F '"/usr/bin/eschaton-update",' "$assistant_dir/ToolExecutor.qml" "$update_widget"
+  # Depuis le 2026-08-30, `/usr/bin/eschaton-update` est le DERNIER élément du
+  # tableau : plus aucune option ne le suit. L'ancienne assertion cherchait
+  # « "/usr/bin/eschaton-update", » — la virgule finale n'était là que parce
+  # qu'un `"--yes"` suivait, c'est-à-dire l'auto-approbation elle-même.
+  run grep -F '"/usr/bin/eschaton-update"' "$assistant_dir/ToolExecutor.qml" "$update_widget"
   [ "$status" -eq 0 ]
+  [[ "$output" == *"ToolExecutor.qml"* ]]
+  [[ "$output" == *"EschatonUpdateWidget.qml"* ]]
+  run grep -F '"/usr/bin/eschaton-update",' "$assistant_dir/ToolExecutor.qml" "$update_widget"
+  [ "$status" -eq 1 ]
   run grep -E "/usr/bin/bash|[\"']-lc[\"']" "$update_widget"
   [ "$status" -eq 1 ]
 }

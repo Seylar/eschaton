@@ -28,7 +28,11 @@ Preuves de référence :
 - `check-desktop-deps` : une panne API/outillage rend désormais rc=2, jamais un
   faux « paquet absent » ;
 - `tools/vm-serial` : arguments invalides sans traceback ;
-- `eschaton-update --yes` : traduction stricte vers `pacman --noconfirm` ;
+- ~~`eschaton-update --yes` : traduction stricte vers `pacman --noconfirm`~~ —
+  **révoqué le 2026-08-30** : cette traduction *était* l'auto-approbation. `--yes`
+  est désormais refusé, comme toute option qui répondrait à la place de
+  l'utilisateur (spec update graphique §3.4, garde
+  `tests/update-sans-auto-approbation.bats`) ;
 - tests Bats ajoutés pour ces contrats.
 
 ### Tasks 5–9

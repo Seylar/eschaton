@@ -4007,3 +4007,62 @@ $ pkaction | grep eschaton           → org.eschaton.rollback
 
 Les binaires de spike (`/usr/local/bin/eschaton-spike-*`) sont retirés ; il
 reste `/tmp/spike` (volatile).
+
+## 28. Update graphique — Task 2, l'auto-approbation retirée (2026-08-30)
+
+`lib.sh` et `eschaton-update` de la branche sont posés dans la VM (empreintes
+vérifiées des deux côtés : `a870ceea…` et `d529eae9…`), les versions d'origine
+mises de côté sous `/tmp/spike/*.avant`.
+
+**Les trois refus, en réel :**
+
+```console
+$ eschaton-update --yes
+eschaton-update : option interdite dans le chemin de mise à jour : --yes
+  Une mise à jour ne répond jamais à la place de l'utilisateur.
+rc=1
+
+$ eschaton-update --noconfirm
+eschaton-update : option interdite dans le chemin de mise à jour : --noconfirm
+  Une mise à jour ne répond jamais à la place de l'utilisateur.
+rc=1
+
+$ eschaton-update < /dev/null
+eschaton-update : pas de terminal sur l'entrée standard.
+  pacman appliquerait ses réponses par défaut sans que personne ne les
+  voie ni ne les décide. Lance la mise à jour depuis un terminal, ou
+  depuis le panneau Eschaton.
+rc=1
+```
+
+Le premier est l'argv que le widget et l'assistant envoyaient encore la veille :
+**le défaut réel du dépôt est refusé par le code réel, pas seulement par un
+test.**
+
+**Et pacman pose bien sa question** — 11 paquets en attente, dont le kernel :
+
+```console
+$ eschaton-update
+Paquets (11) gst-plugins-base-libs-1.28.6-2  gstreamer-1.28.6-2
+             libcloudproviders-0.4.1-1  libgcrypt-1.12.3-1  libksba-1.8.1-1
+             linux-aarch64-7.2.2-1  orc-0.4.43-1  protobuf-36.0-1
+             protobuf-c-1.5.2-14  python-protobuf-36.0-1  qt6-base-6.11.2-3
+:: Procéder à l'installation ? [O/n]        <- personne ne repond a la place
+```
+
+Réponse `n` : abandon propre, rien d'installé, aucun verrou laissé derrière.
+
+```console
+$ pacman -Q linux-aarch64 qt6-base
+linux-aarch64 7.2-2 qt6-base 6.11.2-2
+$ ls /var/lib/pacman/db.lck
+ls: impossible d'accéder à '/var/lib/pacman/db.lck': Aucun fichier ou dossier de ce nom
+```
+
+Les 11 mises à jour sont **laissées en attente exprès** : elles serviront de
+matière à la preuve de bout en bout de la Task 6.
+
+> **État de la VM à consigner** : `/usr/lib/eschaton/lib.sh` et
+> `/usr/bin/eschaton-update` sont pour l'instant *hors paquet* —
+> `pacman -Qkk eschaton-base` les comptera comme modifiés jusqu'à
+> l'installation du paquet `0.1.0-13` en Task 6.

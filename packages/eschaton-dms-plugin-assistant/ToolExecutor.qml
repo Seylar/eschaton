@@ -409,12 +409,14 @@ Item {
             return;
         }
         _updateReported = false;
+        // Même argv que le widget du panneau — même porte, aucune option
+        // d'auto-approbation. L'assistant ne dispose d'aucun raccourci que
+        // l'utilisateur n'aurait pas.
         updateProcess.command = [
             "/usr/bin/foot",
             "--hold",
             "--title=Eschaton · Mise à jour",
-            "/usr/bin/eschaton-update",
-            "--yes"
+            "/usr/bin/eschaton-update"
         ];
         updateProcess.running = true;
     }
@@ -429,7 +431,7 @@ Item {
             launched: true,
             surface: "visible_terminal",
             flow: "eschaton-update",
-            human_confirmation: "sudo demande le mot de passe dans le terminal ; aucune saisie ni approbation automatique"
+            human_confirmation: "sudo demande le mot de passe dans le terminal, et pacman y pose ses propres questions ; aucune saisie ni approbation automatique"
         });
     }
 
