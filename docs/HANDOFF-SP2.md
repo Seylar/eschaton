@@ -259,3 +259,21 @@ faire par Claude, conformément au gate utilisateur.
 **Ne commence rien sur ce sujet pour l'instant.** Une veille datée est en cours (ADR 0002) sur l'état de l'art des mises à jour graphiques sur Arch — le point dur est que `pacman -Syu` est interactif (conflits, `.pacnew`, interventions annoncées en amont), ce qui interdit un simple `--noconfirm`. La spec suivra la veille, et le plan suivra la spec.
 
 **Autre changement de cap** : la machine de banc d'essai n'est plus une tour Ryzen/Nvidia mais **un Mac secondaire à processeur i7** (x86_64), sur lequel l'utilisateur installera dès qu'un ISO existera. Une seconde veille couvre ce que cela implique (puce T2 ou non, démarrage sur firmware Apple avec Limine, pilotes Broadcom). **La priorité du SP4 bascule : l'ISO d'abord.** La signature du dépôt (SP4a) reste nécessaire mais ne bloque pas une installation que l'utilisateur fait sur sa propre machine.
+
+## 15. Deux fronts ouverts pour Codex (2026-08-29) — spécifiés, plannifiés, prêts
+
+La veille sur la mise à jour graphique est rendue et **deux specs + deux plans t'attendent**. Les deux chantiers sont indépendants : mène-les dans l'ordre ci-dessous, ou en parallèle si tu en as les moyens.
+
+### Front A — La mise à jour graphique (PRIORITÉ : il débloque le tag v0.3.0)
+- Spec : `docs/superpowers/specs/2026-08-29-update-graphique-design.md` · Plan : `docs/superpowers/plans/2026-08-29-update-graphique.md` · Branche : `assistant`
+- **Task 1 est bloquante et non négociable** : deux hypothèses de la spec ne sont **pas** vérifiées (un `systemd-run` lancé par root déclenche-t-il un contrôle polkit ? un utilisateur peut-il suivre le journal d'une unité système ?). Prouve-les en VM avant d'écrire du code définitif ; si le terrain contredit, bascule sur le repli D-Bus et **remonte-le dans la spec** (ADR 0002).
+- **Task 2 est la plus urgente en valeur** : la mise à jour est **auto-approuvée aujourd'hui** (`--yes` → `--noconfirm` dans `lib.sh`, vérifié). C'est un défaut actif, pas une dette théorique — il vaut mieux échouer proprement qu'approuver tout seul.
+- **Le §3.1 de la spec est la raison d'être de l'architecture** : `pkexec` arme `PR_SET_PDEATHSIG` et le « parent » est le *fil*, pas le processus — une interface QML multi-thread tuerait `pacman` en pleine transaction. Ne simplifie jamais en revenant à un `pkexec` qui porte la transaction elle-même.
+
+### Front B — L'ISO (ce que l'utilisateur attend pour quitter la VM)
+- Spec : `docs/superpowers/specs/2026-08-29-iso-design.md` · Plan : `docs/superpowers/plans/2026-08-29-iso.md` · **Branche `iso` à créer depuis `main`**
+- Les Tasks 1-3 (profil `archiso` nominal, preuve d'installation en VM x86_64, construction et publication en CI) **ne dépendent d'aucune décision en attente** — commence par elles.
+- Les Tasks 4-5 (variant T2, vraie machine) **attendent trois arbitrages utilisateur** listés à l'[ADR 0004 §6](decisions/0004-perimetre-materiel-mac-t2.md) : taille d'écran, sort de macOS, ratification du périmètre. N'y touche pas avant.
+
+### Rappels de contexte
+Le tag `v0.3.0` reste suspendu (§14) jusqu'à la revue du front A. `main` reste interdit. La machine de banc est un **MacBook Pro 2019 (T2)** : la veille correspondante (`docs/veille/2026-08-29-mac-intel-t2.md`) établit que Touch ID est **définitivement** inaccessible sous Linux et que le disque est **invisible** sans noyau `linux-t2` — d'où le variant d'ISO.
