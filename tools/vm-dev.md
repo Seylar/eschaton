@@ -3747,3 +3747,263 @@ Arch x86_64 comme ALARM aarch64.
 
 Ni `main`, ni le tag `v0.3.0`, ni Pages n'ont été modifiés. Ces trois actions
 restent le gate de publication de Claude après sa revue finale.
+
+## 27. Update graphique — Task 1, spike des hypothèses non vérifiées (2026-08-30)
+
+Le [plan](../docs/superpowers/plans/2026-08-29-update-graphique.md) Task 1 exige
+trois mesures avant tout code définitif. Elles sont faites sur la VM
+`eschaton-dev` (aarch64, kernel `7.2.0-2-aarch64-ARCH`, `systemd 261.2-1`,
+`polkit 127-3`), pilotage `tools/vm-serial`, utilisateur `seylar`
+(`groupes : seylar input wheel`).
+
+**Verdict global : l'architecture retenue tient, mais sa justification écrite
+est fausse.** Le §3.1 de la spec — « la fin d'un fil de l'interface enverrait
+SIGTERM à `pacman` » — **ne se reproduit pas**. La spec est amendée en
+conséquence (§27.4).
+
+### 27.1 Hypothèse 1 — `systemd-run` lancé par root ne déclenche aucun contrôle polkit : **CONFIRMÉE**
+
+Instrument : `busctl monitor` sur le bus système, lui-même porté par une unité
+transitoire (`-p StandardOutput=file:…`). Sous `sudo`, un processus détaché est
+tué avec la session ; l'unité, non — première illustration incidente de la thèse.
+
+Témoin d'abord, pour prouver que l'instrument voit :
+
+```console
+$ pkcheck --action-id org.eschaton.rollback --process $$
+Not authorized.
+TEMOIN CheckAuthorization: avant=0 apres=1
+```
+
+Puis les deux cas :
+
+```console
+=== CAS A — systemd-run --system lance PAR ROOT ===
+CAS A rc=0
+Running as unit: eschaton-spike-root.service; invocation ID: 71cc16119e764f10bcb2c584f79edb85
+CAS A CheckAuthorization: avant=1 apres=1        <- AUCUN controle
+
+=== CAS B — systemd-run --system lance par l'utilisateur non privilegie ===
+==== AUTHENTICATING FOR org.freedesktop.systemd1.manage-units ====
+Authentication is required to start transient unit 'eschaton-spike-user.service'.
+Authenticating as: seylar
+Password: CAS B rc=124                            <- bloque, puis expiration
+CAS B CheckAuthorization: avant=1 apres=2
+```
+
+`journalctl -u polkit` corrobore le seul cas B :
+
+```text
+polkitd[2612]: Operator of unix-process:unknown FAILED to authenticate to gain
+authorization for action org.freedesktop.systemd1.manage-units for
+system-bus-name::1.95 [<unknown>] (owned by unix-user:seylar)
+```
+
+Corps du message capturé côté bus pour le cas B — l'appelant est **PID 1**
+(`Sender=:1.3`), qui interroge polkit pour le compte de l'utilisateur :
+
+```text
+Sender=:1.3  Destination=org.freedesktop.PolicyKit1  Interface=org.freedesktop.PolicyKit1.Authority  Member=CheckAuthorization
+        STRING "system-bus-name";  STRING "name";  STRING ":1.95";
+        STRING "org.freedesktop.systemd1.manage-units";
+        STRING "unit";  STRING "eschaton-spike-user.service";
+        STRING "verb";  STRING "start";
+```
+
+> **Écart avec la veille §7.2, à consigner.** Le rapport s'appuyait sur le bug
+> systemd **#17224** — « `StartTransientUnit()` ne transmet pas le nom de
+> l'unité à polkit ». **Sur systemd 261 il le transmet** (`unit` et `verb`
+> ci-dessus). L'option D reste néanmoins écartée, mais pour une raison plus
+> forte et indépendante du bug : les *détails* transmis à polkit se limitent à
+> `unit`/`verb` — **la ligne de commande de l'unité (`ExecStart`) n'y figure
+> pas**. Une règle qui autoriserait « l'unité `eschaton-update.service` »
+> autoriserait donc *n'importe quel programme* démarré sous ce nom. Seule
+> l'annotation `org.freedesktop.policykit.exec.path` épingle réellement le
+> programme, et elle n'existe que sur le chemin `pkexec`.
+
+### 27.2 Hypothèse 2 — un utilisateur non privilégié suit le journal d'une unité *système* : **CONFIRMÉE**
+
+Le mécanisme est l'ACL posée par systemd sur le magasin du journal, et
+l'appartenance de l'utilisateur à `wheel` — déjà un invariant du socle
+(`10-wheel.sudoers`) :
+
+```console
+$ getfacl -p /var/log/journal/d30aa44e2b314902a0b5f864dac156f3
+group:wheel:r-x
+group:adm:r-x
+default:group:wheel:r-x
+```
+
+Lecture et **suivi en direct**, sans `sudo`, sur une unité système :
+
+```console
+$ journalctl --no-pager -q -u eschaton-spike-root.service -o cat
+Started [systemd-run] /bin/sh -c "echo bonjour-depuis-unite-root; sleep 25".
+bonjour-depuis-unite-root
+eschaton-spike-root.service: Deactivated successfully.
+
+$ timeout 6 journalctl -q -f -u eschaton-spike-root.service -o cat
+… mêmes lignes reçues au fil de l'eau (rc=124 = expiration du `timeout`, voulue)
+```
+
+Le repli « l'assistant privilégié relaie la sortie » (spec, risque n°2) **n'est
+pas nécessaire**. Réserve : `seylar` n'est ni dans `systemd-journal` ni dans
+`adm` ; c'est bien `wheel` qui porte le droit. Un utilisateur hors `wheel`
+n'aurait ni `sudo`, ni rollback, ni journal — le cas n'existe pas sur Eschaton.
+
+### 27.3 Contre-épreuve du §3.1 — **la spec est démentie**
+
+Matériel : une victime qui journalise son démarrage, piège `SIGTERM` et boucle ;
+un pilote Python qui reproduit le cycle de vie d'une interface QML — **un fil
+non principal** crée le processus, puis ce fil se termine pendant que le
+processus, lui, reste vivant.
+
+L'authentification a dû être neutralisée pour isoler le cycle de vie : depuis la
+console série, l'agent texte de `pkexec` n'aboutit pas tant que la session
+graphique tient l'agent polkit (`polkitd : No session for cookie`), et une
+session série **sans siège** n'est pas « locale » pour polkit — donc `allow_any`
+s'applique. Une action de spike en `allow_any=yes`, livrée par aucun paquet, a
+servi le temps de la mesure puis **a été retirée** (§27.5). `PR_SET_PDEATHSIG`
+est armé indépendamment du résultat de l'autorisation : la mesure n'en est pas
+faussée.
+
+| Variante | `PR_SET_PDEATHSIG` armé | Identité changée ensuite | Résultat à la mort du fil |
+|---|---|---|---|
+| `nu` (témoin négatif) | non | — | **survit** |
+| `arme` (uid 1000 → 1000) | oui | non | **SIGTERM reçu** |
+| `root_seul` (uid 0 → 0) | oui | non | **SIGTERM reçu** |
+| `root_puis_uid` (0 → 1000) | oui | **oui** | **survit** |
+| **`pkexec` réel** (1000 → 0) | oui *(source)* | **oui** (`setreuid`) | **survit** |
+
+```console
+### MODE arme
+VICTIME demarree pid=4110 ppid=4108 euid=1000 00:01:20.895693894
+VICTIME SIGTERM RECU pid=4110 00:01:26.987064183      <- le fil meurt a 00:01:26
+
+### MODE root_puis_uid
+VICTIME demarree pid=4430 ppid=4428 euid=1000 00:03:56.230615154
+4430 bash /usr/local/bin/eschaton-spike-victime        <- toujours vivante
+```
+
+**La sémantique « le parent, c'est le fil » de `prctl(2)` est donc bien réelle
+sur ce noyau** (variantes `arme` et `root_seul`) — la veille avait raison sur ce
+point. **Mais elle ne s'applique pas à `pkexec`**, et la raison est dans l'ordre
+de son propre code. Source amont relue le 2026-08-30
+(`github.com/polkit-org/polkit`, `src/programs/pkexec.c`) :
+
+```c
+  /* make sure we are nuked if the parent process dies */
+#if defined(__linux__)
+  if (prctl (PR_SET_PDEATHSIG, SIGTERM) != 0)
+  …
+  /* become the user */
+  if (setgroups (0, NULL) != 0)          …
+  (void) setregid (pw->pw_gid, pw->pw_gid);
+  (void) setreuid (pw->pw_uid, pw->pw_uid);
+  …
+  /* exec the program */
+  if (execv (path, exec_argv) != 0)
+```
+
+`pkexec` arme le signal **puis change d'identité**. Or le noyau remet
+`pdeath_signal` à zéro à tout changement d'euid/egid/fsuid/fsgid ou gain de
+capacités (`commit_creds()`). La variante `root_puis_uid` reproduit exactement
+cet ordre et **démontre l'effacement** sans rien supposer du noyau. Le binaire
+importe bien les deux symboles :
+
+```console
+$ strings /usr/bin/pkexec | grep -x -E 'prctl|setreuid'
+prctl
+setreuid
+```
+
+> **Conséquence.** Le scénario catastrophe du §3.1 — `pacman` tué par la fin
+> d'un fil QML — **n'existe pas** dès lors que l'appelant et la cible ont des
+> identités différentes, ce qui est toujours le cas ici (`seylar` → `root`). Le
+> risque résiduel que la spec « acceptait » sur le rollback n'existe pas non
+> plus. Il ne reste donc **aucune raison de sécurité** de préférer l'unité
+> transitoire à un `pkexec` direct — il en reste deux, mesurées, de conception.
+
+#### Ce qui justifie encore l'unité transitoire — mesuré
+
+```console
+=== A — l'interface non privilegiee peut-elle annuler un enfant root de pkexec ? ===
+victime pid=4881 utilisateur=root parent=4871
+  kill: (4881) - Opération non permise
+RESULTAT A : la victime SURVIT — annulation impossible sans second chemin privilegie
+
+=== C — la meme charge portee par une unite transitoire ===
+Running as unit: eschaton-spike-survivant.service
+porte rc=0 ; unite : active
+unite MainPID=4927 parent=1 (1 attendu)
+  kill: (4927) - Opération non permise
+apres tentative : active
+-- annulation par la porte (cote root) : systemctl stop --
+apres stop : inactive ; restes : 0
+```
+
+1. **L'annulation.** Une interface à uid 1000 ne peut pas signaler un processus
+   root : `kill` rend `EPERM`. Avec un `pkexec` qui porte la transaction,
+   annuler exigerait **un second chemin privilégié** — interdit par les
+   invariants. Avec l'unité, l'annulation est un `systemctl stop` passé par la
+   **même porte**, et elle ne laisse aucun orphelin (`restes: 0`).
+2. **La sortie visible sans couplage.** L'unité journalise ; l'interface lit le
+   journal (§27.2) au lieu de tenir un tube dont la durée de vie serait celle du
+   panneau.
+
+Deux réserves honnêtes :
+
+- `KillUserProcesses` vaut `no` (défaut Arch, vérifié) : la fin de session ne
+  tue donc pas non plus un enfant de `pkexec`. Ce n'est pas un argument.
+- Que Quickshell/DMS termine ses `Process` enfants quand un composant est
+  détruit ou la configuration rechargée est une **raison de conception, pas une
+  mesure** : ce n'est pas prouvé ici. Ce sera vérifiable en Task 4, sur la vraie
+  interface.
+
+Détail de conception relevé au passage : à l'annulation, l'unité finit en
+`status=143/n/a` puis `Failed with result 'exit-code'`. **Une annulation ne doit
+pas être présentée comme un échec** — l'unité de mise à jour devra le
+distinguer (`SuccessExitStatus=`, ou état d'annulation tenu côté interface).
+
+### 27.4 Ce qui remonte dans la spec (ADR 0002)
+
+| Point de la spec | Terrain | Correction portée |
+|---|---|---|
+| §3.1 — `pkexec` tue la transaction quand un fil meurt | **Faux** (§27.3) | §3.1 réécrit : le mécanisme existe, `pkexec` ne le déclenche pas ; l'architecture est justifiée par l'annulation et la sortie |
+| §3.1 — risque résiduel accepté sur le rollback | **Sans objet** | supprimé |
+| §3.2 — `systemd-run` par root ne déclenche pas polkit | **Confirmé** | statut « vérifié le 2026-08-30 » |
+| §3.2 / veille §7.2 — bug #17224, le nom d'unité n'est pas transmis | **Faux sur systemd 261** | motif du rejet remplacé : `ExecStart` n'est pas exposé à polkit |
+| Risque n°2 — l'utilisateur ne peut pas lire le journal | **Infirmé** | confirmé lisible via `wheel` ; repli abandonné |
+| Risque n°4 — PDEATHSIG résiduel sur le rollback | **Sans objet** | retiré |
+
+### 27.5 Instrument, empreintes et nettoyage
+
+Scripts poussés par la console série (motif §13.5), empreintes vérifiées des
+deux côtés :
+
+```text
+729737c3d76284d2433295ff5219a5f8b6377a60bed5a34a350b58c0fc88af0a  spike-polkit.sh
+4778a9db0d9847f68d415f9ca79df5924d1f4ee75ce236b9f58d114a8a3ded74  spike-polkit2.sh
+e15584256bf60275afe0da2c833c9fceed68115c8ea704754145b5b764634a7e  prepare-pdeath.sh
+2816e852d50deb29e3ea075a3e5458e88014a01d31f42023c1e01240000f2a22  pdeath2.py
+e7d63d8f5e4ec2811049024c423ad80696ee58b843dc8b403d6b014b8413007c  pdeath3.py
+30f8b2fbb0ddc8af8ebaeb81f2e20794524bc513b9e755721cebd002dbeb49b4  spike-porte2.sh
+```
+
+Trouvaille de sécurité indépendante, à retenir : **`/etc/polkit-1/actions/` est
+lu par polkit 127 et masque `/usr/share/polkit-1/actions/`**. Une action livrée
+par un paquet Eschaton peut donc être silencieusement redéfinie par un fichier
+d'`/etc` de même nom — constaté ici en cherchant pourquoi une modification
+restait sans effet.
+
+Nettoyage vérifié après la mesure :
+
+```console
+$ pkaction --action-id org.eschaton.spike.victime
+No action with action id org.eschaton.spike.victime
+$ ls /etc/polkit-1/actions/          → vide
+$ pkaction | grep eschaton           → org.eschaton.rollback
+```
+
+Les binaires de spike (`/usr/local/bin/eschaton-spike-*`) sont retirés ; il
+reste `/tmp/spike` (volatile).

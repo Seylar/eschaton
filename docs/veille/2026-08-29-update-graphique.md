@@ -5,6 +5,12 @@
 - **Date de la passe** : **2026-08-29**. Toute affirmation porte cette date sauf mention contraire.
 - **Couverture** : cinq axes sur six aboutis. **Un seul trou majeur subsiste** — la détection préalable de l'interactivité de `pacman` (§8.1). Il est nommé, non comblé par extrapolation.
 
+> **Démentis de terrain du 2026-08-30** — ce rapport reste la photographie du 2026-08-29 et n'est pas réécrit, mais **deux de ses constats ont été mesurés faux** par le spike de la Task 1 ([`tools/vm-dev.md` §27](../../tools/vm-dev.md)), et la [spec](../superpowers/specs/2026-08-29-update-graphique-design.md) porte les corrections :
+> - **§7.1 / §1 constat 2 / §10 risque 2 — « `pkexec` tue `pacman` quand le fil appelant meurt » : FAUX.** La sémantique `prctl(2)` est bien celle décrite, mais `pkexec` arme le signal *avant* de changer d'identité, et le noyau efface le réglage à ce changement. Mesuré avec le vrai `pkexec` et isolé par contre-épreuve.
+> - **§7.2 / §9.1 option D — le bug systemd #17224 : FAUX sur systemd 261.** `StartTransientUnit()` transmet bien `unit` et `verb` à polkit. Ce qu'il ne transmet pas, c'est `ExecStart` — motif de rejet plus fort, retenu à la place.
+>
+> Les recommandations §9.2 (porte `pkexec` + transaction portée par systemd) et l'interdiction de `--noconfirm` **restent valides** ; seules leurs justifications changent.
+
 ## Convention de provenance
 
 | Marque | Sens |
