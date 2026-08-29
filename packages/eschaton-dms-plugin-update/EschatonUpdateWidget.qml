@@ -507,8 +507,13 @@ PluginComponent {
                 // avalée : c'est elle qui remplace le terminal.
                 StyledRect {
                     width: parent.width
-                    height: 250
-                    visible: root.phase !== ""
+                    // DMS plafonne la hauteur d'un popout de greffon (mesuré :
+                    // 479 px, quelle que soit `popoutHeight`). Quand l'échec
+                    // ajoute son explication et l'offre de retour arrière, le
+                    // journal doit donc céder de la place — sans quoi c'est la
+                    // rangée de boutons qui sort du cadre, et la porte de
+                    // sortie devient inatteignable au moment où elle sert.
+                    height: root.phase === "termine" && root.resultatEstUnEchec ? 150 : 250
                     radius: Theme.cornerRadius
                     color: Theme.surfaceContainerHigh
 
@@ -627,10 +632,8 @@ PluginComponent {
     }
 
     popoutWidth: 560
-    // Hauteur dimensionnée sur le cas le PLUS chargé — un succès dégradé :
-    // en-tête sur deux lignes, journal, explication, offre de retour arrière,
-    // et trois boutons. Mesuré à 470, les boutons étaient coupés en bas ;
-    // c'est-à-dire que la porte de sortie devenait inatteignable exactement
-    // quand elle sert.
-    popoutHeight: 640
+    // Valeur demandée ; DMS la plafonne (mesuré : 479 px de haut effectifs).
+    // C'est pourquoi la boîte du journal se rétracte dans les cas d'échec —
+    // voir son commentaire.
+    popoutHeight: 500
 }
