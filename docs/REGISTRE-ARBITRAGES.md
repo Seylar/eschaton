@@ -1,0 +1,112 @@
+# Registre des arbitrages pris sans l'utilisateur
+
+- **Date** : 2026-08-29 — établi à la demande de l'utilisateur (« beaucoup d'arbitrages ont été pris sans moi… j'ai peur qu'il y ait un sacré décalage entre mes attendus et le rendu »)
+- **Portée** : SP1 (Socle, fusionné) + SP2 (Bureau, fusionné) + SP3 (Assistant, en attente de fusion)
+- **Sources** : bilans d'exécution ([Socle](superpowers/bilans/2026-08-28-socle-execution.md) 22 rulings, [Bureau](superpowers/bilans/2026-08-28-bureau-execution.md) 13 rulings), ADR [0001](decisions/0001-shell-du-bureau.md)/[0003](decisions/0003-service-secrets-assistant.md), amendements de specs, handoff §9/§11/§13, ledgers SDD.
+
+## Comment lire ce document
+
+Le **brief initial** sert d'étalon : « un nouveau Windows » — système complet pour tous, **léger, fluide, joli**, **IA intégrée au cœur / assistant omniprésent**, mises à jour gérées, Steam/Proton, **zéro-terminal**, tactile + souris, dogfooding v1.
+
+Les arbitrages sont classés par **risque de désaccord**, pas par ordre chronologique. Chacun porte son coût de retour en arrière. Les ~30 décisions purement techniques (contraintes de terrain constatées : Landlock sous Docker, gradle cassé, ICMP/NAT UTM, méthode *replace* de Snapper, ESP 4 Gio, symlinks LICENSE, `-d` pour les meta-paquets…) ne figurent pas ici : ce sont des constats, pas des choix de produit. Ils restent dans les bilans.
+
+**Biais systématique assumé** : à chaque bifurcation, l'arbitrage a penché du même côté — **la rigueur et la sécurité contre la fluidité**. Chaque décision est défendable isolément ; leur cumul tire le produit vers « sérieux et un peu austère », ce qui n'est pas exactement « léger, fluide, joli ».
+
+---
+
+## 🔴 Rouge — contredit un attendu explicite du brief
+
+### R1. L'assistant n'est pas omniprésent : 3 outils dans un panneau latéral
+
+- **Décidé** : catalogue **fermé** à `system_status`, `trigger_update`, `propose_rollback` ([spec Assistant §5](superpowers/specs/2026-08-28-assistant-design.md)).
+- **Motif** : tout contenu système est hostile par construction ; refus de l'anti-modèle Omarchy (auto-approve) ; surface d'attaque minimale pour un v1.
+- **Ce que ça te coûte** : l'assistant ne peut ni ouvrir une application, ni changer un réglage, ni parler de tes fichiers, ni agir sur le bureau. Tu avais coché « **assistant omniprésent** » au brainstorming.
+- **Retour en arrière** : **moyen**. L'architecture est faite pour ça (trajectoire A→B, contrat `AssistantCore`) — ajouter un outil ≈ une tâche (exécuteur + porte polkit + tests). Mais chaque outil rouvre la question de sécurité.
+- **Question qui t'appartient** : élargit-on le catalogue en v1 ? Avec quels outils exactement ?
+
+### R2. Chaque rollback exige ton mot de passe
+
+- **Décidé** : suppression, en revue, de la règle polkit qui autorisait le rollback sans authentification ([bilan Bureau, ruling 8](superpowers/bilans/2026-08-28-bureau-execution.md)).
+- **Motif** : le rollback réécrit la racine ; cohérence avec la posture sudo du Socle ; « on part fermé ».
+- **Ce que ça te coûte** : de la friction sur **la fonctionnalité phare**, celle qui doit rassurer un débutant (« si ça casse, un clic et c'est réparé » devient « un clic, un mot de passe, et c'est réparé »).
+- **Retour en arrière** : **trivial** — une règle polkit, un fichier, un bump.
+- **Question qui t'appartient** : mot de passe, ou clic simple pour l'utilisateur propriétaire de la machine ?
+
+### R3. Après une lecture système, l'assistant est désarmé
+
+- **Décidé** : durcissement de terrain Task 7 — après `system_status`, plus aucun outil n'est exposé ; agir exige **un nouveau message humain** ([spec §5.3](superpowers/specs/2026-08-28-assistant-design.md)).
+- **Motif** : le test d'injection a **réellement mordu** — une description de snapshot piégée a fait tenter une action privilégiée au modèle. La consigne textuelle seule ne suffisait pas.
+- **Ce que ça te coûte** : « regarde mon système et corrige ce qui ne va pas » est **structurellement impossible en un tour**. Toujours deux messages minimum.
+- **Retour en arrière** : techniquement facile — mais c'est le **seul rempart prouvé** contre l'injection. **Recommandation : garder.**
+- **Question qui t'appartient** : acceptes-tu cette friction, ou veux-tu explorer un compromis (ex. désarmer seulement quand du contenu hostile est détecté) ?
+
+---
+
+## 🟠 Orange — promesse entamée, friction ajoutée
+
+### O1. Les mises à jour ouvrent un terminal visible et demandent sudo
+
+- **Motif** : jamais de second chemin privilégié ; réutilisation du flux existant ; l'humain authentifie.
+- **Coût** : le « zéro terminal » est entamé **à l'endroit le plus fréquent** de la vie d'un système.
+- **Retour en arrière** : moyen — il faudrait une interface de mise à jour graphique avec sa propre porte polkit. C'était un candidat naturel du SP4.
+
+### O2. Auto-login sans mot de passe au démarrage
+
+- **Motif** : dette assumée du Bureau (`user = seylar` en dur dans `greetd.toml`), routée au SP4c.
+- **Coût** : une posture de sécurité que tu n'as pas choisie ; corollaire, le trousseau de clés reste **en clair au repos** (affiché à l'utilisateur, mais quand même).
+- **Retour en arrière** : c'est précisément le contenu du SP4c (greeter authentifié, PAM, verrouillage).
+
+### O3. `btrfs-assistant` retiré du meta-paquet
+
+- **Motif** : sa condition de sortie explicite (rollback natif prouvé dans le shell) était remplie avant le retrait.
+- **Coût** : plus de filet graphique de secours pour les snapshots en dehors de notre propre plugin.
+- **Retour en arrière** : trivial (une ligne de `depends`).
+
+---
+
+## 🟡 Jaune — structurant, coûteux à défaire
+
+### J1. Ton `~/.config/hypr/` entier appartient au bureau, pas à toi
+
+- **Constaté en VM** : DMS possède l'arbre complet ; l'accroche passe par `dms/binds-user.lua` (le canal béni de l'amont) et un wrapper de session.
+- **Coût** : tu ne peux pas éditer ta configuration Hyprland à la main comme sur une Arch classique — elle serait écrasée. **Pour un auteur qui daily-drive et bricole, c'est le point le plus susceptible d'exaspérer.**
+- **Retour en arrière** : **coûteux** — c'est le contrat d'intégration avec l'amont ; le défaire, c'est reprendre la propriété et perdre le canal béni.
+
+### J2. DankMaterialShell comme base du bureau (ADR 0001)
+
+- **Motif** : seul shell Quickshell offrant un **registre de plugins** — extensibilité sans fork.
+- **Coût** : on hérite de ses bugs (pastilles non rechargées après changement de config, notifications au-dessus des jeux en plein écran) et de son rythme amont.
+- **Retour en arrière** : **très coûteux** — c'est la fondation du SP2 tout entier.
+
+### J3. `gnome-keyring` entre au meta-paquet (ADR 0003)
+
+- **Motif** : découverte en VM — sans lui, **aucun service de secrets** n'existe sous Hyprland ; `secret-tool` échoue.
+- **Retour en arrière** : facile en théorie, mais rien d'autre ne fournit Secret Service simplement.
+
+### J4. Le SP4 découpé en trois (4a signature / 4b machine / 4c session)
+
+- **Motif** : la signature est bloquante et sans dépendance ; la machine réelle conditionne le reste.
+- **Retour en arrière** : c'est du planning — tu peux réordonner librement.
+
+---
+
+## ⚠️ Deux vetos déjà en attente de toi (rien n'a été fait)
+
+1. **La clé privée de signature vivrait dans un secret GitHub** ([spec Signature §3.1](superpowers/specs/2026-08-28-signature-design.md)) : un compromis du compte GitHub permettrait de signer des paquets malveillants. L'alternative (signer localement à chaque publication) casse le flux CI→Pages. **Rien ne démarre tant que tu n'as pas tranché, et la sauvegarde chiffrée de la clé doit t'être remise avant.**
+2. **La requalification de « atomique »** dans la roadmap du Socle (§1.2).
+
+---
+
+## Le trou que ce registre ne comble pas
+
+**Tu n'as jamais vu la distro.** Tout est prouvé par des agents dans une VM ARM, en rendu logiciel, sans audio. Les captures ont servi à vérifier que des éléments s'affichent — **pas qu'ils sont beaux**.
+
+Sur **« joli »** et **« fluide »**, deux critères explicites du brief initial, il n'y a eu **aucun humain dans la boucle, jamais**. Aucun document ne peut combler ça : seule une prise en main réelle le peut.
+
+## Recommandation
+
+1. **Prendre la VM en main** avant tout tag — vingt minutes de clics diront plus que trente rapports, et le décalage sortira sur le produit plutôt que sur le papier.
+2. **Opposer un veto ligne par ligne** sur les rouges et les oranges ci-dessus. Les rouges R1/R2 sont bon marché à défaire — c'est maintenant qu'il faut le dire, pas après la fusion.
+3. Les deux vetos en attente bloquent l'ouverture du SP4a.
+
+**Rien n'est irréversible aujourd'hui** : `main` ne porte que le Socle et le Bureau, l'Assistant est sur une branche, il n'existe aucun utilisateur, et un tag n'engage personne.
