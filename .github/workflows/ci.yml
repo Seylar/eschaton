@@ -18,11 +18,19 @@ concurrency:
 permissions:
   contents: read
 
+# TOUTES LES ACTIONS SONT ÉPINGLÉES PAR SHA (plan SP4b-1 Task 3.4).
+# Une étiquette (`@v7`) est une référence MOUVANTE : son mainteneur peut la
+# déplacer sur n'importe quel commit, et ce qui tourne ici avec accès au
+# `GITHUB_TOKEN` change alors sans qu'aucun fichier de ce dépôt ne bouge.
+# La veille §4.4 range cette dette au rang de prérequis de sécurité dès que la
+# clé de signature approche la CI (SP4a). Le commentaire `# vN` garde la version
+# lisible ; c'est le SHA qui fait foi.
+# SHA relevés le 2026-08-29 via l'API GitHub (`/repos/<dépôt>/git/ref/tags/<tag>`).
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # curl et jq sont préinstallés sur ubuntu-latest ; on les demande quand même
       # pour que la dépendance de `tools/check-desktop-deps` soit lisible ici.
       - run: sudo apt-get update && sudo apt-get install -y shellcheck bats curl jq
@@ -32,16 +40,26 @@ jobs:
             tools/sandbox tools/build-pkg tools/provision-gradle \
             tools/check-desktop-deps \
             repo/build-repo \
+            iso/build-iso iso/eschaton/profiledef.sh \
             installer/lib.sh installer/eschaton-install \
             packages/eschaton-base/lib.sh \
             packages/eschaton-base/eschaton-update \
             packages/eschaton-base/eschaton-rollback \
             packages/eschaton-desktop-config/eschaton-session \
             packages/eschaton-desktop-config/eschaton-dms-provision
+      # Différé du Socle soldé au SP4 : un fichier sudoers invalide n'est pas
+      # ignoré, il rend TOUT sudo inopérant sur la machine — y compris celui qui
+      # servirait à le réparer. `visudo -cf` est la seule vérification qui
+      # exerce le vrai analyseur ; `sudo` est préinstallé sur ubuntu-latest.
+      - name: visudo
+        run: visudo -cf packages/eschaton-base/10-wheel.sudoers
       # `tools/vm-serial` n'a pas d'extension .py et échappe à tout linter de
       # paquet : au minimum, il doit compiler.
       - name: py_compile
         run: python3 -m py_compile tools/vm-serial
+      # `tests/iso-profil.bats` verrouille les invariants du profil archiso sans
+      # rien construire : la construction de l'ISO vit dans son propre workflow
+      # (.github/workflows/iso.yml), qui dure trop longtemps pour une PR.
       - name: bats
         run: bats tests/
       # En dernier : seule étape du job qui sorte sur le réseau. `eschaton-desktop`
@@ -70,7 +88,7 @@ jobs:
       # défaut de Docker (cf. repo/build-repo).
       - name: git dans le conteneur
         run: pacman -Syu --noconfirm --needed --disable-sandbox git
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: build-repo
         env:
           # Ne jamais republier des octets différents sous le même pkgrel : les
@@ -78,7 +96,7 @@ jobs:
           # les archives dont le nom est déjà présent dans le dépôt public.
           ESCHATON_REPO_SEED_URL: https://seylar.github.io/eschaton/x86_64
         run: repo/build-repo
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: repo-x86_64
           path: repo/out/x86_64
@@ -92,12 +110,12 @@ jobs:
     steps:
       - name: git dans le conteneur
         run: pacman -Syu --noconfirm --needed --disable-sandbox git
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: build-repo
         env:
           ESCHATON_REPO_SEED_URL: https://seylar.github.io/eschaton/aarch64
         run: repo/build-repo
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: repo-aarch64
           path: repo/out/aarch64
@@ -122,18 +140,18 @@ jobs:
       group: pages
       cancel-in-progress: false
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: repo-x86_64
           path: site/x86_64
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: repo-aarch64
           path: site/aarch64
       - name: Contenu publié
         run: find site -type f | sort
-      - uses: actions/upload-pages-artifact@v5
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
           path: site
       - id: deploy
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
