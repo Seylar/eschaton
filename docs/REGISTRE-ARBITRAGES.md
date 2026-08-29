@@ -8,7 +8,7 @@
 
 Le **brief initial** sert d'étalon : « un nouveau Windows » — système complet pour tous, **léger, fluide, joli**, **IA intégrée au cœur / assistant omniprésent**, mises à jour gérées, Steam/Proton, **zéro-terminal**, tactile + souris, dogfooding v1.
 
-Les arbitrages sont classés par **risque de désaccord**, pas par ordre chronologique. Chacun porte son coût de retour en arrière. Les ~30 décisions purement techniques (contraintes de terrain constatées : Landlock sous Docker, gradle cassé, ICMP/NAT UTM, méthode *replace* de Snapper, ESP 4 Gio, symlinks LICENSE, `-d` pour les meta-paquets…) ne figurent pas ici : ce sont des constats, pas des choix de produit. Ils restent dans les bilans.
+Onze arbitrages de produit, classés par **risque de désaccord**, pas par ordre chronologique. Chacun porte son coût de retour en arrière. Les ~30 décisions purement techniques (contraintes de terrain constatées : Landlock sous Docker, gradle cassé, ICMP/NAT UTM, méthode *replace* de Snapper, ESP 4 Gio, symlinks LICENSE, `-d` pour les meta-paquets…) ne figurent pas ici : ce sont des constats, pas des choix de produit. Ils restent dans les bilans.
 
 **Biais systématique assumé** : à chaque bifurcation, l'arbitrage a penché du même côté — **la rigueur et la sécurité contre la fluidité**. Chaque décision est défendable isolément ; leur cumul tire le produit vers « sérieux et un peu austère », ce qui n'est pas exactement « léger, fluide, joli ».
 
@@ -39,6 +39,16 @@ Les arbitrages sont classés par **risque de désaccord**, pas par ordre chronol
 - **Ce que ça te coûte** : « regarde mon système et corrige ce qui ne va pas » est **structurellement impossible en un tour**. Toujours deux messages minimum.
 - **Retour en arrière** : techniquement facile — mais c'est le **seul rempart prouvé** contre l'injection. **Recommandation : garder.**
 - **Question qui t'appartient** : acceptes-tu cette friction, ou veux-tu explorer un compromis (ex. désarmer seulement quand du contenu hostile est détecté) ?
+
+### R4. Le tactile a été déclassé en « nice-to-have » — il n'existe nulle part
+
+- **Décidé** : [ADR 0001 §1](decisions/0001-shell-du-bureau.md) recentre le différenciateur n°1 sur le zéro-terminal, « ni le tactile (déclassé en nice-to-have) ». **Vérification faite le 2026-08-29 : le mot « tactile » n'apparaît que dans cet ADR, et aucun paquet ne contient une ligne de code tactile.**
+- **Motif** : Omarchy 4 était passé à Hyprland + Quickshell le 14 août 2026 ; il fallait un différenciateur qui tienne, et le zéro-terminal a été jugé plus solide.
+- **Ce que ça coûte** : Hyprland est un gestionnaire de fenêtres **en mosaïque, piloté au clavier** (`SUPER`+touche) — structurellement l'opposé d'une interface tactile. Or ton brief disait « **mais tactile/souris** », précisément pour te démarquer du tout-clavier d'Omarchy. C'est l'attendu le plus silencieusement abandonné du projet.
+- **Retour en arrière** : **coûteux** — Hyprland n'a qu'un support tactile partiel et DMS est pensé pour le bureau. Un vrai bureau tactile relève d'un autre choix de fondation, ou d'un travail conséquent.
+- **Question qui t'appartient** : le tactile est-il un objectif v1, un objectif v2, ou est-ce qu'on l'abandonne franchement et qu'on le retire du brief ?
+
+> **Note d'honnêteté** : cet arbitrage manquait à la première version de ce registre. Je l'ai trouvé en relisant l'ADR 0001 après coup — ce qui illustre exactement ta crainte : les décisions prises en autonomie se diluent dans la documentation et deviennent invisibles.
 
 ---
 
