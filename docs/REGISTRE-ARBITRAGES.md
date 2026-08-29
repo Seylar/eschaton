@@ -54,11 +54,13 @@ Onze arbitrages de produit, classés par **risque de désaccord**, pas par ordre
 
 ## 🟠 Orange — promesse entamée, friction ajoutée
 
-### O1. Les mises à jour ouvrent un terminal visible et demandent sudo
+### O1. Les mises à jour ouvrent un terminal visible et demandent sudo — ⛔ VETO REÇU (2026-08-29)
 
-- **Motif** : jamais de second chemin privilégié ; réutilisation du flux existant ; l'humain authentifie.
-- **Coût** : le « zéro terminal » est entamé **à l'endroit le plus fréquent** de la vie d'un système.
-- **Retour en arrière** : moyen — il faudrait une interface de mise à jour graphique avec sa propre porte polkit. C'était un candidat naturel du SP4.
+> **Verdict utilisateur** : « pour update, faut taper le sudo dans le terminal, c'est non. » Arbitrage **rejeté**. L'update doit passer par une **modale polkit graphique**, exactement comme le rollback. Re-spécification en cours (veille datée `update-graphique` lancée le 2026-08-29, ADR 0002). **Le tag v0.3.0 attendra la nouvelle conception.**
+
+- **Motif (rejeté)** : jamais de second chemin privilégié ; réutilisation du flux existant ; l'humain authentifie — mais l'authentification passait par le terminal, ce qui est le point rejeté.
+- **Coût constaté** : le « zéro terminal » était entamé **à l'endroit le plus fréquent** de la vie d'un système.
+- **Nouvelle direction** : porte polkit graphique dédiée à l'update, sortie streamée dans l'interface, sans terminal. Coût réel à établir par la veille (le piège = `pacman -Syu` interactif).
 
 ### O2. Auto-login sans mot de passe au démarrage
 
