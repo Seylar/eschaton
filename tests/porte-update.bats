@@ -382,6 +382,21 @@ FIN
   # Aucun shell : chaque Process a un argv constant.
   run grep -E '"/usr/bin/(ba)?sh"|"-lc"|"-c"' "$WIDGET"
   [ "$status" -eq 1 ]
+
+  # À la fin, le journal est RELU en entier, sans `-f`. Mesuré le 2026-08-30 :
+  # arrêter le suiveur à l'instant où l'unité s'éteint perdait la fin du
+  # journal, et le panneau du cas « décision humaine » affichait tout sauf LA
+  # question. Une relecture bornée supprime la course.
+  run grep -F 'journalFinalProcess.running = true' "$WIDGET"
+  [ "$status" -eq 0 ]
+  bloc=$(awk '/id: journalFinalProcess/,/^    }/' "$WIDGET")
+  [[ "$bloc" == *"journalModel.clear()"* ]] || {
+    echo "la relecture finale ne remplace pas le contenu : $bloc"
+    return 1
+  }
+  # …et elle est bornée à CETTE transaction, jamais au journal entier.
+  run grep -F '"--since", "@" + _debutEpoch' "$WIDGET"
+  [ "$status" -eq 0 ]
 }
 
 @test "un service tombé pendant la transaction n'est pas un succès (archétype dovecot)" {

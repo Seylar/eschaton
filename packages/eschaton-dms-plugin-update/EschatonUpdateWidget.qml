@@ -39,6 +39,10 @@ PluginComponent {
     property string unitesEnEchec: ""
     property bool confirmRestauration: false
     property bool restaurationEnCours: false
+    // Instant du clic, en secondes. Il borne à la fois le suivi en direct et
+    // la relecture finale : on ne rejoue jamais le journal d'une transaction
+    // précédente.
+    property int _debutEpoch: 0
 
     property int maxLignes: 600
 
@@ -111,6 +115,7 @@ PluginComponent {
         // `--since` sur l'instant du clic : on ne rejoue pas le journal des
         // transactions précédentes, et on ne rate pas les premières lignes de
         // celle-ci si l'unité démarre avant que le suiveur soit prêt.
+        _debutEpoch = Math.floor(Date.now() / 1000);
         journalProcess.command = [
             "/usr/bin/journalctl",
             "--no-pager",
@@ -118,7 +123,7 @@ PluginComponent {
             "-f",
             "-o", "cat",
             "-u", "eschaton-update.service",
-            "--since", "@" + Math.floor(Date.now() / 1000)
+            "--since", "@" + _debutEpoch
         ];
         journalProcess.running = true;
         applyProcess.running = true;
@@ -178,6 +183,22 @@ PluginComponent {
 
     function terminer(nouveauResultat, code) {
         journalProcess.running = false;
+        // Relecture COMPLÈTE du journal de cette transaction, sans `-f`.
+        //
+        // Mesuré le 2026-08-30 : le suiveur était arrêté à l'instant même où la
+        // sonde voyait l'unité s'éteindre, et la fin du journal n'arrivait
+        // jamais. Sur le cas « décision humaine », le panneau affichait donc
+        // tout sauf LA question — précisément ce que l'utilisateur doit lire.
+        // Une relecture bornée supprime la course au lieu de la temporiser.
+        journalFinalProcess.command = [
+            "/usr/bin/journalctl",
+            "--no-pager",
+            "-q",
+            "-o", "cat",
+            "-u", "eschaton-update.service",
+            "--since", "@" + _debutEpoch
+        ];
+        journalFinalProcess.running = true;
         annulationEnCours = false;
         confirmRestauration = false;
         phase = "termine";
@@ -331,6 +352,21 @@ PluginComponent {
         stderr: SplitParser {
             splitMarker: "\n"
             onRead: ligne => root.ajouterLigne(ligne)
+        }
+    }
+
+    Process {
+        id: journalFinalProcess
+        running: false
+        stdout: StdioCollector { id: journalFinalOutput }
+
+        onExited: function(exitCode, exitStatus) {
+            if (exitCode !== 0)
+                return;   // on garde alors ce que le suivi en direct a capté
+            const lignes = journalFinalOutput.text.split("\n");
+            journalModel.clear();
+            for (let i = 0; i < lignes.length; i++)
+                root.ajouterLigne(lignes[i]);
         }
     }
 
