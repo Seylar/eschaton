@@ -249,3 +249,13 @@ faire par Claude, conformément au gate utilisateur.
 **Correctif attendu** : garder `finishStatusSource` sur `_currentCall && _currentCall.name === "system_status"` (ou marquer les 4 sources finies dans le handler du timeout — au choix, mais un seul mécanisme). **Ajoute un test bats** qui verrouille la garde, bump `pkgrel`, rejoue bats + qmllint en VM, pousse sur `assistant`, CI verte. **C'est le seul travail autorisé avant le tag** — ne rien entreprendre d'autre.
 
 **Minors au ledger (post-tag, NE PAS traiter maintenant)** : refus humain du rollback ne désarme pas les outils (re-proposition possible jusqu'à `maxToolRounds`, bornée et jamais auto-approuvée) ; `_sawDone` en écriture seule ; `syncPluginSettings → applyProvider` sans garde `busy` ; statuts d'exécution T5/T6 absents du plan ; friction focus terminal à inscrire ; une ligne à ajouter à vm-dev §25 précisant que les lignes 13-14 du JSONL archivé reflètent le routeur de fixture pré-correctif (le serveur commité rendrait `UNKNOWN` sur ce tour — écart déjà narré, à relier au fichier).
+
+## 14. STOP tag v0.3.0 — veto utilisateur sur le flux d'update (2026-08-29)
+
+**Ton correctif `0ff455d` est validé** : la garde `finishStatusSource` est exactement celle demandée, au bon endroit, sur le motif de ses homologues ; 22 lignes de tests la verrouillent ; CI verte. Le bloqueur technique du §13 est levé. **Mais le tag et la fusion sont suspendus pour une raison de produit, pas de code.**
+
+**L'utilisateur a opposé un veto** : « pour update, faut taper le sudo dans le terminal — c'est non. » Le flux d'update actuel (terminal `foot` visible + `sudo pacman -Syu` au clavier) est **rejeté**. Il doit passer par une **modale polkit graphique**, comme le rollback. Cela touche le widget update du SP2 **et** l'outil `trigger_update` de l'assistant, qui appelle le même chemin — donc le SP3 ne peut pas être tagué en l'état.
+
+**Ne commence rien sur ce sujet pour l'instant.** Une veille datée est en cours (ADR 0002) sur l'état de l'art des mises à jour graphiques sur Arch — le point dur est que `pacman -Syu` est interactif (conflits, `.pacnew`, interventions annoncées en amont), ce qui interdit un simple `--noconfirm`. La spec suivra la veille, et le plan suivra la spec.
+
+**Autre changement de cap** : la machine de banc d'essai n'est plus une tour Ryzen/Nvidia mais **un Mac secondaire à processeur i7** (x86_64), sur lequel l'utilisateur installera dès qu'un ISO existera. Une seconde veille couvre ce que cela implique (puce T2 ou non, démarrage sur firmware Apple avec Limine, pilotes Broadcom). **La priorité du SP4 bascule : l'ISO d'abord.** La signature du dépôt (SP4a) reste nécessaire mais ne bloque pas une installation que l'utilisateur fait sur sa propre machine.
