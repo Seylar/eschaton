@@ -1,10 +1,12 @@
 pkgname=eschaton-dms-plugin-assistant
 pkgver=0.1.0
-pkgrel=9
+pkgrel=10
 pkgdesc="Plugin DMS Eschaton : assistant système à catalogue d'outils fermé"
 arch=(any)
 license=(MIT)
-depends=(dms-shell curl libsecret jq pacman-contrib eschaton-base foot polkit)
+# `foot` a disparu le 2026-08-30 : `trigger_update` n'ouvre plus de terminal,
+# il emprunte la porte polkit `org.eschaton.update` comme le panneau.
+depends=(dms-shell curl libsecret jq pacman-contrib eschaton-base polkit)
 optdepends=('ramalama: fournisseur local OpenAI-compatible')
 # Les harnais et fixtures restent dans les sources de test du dépôt, jamais dans
 # le paquet livré. Le catalogue, lui, est une donnée runtime versionnée.

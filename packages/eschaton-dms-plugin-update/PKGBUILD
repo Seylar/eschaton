@@ -1,6 +1,6 @@
 pkgname=eschaton-dms-plugin-update
 pkgver=0.1.0
-pkgrel=6
+pkgrel=7
 pkgdesc="Plugin DMS Eschaton : disponibilité et installation des mises à jour"
 arch=(any)
 license=(MIT)
@@ -8,7 +8,10 @@ license=(MIT)
 # comme pour le plugin rollback. Aucune règle `rules.d` n'est livrée : les
 # `<defaults>` de l'action suffisent et EXIGENT une authentification.
 # Justification complète dans l'en-tête d'org.eschaton.update.policy.
-depends=(dms-shell pacman-contrib fakeroot foot polkit eschaton-base)
+# `foot` a disparu des dépendances le 2026-08-30 : le panneau n'ouvre plus de
+# terminal, il suit le journal de l'unité de transaction. `systemctl`,
+# `journalctl` et `cat` viennent de `base`, déjà tiré par eschaton-base.
+depends=(dms-shell pacman-contrib fakeroot polkit eschaton-base)
 source=(plugin.json EschatonUpdateWidget.qml EschatonUpdateSettings.qml
         org.eschaton.update.policy LICENSE)
 sha256sums=(SKIP SKIP SKIP SKIP SKIP)

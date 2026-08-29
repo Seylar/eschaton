@@ -409,14 +409,14 @@ Item {
             return;
         }
         _updateReported = false;
-        // Même argv que le widget du panneau — même porte, aucune option
-        // d'auto-approbation. L'assistant ne dispose d'aucun raccourci que
-        // l'utilisateur n'aurait pas.
+        // EXACTEMENT l'argv du widget du panneau : même porte, même action
+        // polkit, même unité. L'assistant ne dispose d'aucun raccourci que
+        // l'utilisateur n'aurait pas, et il n'existe pas de second chemin
+        // privilégié à maintenir.
         updateProcess.command = [
-            "/usr/bin/foot",
-            "--hold",
-            "--title=Eschaton · Mise à jour",
-            "/usr/bin/eschaton-update"
+            "/usr/bin/pkexec",
+            "/usr/bin/eschaton-update-helper",
+            "--apply"
         ];
         updateProcess.running = true;
     }
@@ -425,13 +425,18 @@ Item {
         if (_updateReported || !_currentCall || _currentCall.name !== "trigger_update")
             return;
         _updateReported = true;
+        // On rend la main dès que la porte est ouverte, sans attendre l'humain :
+        // une modale peut rester affichée longtemps, et l'assistant n'a pas à
+        // rester bloqué dessus. Le résultat, lui, n'est pas de son ressort — il
+        // s'affiche dans le panneau, qui suit le journal de l'unité.
         finishCurrent({
             ok: true,
             tool: "trigger_update",
             launched: true,
-            surface: "visible_terminal",
-            flow: "eschaton-update",
-            human_confirmation: "sudo demande le mot de passe dans le terminal, et pacman y pose ses propres questions ; aucune saisie ni approbation automatique"
+            surface: "modale_polkit",
+            flow: "pkexec eschaton-update-helper --apply",
+            human_confirmation: "une modale polkit exige l'authentification de l'utilisateur ; ni l'assistant ni l'interface ne répondent aux questions de pacman",
+            progress_surface: "panneau « Mises à jour Eschaton » — journal de l'unité eschaton-update.service"
         });
     }
 
@@ -442,7 +447,7 @@ Item {
             finishCurrent({
                 ok: false,
                 tool: "trigger_update",
-                error: "le terminal de mise à jour n'a pas démarré",
+                error: "la porte privilégiée de mise à jour n'a pas démarré",
                 exit_code: Number(exitCode)
             });
         }

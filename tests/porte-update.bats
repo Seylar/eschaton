@@ -296,6 +296,39 @@ FIN
   [ "$(grep -c "printf 'y" "$MAJ")" -eq 1 ]
 }
 
+@test "le panneau montre le journal de l'unité, et ne fabrique pas son verdict" {
+  WIDGET="$RACINE/packages/eschaton-dms-plugin-update/EschatonUpdateWidget.qml"
+
+  # La progression vient du journal de l'unité — la sortie de pacman, telle
+  # quelle. C'est ce qui remplace le terminal, pas un résumé.
+  run grep -F '"/usr/bin/journalctl"' "$WIDGET"
+  [ "$status" -eq 0 ]
+  run grep -F '"-u", "eschaton-update.service"' "$WIDGET"
+  [ "$status" -eq 0 ]
+  run grep -F '"-f",' "$WIDGET"
+  [ "$status" -eq 0 ]
+  # Donnée machine : affichée telle quelle, jamais interprétée comme du balisage.
+  run grep -F 'textFormat: Text.PlainText' "$WIDGET"
+  [ "$status" -eq 0 ]
+
+  # Le verdict est LU (fichier d'état de la transaction), jamais déduit du seul
+  # code de sortie de la porte : `pkexec` rend 0 dès que l'unité est lancée.
+  run grep -F '/run/eschaton-update/etat' "$WIDGET"
+  [ "$status" -eq 0 ]
+  # Une unité arrêtée sans verdict écrit n'est pas un succès.
+  run grep -F 'terminer("interrompu"' "$WIDGET"
+  [ "$status" -eq 0 ]
+  bloc=$(awk '/function terminer\(/,/^    }/' "$WIDGET")
+  [[ "$bloc" == *'nouveauResultat === "succes"'* ]] || {
+    echo "le succès n'est pas conditionné au résultat lu : $bloc"
+    return 1
+  }
+
+  # Aucun shell : chaque Process a un argv constant.
+  run grep -E '"/usr/bin/(ba)?sh"|"-lc"|"-c"' "$WIDGET"
+  [ "$status" -eq 1 ]
+}
+
 @test "eschaton-update refuse le mode transaction à un appelant non privilégié" {
   if [ "$EUID" -eq 0 ]; then
     skip "test écrit pour un appelant non privilégié"

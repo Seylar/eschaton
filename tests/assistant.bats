@@ -181,23 +181,39 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "le flux update partagé ouvre le helper dans un terminal visible sans shell" {
+@test "l'assistant et le panneau empruntent la MÊME porte privilégiée, sans terminal" {
   update_widget="$BATS_TEST_DIRNAME/../packages/eschaton-dms-plugin-update/EschatonUpdateWidget.qml"
-  run grep -F '"--hold"' "$assistant_dir/ToolExecutor.qml" "$update_widget"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"ToolExecutor.qml"* ]]
-  [[ "$output" == *"EschatonUpdateWidget.qml"* ]]
-  # Depuis le 2026-08-30, `/usr/bin/eschaton-update` est le DERNIER élément du
-  # tableau : plus aucune option ne le suit. L'ancienne assertion cherchait
-  # « "/usr/bin/eschaton-update", » — la virgule finale n'était là que parce
-  # qu'un `"--yes"` suivait, c'est-à-dire l'auto-approbation elle-même.
-  run grep -F '"/usr/bin/eschaton-update"' "$assistant_dir/ToolExecutor.qml" "$update_widget"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"ToolExecutor.qml"* ]]
-  [[ "$output" == *"EschatonUpdateWidget.qml"* ]]
-  run grep -F '"/usr/bin/eschaton-update",' "$assistant_dir/ToolExecutor.qml" "$update_widget"
+  executor="$assistant_dir/ToolExecutor.qml"
+
+  # Jusqu'au 2026-08-30, les deux surfaces ouvraient `foot --hold` sur
+  # `eschaton-update --yes` : un terminal, et une auto-approbation. Les deux
+  # passent désormais par `pkexec eschaton-update-helper --apply`, argv pour
+  # argv — il n'existe pas de second chemin privilégié à maintenir.
+  for fichier in "$executor" "$update_widget"; do
+    bloc=$(awk '/"\/usr\/bin\/pkexec",/,/\]/' "$fichier" | head -20)
+    [[ "$bloc" == *'"/usr/bin/eschaton-update-helper"'* ]] || {
+      echo "$fichier n'ouvre pas la porte privilégiée : $bloc"
+      return 1
+    }
+    [[ "$bloc" == *'"--apply"'* ]] || {
+      echo "$fichier n'appelle pas --apply : $bloc"
+      return 1
+    }
+  done
+
+  # Plus de terminal nulle part sur ce chemin, et toujours aucun shell.
+  run grep -F '"--hold"' "$executor" "$update_widget"
+  [ "$status" -eq 1 ]
+  run grep -F '/usr/bin/foot' "$executor" "$update_widget"
   [ "$status" -eq 1 ]
   run grep -E "/usr/bin/bash|[\"']-lc[\"']" "$update_widget"
+  [ "$status" -eq 1 ]
+
+  # L'annulation emprunte la même porte, jamais un signal direct : une
+  # interface non privilégiée ne peut de toute façon pas signaler root.
+  run grep -F '"--cancel"' "$update_widget"
+  [ "$status" -eq 0 ]
+  run grep -E 'systemctl", *"(stop|kill)"' "$update_widget"
   [ "$status" -eq 1 ]
 }
 
