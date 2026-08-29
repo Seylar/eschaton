@@ -57,13 +57,34 @@ pacman_update_args() {
 #
 # `checkupdates` répond à « y a-t-il des mises à jour ? », jamais à « faut-il
 # une décision humaine ? ». La seconde question est celle qui conditionne le
-# zéro-terminal, et on y répond en faisant tourner la résolution à blanc
-# (`pacman -Syu --print`) puis en cherchant la TRACE d'une question.
+# zéro-terminal.
+#
+# Le pré-vol emprunte le VRAI chemin (`pacman -Syu`, entrée standard sur
+# /dev/null), pas `--print`. Mesuré le 2026-08-30 : un `--print` est
+# structurellement AVEUGLE à l'interactivité. Son `cb_question` répond
+# lui-même, sans rien afficher — source amont `src/pacman/callback.c` :
+#
+#     if(config->print) {
+#             switch(question->type) {
+#                     case ALPM_QUESTION_INSTALL_IGNOREPKG:
+#                     case ALPM_QUESTION_REPLACE_PKG:
+#                             question->any.answer = 1;      /* OUI, en silence */
+#                             break;
+#                     default:
+#                             question->any.answer = 0;
+#                             break;
+#             }
+#             return;
+#     }
+#
+# Sur le vrai chemin, en revanche, EOF fait répondre NON à tout (§ `question()`
+# de util.c) : le pré-vol s'arrête au sommaire sans avoir rien téléchargé ni
+# installé, et il aura AFFICHÉ chaque question rencontrée.
 #
 # Viser les marqueurs plutôt que d'énumérer les messages : toute question de
-# pacman passe par `question()` ou `select_question()` (src/pacman/util.c), qui
-# impriment l'un de ces quatre motifs. Une invite ajoutée en amont demain sera
-# donc attrapée sans que personne n'ait à mettre cette liste à jour.
+# pacman passe par `question()` ou `select_question()`, qui impriment l'un de
+# ces quatre motifs. Une invite ajoutée en amont demain sera donc attrapée sans
+# que personne n'ait à mettre cette liste à jour.
 #
 # Suppose une locale déterministe côté appelant (`LC_ALL=C.UTF-8`) : ces textes
 # sont traduits.
@@ -71,9 +92,41 @@ update_marqueurs_invite() {
   printf '%s\n' '\[Y/n\]|\[y/N\]|Enter a number|Enter a selection'
 }
 
-# Vrai quand la sortie d'un pré-vol montre qu'une question a été posée.
-prevol_exige_decision_humaine() { # $1=fichier de sortie du pré-vol
-  grep -qE "$(update_marqueurs_invite)" "$1"
+# La question du sommaire — la seule à laquelle l'humain a déjà répondu, devant
+# la modale polkit. C'est elle qu'on cherche à isoler des autres.
+update_marqueur_sommaire() {
+  printf '%s\n' 'Proceed with installation'
+}
+
+# Verdict du pré-vol, en un mot :
+#
+#   rien      il n'y a rien à mettre à jour ;
+#   propre    une seule question a été posée, et c'est le sommaire — la
+#             transaction peut recevoir l'unique réponse déjà authentifiée ;
+#   decision  une question A PRÉCÉDÉ le sommaire (remplacement, conflit, choix
+#             de fournisseur…). Eschaton s'arrête : y répondre serait répondre
+#             à la place de l'utilisateur ;
+#   erreur    la transaction ne se résout pas.
+#
+# On échoue fermé : tout ce qui n'est pas franchement propre est traité comme
+# une décision humaine.
+verdict_prevol() { # $1=fichier de sortie du pré-vol $2=code de retour de pacman
+  local invites sommaire
+  if grep -qF 'nothing to do' "$1"; then
+    printf 'rien\n'
+    return 0
+  fi
+  invites=$(grep -cE "$(update_marqueurs_invite)" "$1" || true)
+  sommaire=$(grep -cF "$(update_marqueur_sommaire)" "$1" || true)
+  if ((invites == 1)) && ((sommaire >= 1)); then
+    printf 'propre\n'
+  elif ((invites >= 1)); then
+    printf 'decision\n'
+  elif (($2 != 0)); then
+    printf 'erreur\n'
+  else
+    printf 'rien\n'
+  fi
 }
 
 # Un verrou pacman sans processus pacman est un verrou orphelin.

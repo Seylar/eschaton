@@ -55,18 +55,22 @@ fi
 #
 # Deux phases, et la première est ce qui rend la seconde honnête.
 #
-# PHASE A — un pré-vol qui ne modifie rien (`--print`), entrée standard sur
+# PHASE A — un pré-vol sur le VRAI chemin (`pacman -Syu`), entrée standard sur
 # /dev/null. Source pacman relue le 2026-08-30 (`src/pacman/util.c`) : sur EOF,
 # `question()` tombe sur `return 0`, c'est-à-dire **NON** — une ligne vide
-# rendrait le défaut, mais EOF n'est pas une ligne vide. Le pré-vol ne peut donc
-# rien approuver. On y cherche deux choses : un échec de résolution, et la
-# TRACE d'une question posée. Le marqueur est générique (`[Y/n]`, `[y/N]`,
-# `Enter a number`, `Enter a selection`) : il attrape aussi bien un
-# remplacement, un conflit, un choix de fournisseur qu'une invite future que
-# personne n'aurait pensé à énumérer.
+# rendrait le défaut, mais EOF n'est pas une ligne vide. Le pré-vol refuse donc
+# tout, s'arrête au sommaire sans avoir rien téléchargé ni installé, et il aura
+# AFFICHÉ chaque question rencontrée en chemin.
+#
+# Ce pré-vol utilisait `--print` jusqu'au 2026-08-30. C'était un défaut de
+# conception, trouvé en le mettant à l'épreuve d'un vrai remplacement de
+# paquet : `--print` est structurellement aveugle à l'interactivité — son
+# `cb_question` répond lui-même OUI aux remplacements, sans rien afficher
+# (`src/pacman/callback.c`, cité dans lib.sh). Le pré-vol laissait donc passer
+# exactement le cas qu'il devait attraper.
 #
 # PHASE B — la transaction, à laquelle on transmet **une seule** réponse « y ».
-# Ce n'est pas une auto-approbation : le pré-vol vient de prouver qu'aucune
+# Ce n'est pas une auto-approbation : le pré-vol vient de prouver qu'AUCUNE
 # question ne précède « Proceed with installation? », et cette question-là a
 # déjà été tranchée par l'humain devant la modale polkit. Toute question
 # ultérieure (import de clé PGP, archive corrompue) tombe sur EOF, donc sur
@@ -158,9 +162,11 @@ chmod 644 "$etat"
 # TimeoutStopSec, coupure de courant) n'a pas pu faire son propre ménage.
 liberer_verrou_orphelin
 
-echo "==> Pré-vol : résolution de la transaction, sans rien modifier."
+echo "==> Pré-vol : la transaction est jouée à blanc et REFUSÉE au sommaire."
+echo "    Rien n'est téléchargé ni installé ; les questions éventuelles"
+echo "    apparaissent ci-dessous, telles que pacman les pose."
 prevol_rc=0
-LC_ALL="$LOCALE_TRANSACTION" pacman -Syu --print "$@" < /dev/null > "$prevol" 2>&1 || prevol_rc=$?
+LC_ALL="$LOCALE_TRANSACTION" pacman -Syu "$@" < /dev/null > "$prevol" 2>&1 || prevol_rc=$?
 chmod 644 "$prevol"
 cat "$prevol"
 
@@ -170,21 +176,27 @@ if "$annulee"; then
   exit 0
 fi
 
-if ((prevol_rc != 0)); then
-  ecrire_etat echec-prevol "$prevol_rc"
-  echo "==> La transaction ne se résout pas (code $prevol_rc). Rien n'a été modifié." >&2
-  echo "    La sortie exacte de pacman est ci-dessus, telle quelle." >&2
-  exit "$prevol_rc"
-fi
-
-if prevol_exige_decision_humaine "$prevol"; then
-  ecrire_etat decision-humaine 1
-  echo "==> Cette mise à jour demande une décision humaine que l'interface ne sait" >&2
-  echo "    pas encore poser. Rien n'a été modifié : Eschaton préfère s'arrêter" >&2
-  echo "    plutôt que de répondre à ta place." >&2
-  echo "    La question posée par pacman est dans la sortie ci-dessus." >&2
-  exit 1
-fi
+case "$(verdict_prevol "$prevol" "$prevol_rc")" in
+  rien)
+    ecrire_etat succes 0
+    echo "==> Rien à mettre à jour."
+    exit 0
+    ;;
+  erreur)
+    ecrire_etat echec-prevol "$prevol_rc"
+    echo "==> La transaction ne se résout pas (code $prevol_rc). Rien n'a été modifié." >&2
+    echo "    La sortie exacte de pacman est ci-dessus, telle quelle." >&2
+    exit "$prevol_rc"
+    ;;
+  decision)
+    ecrire_etat decision-humaine 1
+    echo "==> Cette mise à jour demande une décision humaine que l'interface ne sait" >&2
+    echo "    pas encore poser. Rien n'a été modifié : Eschaton préfère s'arrêter" >&2
+    echo "    plutôt que de répondre à ta place." >&2
+    echo "    La question posée par pacman est dans la sortie ci-dessus." >&2
+    exit 1
+    ;;
+esac
 
 snapshot_avant=$(dernier_snapshot)
 echecs_avant=$(lister_unites_en_echec)

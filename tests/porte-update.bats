@@ -184,41 +184,80 @@ prepare_banc() {
   done
 }
 
-@test "le pré-vol reconnaît toute question de pacman, pas une liste de messages" {
+@test "le pré-vol distingue le sommaire seul d'une question qui le précède" {
   source "$RACINE/packages/eschaton-base/lib.sh"
-  # Textes réels de pacman (locale C), un par famille de question.
-  declare -A questionnes=(
-    [remplacement]=':: Replace varnish with extra/vinyl-cache? [Y/n] '
-    [conflit]=':: foo and bar are in conflict. Remove bar? [y/N] '
-    [fournisseur]=$':: There are 3 providers available for ttf-font:\n:: Repository extra\n   1) noto-fonts\n\nEnter a number (default=1): '
-    [ignore]=':: linux-firmware: local version is newer. Upgrade anyway? [y/N] '
-    [sommaire]=':: Proceed with installation? [Y/n] '
-    [selection]='Enter a selection (default=all): '
+  sortie="$BATS_TEST_TMPDIR/prevol.txt"
+
+  # Pré-vol PROPRE : une seule question, et c'est le sommaire. La transaction
+  # peut recevoir l'unique réponse déjà authentifiée devant la modale.
+  # (Sortie réelle d'un `pacman -Syu` refusé au sommaire, vm-dev.md §31.)
+  cat > "$sortie" <<'FIN'
+:: Synchronizing package databases...
+:: Starting full system upgrade...
+resolving dependencies...
+looking for conflicting packages...
+
+Packages (1) qt6-base-6.11.2-3
+
+Total Download Size:   14.11 MiB
+:: Proceed with installation? [Y/n]
+FIN
+  run verdict_prevol "$sortie" 1
+  [ "$output" = "propre" ]
+
+  # Chaque famille de question qui PRÉCÈDE le sommaire fait basculer en
+  # « decision » — y compris quand le sommaire finit par s'afficher aussi.
+  declare -A avant_sommaire=(
+    [remplacement]=':: Replace varnish with extra/vinyl-cache? [Y/n]'
+    [conflit]=':: foo and bar are in conflict. Remove bar? [y/N]'
+    [fournisseur]='Enter a number (default=1):'
+    [ignore]=':: linux-firmware: local version is newer. Upgrade anyway? [y/N]'
+    [selection]='Enter a selection (default=all):'
   )
-  for cas in "${!questionnes[@]}"; do
-    fichier="$BATS_TEST_TMPDIR/$cas.txt"
-    printf '%s\n' "${questionnes[$cas]}" > "$fichier"
-    run prevol_exige_decision_humaine "$fichier"
-    [ "$status" -eq 0 ] || {
-      echo "question « $cas » non détectée : ${questionnes[$cas]}"
+  for cas in "${!avant_sommaire[@]}"; do
+    printf '%s\n:: Proceed with installation? [Y/n]\n' "${avant_sommaire[$cas]}" > "$sortie"
+    run verdict_prevol "$sortie" 1
+    [ "$output" = "decision" ] || {
+      echo "question « $cas » non détectée : verdict=$output"
+      return 1
+    }
+    # Et même seule, sans que le sommaire soit jamais atteint (cas du conflit,
+    # qui fait échouer la résolution).
+    printf '%s\n' "${avant_sommaire[$cas]}" > "$sortie"
+    run verdict_prevol "$sortie" 1
+    [ "$output" = "decision" ] || {
+      echo "question « $cas » seule non détectée : verdict=$output"
       return 1
     }
   done
 
-  # Et un pré-vol propre ne déclenche rien : sortie réelle d'un
-  # `pacman -Syu --print` sans question (mesuré en VM, vm-dev.md §29).
-  propre="$BATS_TEST_TMPDIR/propre.txt"
-  cat > "$propre" <<'FIN'
-:: Synchronizing package databases...
- core downloading...
- extra downloading...
- alarm downloading...
-:: Starting full system upgrade...
-https://mirror.archlinuxarm.org/aarch64/extra/gstreamer-1.28.6-2-aarch64.pkg.tar.xz
-https://mirror.archlinuxarm.org/aarch64/core/linux-aarch64-7.2.2-1-aarch64.pkg.tar.xz
-FIN
-  run prevol_exige_decision_humaine "$propre"
-  [ "$status" -ne 0 ]
+  # Rien à faire : ni question, ni échec.
+  printf ':: Starting full system upgrade...\n there is nothing to do\n' > "$sortie"
+  run verdict_prevol "$sortie" 0
+  [ "$output" = "rien" ]
+
+  # Résolution impossible, sans aucune question : ce n'est pas une décision
+  # humaine, c'est une erreur — et l'interface ne doit pas les confondre.
+  printf 'error: failed to prepare transaction (could not satisfy dependencies)\n' > "$sortie"
+  run verdict_prevol "$sortie" 1
+  [ "$output" = "erreur" ]
+}
+
+@test "le pré-vol emprunte le vrai chemin, jamais --print" {
+  MAJ="$RACINE/packages/eschaton-base/eschaton-update"
+  # `--print` est structurellement aveugle : son `cb_question` répond OUI aux
+  # remplacements sans rien afficher (src/pacman/callback.c). Le pré-vol l'a
+  # utilisé jusqu'au 2026-08-30 et laissait donc passer exactement le cas
+  # qu'il devait attraper. Il ne doit jamais revenir.
+  # (Les commentaires en parlent, justement pour l'interdire ; c'est le CODE
+  # qui ne doit plus le contenir.)
+  suspectes=$(grep -n -F -- '--print' "$MAJ" | grep -v -E '^[0-9]+:[[:space:]]*#' || true)
+  [ -z "$suspectes" ] || {
+    echo "--print est revenu dans le code : $suspectes"
+    return 1
+  }
+  run grep -F -- 'pacman -Syu "$@" < /dev/null' "$MAJ"
+  [ "$status" -eq 0 ]
 }
 
 @test "un verrou pacman sans pacman est reconnu comme orphelin, et pas autrement" {
@@ -263,11 +302,12 @@ FIN
   source "$RACINE/packages/eschaton-base/lib.sh"
   MAJ="$RACINE/packages/eschaton-base/eschaton-update"
 
-  # Le pré-vol ne modifie rien (`--print`) et n'a pas d'entrée standard.
-  run grep -F -- 'pacman -Syu --print "$@" < /dev/null' "$MAJ"
+  # Le pré-vol n'a pas d'entrée standard : tout y est refusé, donc rien n'y est
+  # téléchargé ni installé.
+  run grep -F -- 'pacman -Syu "$@" < /dev/null' "$MAJ"
   [ "$status" -eq 0 ]
   # …et il précède la transaction dans le fichier.
-  ligne_prevol=$(grep -n -F -- 'pacman -Syu --print' "$MAJ" | head -1 | cut -d: -f1)
+  ligne_prevol=$(grep -n -F -- 'pacman -Syu "$@" < /dev/null' "$MAJ" | head -1 | cut -d: -f1)
   ligne_transaction=$(grep -n -F -- 'pacman -Su "$@"' "$MAJ" | head -1 | cut -d: -f1)
   [ -n "$ligne_prevol" ] && [ -n "$ligne_transaction" ]
   [ "$ligne_prevol" -lt "$ligne_transaction" ] || {
@@ -279,7 +319,10 @@ FIN
   # Un second rouvrirait la fenêtre entre ce qui a été vérifié et ce qui est
   # installé. (Le mode terminal, lui, fait bien un `-Syu` : un humain est là.)
   section=$(awk '/mode --transaction \(unité systemd\)/,0' "$MAJ")
-  rafraichissements=$(printf '%s\n' "$section" | grep -E 'pacman -Sy' | grep -v -- '--print' || true)
+  rafraichissements=$(printf '%s\n' "$section" \
+    | grep -v -E '^[[:space:]]*#' \
+    | grep -E 'pacman -Sy' \
+    | grep -v -F '< /dev/null' || true)
   [ -z "$rafraichissements" ] || {
     echo "second rafraîchissement dans la transaction : $rafraichissements"
     return 1
