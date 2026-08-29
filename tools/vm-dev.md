@@ -4270,3 +4270,178 @@ eschaton-update.service: Deactivated successfully.
 
 `qt6-base 6.11.2-2 -> 6.11.2-3` **reste en attente exprès** : c'est la matière
 de la preuve graphique de la Task 6.
+
+## 31. Update graphique — Tasks 4 à 6, la preuve graphique (2026-08-30)
+
+Toutes les captures viennent de l'invité (`dms screenshot output`, motif
+§12.5). Le pointeur est piloté par `ydotool` — **son mode absolu est à
+l'échelle 1/2 sur cette VM** (mesuré : `-x 640 -y 400` → curseur en
+`1279, 799`), il faut donc demander la moitié des coordonnées écran. Le clavier
+passe par `wtype` (§13.4). `ydotoold` est lancé à la main pour le banc, il
+n'entre dans les dépendances d'aucun paquet.
+
+### 31.1 Le parcours nominal, de bout en bout, sans terminal
+
+1. Clic sur la pastille de la barre → le panneau s'ouvre : « 1 mise(s) à jour
+   disponible(s) », et le texte annonce désormais qu'« une authentification est
+   demandée à chaque mise à jour ».
+2. Clic sur **Installer** → `pgrep` montre exactement
+   `/usr/bin/pkexec /usr/bin/eschaton-update-helper --apply`, et la **modale
+   graphique** s'affiche : « Authentification requise — Une autorisation est
+   requise pour mettre à jour Eschaton. » Derrière elle, le panneau dit
+   « Authentification requise… » et son bouton « Authentification… ».
+3. Saisie du mot de passe **dans la modale**, clic sur « S'authentifier ».
+   L'unité démarre (`is-active` → `active`).
+4. Le panneau affiche le journal de l'unité, tel quel : snapshot `pre` 103,
+   `limine-snapper-sync`, `upgrading qt6-base...`, hooks, snapshot `post` 104,
+   `==> Mise à jour terminée.` Et en tête : « Mise à jour installée. »
+
+```text
+resultat=succes   code=0   noyau_a_recharger=non   snapshot_avant=102
+qt6-base 6.11.2-3            checkupdates → 0
+```
+
+**Aucun terminal n'est ouvert à aucun moment.**
+
+### 31.2 Survie — l'interface entière est détruite en pleine transaction
+
+Le critère §5.3 de la spec, dans sa forme la plus dure : on ne ferme pas le
+panneau, on tue tout le shell.
+
+```console
+$ sudo eschaton-update-helper --apply       ; sleep 2
+--- PID du shell AVANT ---   479
+$ systemctl --user --no-block restart dms.service   ; sleep 6
+--- PID du shell APRES ---   17654
+--- la transaction ? ---
+active
+resultat=en-cours
+  17598       1 root     bash /usr/bin/eschaton-update --transaction
+```
+
+Le shell a changé de PID ; la transaction, elle, a toujours **PID 1 pour
+parent** et se termine normalement (`resultat=succes`, `qt6-base 6.11.2-3`).
+
+### 31.3 Le cas « décision humaine », fabriqué et mesuré
+
+Banc : deux paquets jetables dans un dépôt local, le second déclarant
+`replaces` sur le premier — l'archétype `varnish` → `vinyl-cache` de la
+nouvelle Arch du 2026-05-25.
+
+**Premier essai : le pré-vol n'a rien vu.** Sa sortie complète tenait en deux
+lignes, et la question est apparue en phase B, où elle a consommé l'unique
+« y » avant que le sommaire, lui, tombe sur EOF :
+
+```text
+:: Replace eschaton-prevol-ancien with eschatonprevol/eschaton-prevol-nouveau? [Y/n] y
+Packages (2) eschaton-prevol-ancien-1-1  eschaton-prevol-nouveau-1-1
+:: Proceed with installation? [Y/n]
+==> La mise à jour a échoué (code 1).
+```
+
+Rien n'a été installé — la sûreté tenait — mais pour la mauvaise raison, et le
+verdict rendu était `echec` au lieu de `decision-humaine`. Cause, lue à la
+source (`src/pacman/callback.c`) : **`--print` répond lui-même aux questions,
+sans rien afficher.** Le pré-vol emprunte depuis le vrai chemin.
+
+**Deuxième essai : le verdict était encore faux.** Après notre refus, pacman
+n'avait plus rien à faire et l'écrivait **sur la même ligne que la question** :
+
+```text
+:: Replace eschaton-prevol-ancien with … ? [Y/n]  there is nothing to do
+```
+
+`verdict_prevol` testait « rien à faire » d'abord : une décision en attente
+devenait un succès silencieux. L'ordre est inversé, et cette ligne exacte est
+devenue un test de régression.
+
+**Troisième essai — le bon**, par le panneau, avec la modale :
+
+```text
+resultat=decision-humaine   code=1   snapshot_avant=0
+eschaton-prevol-ancien 1-1        (inchangé)
+```
+
+et à l'écran, la question **verbatim**, suivie du refus assumé :
+
+```text
+:: Replace eschaton-prevol-ancien with eschatonprevol/eschaton-prevol-nouveau? [Y/n]  there is nothing to do
+==> Cette mise à jour demande une décision humaine que l'interface ne sait
+    pas encore poser. Rien n'a été modifié : Eschaton préfère s'arrêter
+    plutôt que de répondre à ta place.
+```
+
+*Défaut d'interface trouvé au passage* : la première capture montrait tout
+**sauf** la question. Le suiveur `journalctl -f` était arrêté à l'instant où la
+sonde voyait l'unité s'éteindre, et la fin du journal n'arrivait jamais. Le
+panneau relit désormais le journal en entier, borné à la transaction.
+
+### 31.4 Le cas « dovecot » — pacman réussit, le service tombe
+
+Banc : un paquet dont un hook `PostTransaction` démarre `--no-block` une unité
+qui échoue. `pacman` réussit donc, et le service ne démarre pas.
+
+```text
+resultat=succes-degrade   code=0
+snapshot_avant=126        unites_en_echec=eschaton-degrade-test.service
+eschaton-degrade 4-1      (installé)
+```
+
+À l'écran, en tête de panneau : « **Paquets installés, mais des services ne
+démarrent plus : eschaton-degrade-test.service** », puis, sous le journal :
+« Le code de retour de pacman disait « succès » — pas nous. », « Un point de
+retour existe : l'état d'avant cette mise à jour (snapshot 134). », et trois
+boutons : **Actualiser · Installer · Revenir à l'état d'avant**.
+
+*Deux défauts d'interface trouvés là aussi, et corrigés :* DMS **plafonne** la
+hauteur d'un popout de greffon (479 px effectifs, quelle que soit
+`popoutHeight` — augmenter la valeur demandée n'a rien changé), si bien que la
+rangée de boutons était coupée : la porte de sortie devenait inatteignable au
+moment précis où elle sert. C'est le journal qui se rétracte désormais. Et la
+retouche de hauteur avait fait perdre un `visible:` — le panneau au repos
+montrait une grande boîte vide « En attente de la première ligne du journal… ».
+Les deux ont une garde.
+
+### 31.5 Ce que l'assistant exécute réellement
+
+Fichier **installé** dans la VM,
+`/etc/xdg/quickshell/dms-plugins/eschatonAssistant/ToolExecutor.qml` :
+
+```qml
+            "/usr/bin/pkexec",
+            "/usr/bin/eschaton-update-helper",
+            "--apply"
+```
+
+Aucun des deux greffons ne mentionne plus `foot` (`grep -c` → 0 des deux
+côtés). L'assistant emprunte donc la porte du panneau, argv pour argv. **Ce
+qui n'est pas prouvé ici** : une conversation réelle avec un modèle produisant
+`trigger_update`, comme l'avait fait le §25.3. La bascule est prouvée sur
+l'artefact déployé et par un test de dépôt, pas par un tour de dialogue.
+
+### 31.6 État final de la VM
+
+Bancs retirés : paquets jetables désinstallés, dépôts locaux et sections de
+`/etc/pacman.conf` supprimés, `ydotoold` arrêté.
+
+```console
+$ systemctl is-system-running                     → running   (aucune unité en échec)
+$ pacman -Q eschaton-base …                       → 0.1.0-17, plugin-update 0.1.0-12,
+                                                     plugin-assistant 0.1.0-10,
+                                                     plugin-rollback 0.1.0-3
+$ pacman -Qkk …                                   → 0 fichier modifié (hors /etc/sudoers.d,
+                                                     illisible sans privilège)
+$ checkupdates | wc -l                            → 0
+$ ls /etc/polkit-1/actions/                       → vide
+```
+
+Empreintes des captures (invité = hôte) :
+
+```text
+0311891a0893d72e39981abedb3eca93ee72aa82997e44efac38175b86ce4056  panneau ouvert
+ddd86739e7ce8869d5e0dd14966dafb82801831221fa9831ddfc1d42cd1277a9  modale polkit
+f778ff5dc9d2afff7360d34cb1b4e0bf18f67f3a46e95515ff436588d9f9460b  mot de passe saisi
+1ef8023bbc90c117a15b619f84724e40fba25a7f4787a0bb6d41cc8bb8644636  progression et succès
+1da16ef90c990e8710b3f63bebae80301e66a0b31a6f7e432a9a1fa3eb719757  décision humaine
+9569850528a640ef77ff063c146b7e4291505e989723925790f43d95a05e1cf8  succès dégradé
+```

@@ -106,3 +106,25 @@ Ce que cette conception garantit à la place :
 | 7 | *(nouveau, 2026-08-30)* Une action polkit livrée par un paquet peut être masquée par un fichier de même nom dans `/etc/polkit-1/actions/` | Constaté sur polkit 127. À garder en tête pour toute revue de sécurité du chemin privilégié. |
 | 8 | *(nouveau, 2026-08-30)* `pacman` répond à la **traduction locale** de « Y » : en français, `_("Y")` vaut « O ». Une réponse codée en dur en anglais y signifie NON | La transaction force `LC_ALL=C.UTF-8` sur ses deux phases. Le défaut est sûr (refus, jamais approbation) mais aurait rendu la mise à jour graphique inopérante sur toute machine non anglophone (`vm-dev.md` §29.3). |
 | 9 | *(nouveau, 2026-08-30)* Un `pacman` tué en vol laisse `/var/lib/pacman/db.lck` — l'orphelin que le DoD §5.7 interdit | Mesuré et corrigé : la transaction libère le verrou au démarrage et après une annulation, **uniquement** quand plus aucun `pacman` ne tourne (`vm-dev.md` §30.3). |
+| 10 | *(nouveau, 2026-08-30)* `pacman --print` **répond lui-même** aux questions sans rien afficher (`cb_question`, `src/pacman/callback.c`) | Un pré-vol bâti dessus est structurellement aveugle. Le pré-vol emprunte le vrai chemin, entrée standard sur `/dev/null` ; un test interdit le retour de `--print` (`vm-dev.md` §31.3). |
+| 11 | *(nouveau, 2026-08-30)* DMS **plafonne** la hauteur d'un popout de greffon (479 px mesurés) | La rangée de boutons — dont la porte de sortie — sortait du cadre exactement dans le cas d'échec. Le journal se rétracte désormais ; à surveiller si le panneau s'enrichit (`vm-dev.md` §31.4). |
+
+---
+
+## 7. Vérification exécutée (2026-08-30)
+
+| # du §5 | Verdict | Preuve |
+|---|---|---|
+| 1. Mise à jour réelle sans terminal | **Satisfait** | Pastille → panneau → **modale polkit graphique** → journal de l'unité affiché → « Mise à jour installée ». `qt6-base` réellement installé, `checkupdates` à 0. `vm-dev.md` §31.1 |
+| 2. Aucun `--noconfirm` dans le chemin | **Satisfait** | Refus à l'exécution (`eschaton-update` rejette `--noconfirm`, `--yes`, `--ask`, `--overwrite`) **et** garde de dépôt dont la liste de fichiers est elle-même vérifiée complète : `tests/update-sans-auto-approbation.bats`. Contre-testée : réintroduire `--yes` la fait échouer |
+| 3. Survie + annulation sans orphelin | **Satisfait** | Le shell entier est redémarré en pleine transaction (PID 479 → 17654) ; la transaction garde PID 1 pour parent et se termine (§31.2). Annulation par la même porte : `resultat=annule`, unité non `failed`, aucun verrou, rien d'installé (§30.4) |
+| 4. Décision humaine : échec propre et visible, rollback offert | **Satisfait** | Remplacement de paquet fabriqué (archétype `varnish`→`vinyl-cache`) : `resultat=decision-humaine`, rien de modifié, **question verbatim à l'écran** (§31.3). Le rollback n'est *pas* proposé ici, à dessein : rien n'a bougé |
+| 5. Cas `dovecot` : un service en échec n'est pas un succès | **Satisfait** | `resultat=succes-degrade`, `unites_en_echec=…`, panneau : « Le code de retour de pacman disait « succès » — pas nous », et le bouton **« Revenir à l'état d'avant »** (§31.4) |
+| 6. `trigger_update` sur le même chemin, sans second chemin privilégié | **Satisfait sur l'artefact, non rejoué en dialogue** | Le `ToolExecutor.qml` **installé** porte `pkexec /usr/bin/eschaton-update-helper --apply`, argv pour argv identique au panneau ; plus aucune mention de `foot` des deux côtés (§31.5). Un tour de conversation réel avec un modèle n'a pas été rejoué |
+| 7. L'annulation ne laisse pas de transaction orpheline | **Satisfait après correction** | Le premier essai laissait `/var/lib/pacman/db.lck` derrière lui. Corrigé et remesuré : plus de verrou, plus de processus (§30.3-30.4) |
+
+**Réserves honnêtes.**
+
+- Le **conflit de fichiers** (archétype `linux-firmware`) n'a pas été fabriqué : il est détecté à l'extraction, donc *après* le sommaire. Il produira un `echec` visible avec le point de retour, pas un `decision-humaine`. Comportement attendu par construction, **non mesuré**.
+- La preuve du cas `dovecot` utilise un service fabriqué qui échoue *pendant* la transaction. Une casse qui ne se manifesterait qu'au redémarrage suivant **n'est pas couverte** par ce contrôle.
+- Le journal de la transaction est en anglais (`LC_ALL=C.UTF-8`), contrepartie assumée du déterminisme de la réponse (risque n°8).
