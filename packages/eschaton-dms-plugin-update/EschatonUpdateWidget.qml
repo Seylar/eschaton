@@ -627,5 +627,10 @@ PluginComponent {
     }
 
     popoutWidth: 560
-    popoutHeight: 470
+    // Hauteur dimensionnée sur le cas le PLUS chargé — un succès dégradé :
+    // en-tête sur deux lignes, journal, explication, offre de retour arrière,
+    // et trois boutons. Mesuré à 470, les boutons étaient coupés en bas ;
+    // c'est-à-dire que la porte de sortie devenait inatteignable exactement
+    // quand elle sert.
+    popoutHeight: 640
 }
