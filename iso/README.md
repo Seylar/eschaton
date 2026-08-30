@@ -28,16 +28,28 @@ iso/
 `mkarchiso` **n'a besoin ni de `losetup` ni de périphériques loop** : depuis
 archiso 89 il assemble l'ESP avec `mtools` (`mmd`/`mcopy`), l'image racine avec
 `mksquashfs` et l'ISO avec `xorriso` — aucun de ces outils ne monte quoi que ce
-soit. Ce qui reste nécessaire, c'est de pouvoir **monter `/proc`, `/sys`, `/dev`
-dans le `pacstrap`** : d'où root et `--privileged`. (`mkarchiso` sait aussi
-travailler sans root via `unshare --map-auto`, mais il lui faut alors des plages
+soit. Ce qui reste nécessaire, c'est **root** et la capacité de **monter
+`/proc`, `/sys`, `/dev` dans le `pacstrap`**. (`mkarchiso` sait aussi travailler
+sans root via `unshare --map-auto`, mais il lui faut alors des plages
 `/etc/subuid` / `/etc/subgid` : hors périmètre de notre outillage.)
+
+**`--privileged` n'est pas nécessaire.** `--cap-add SYS_ADMIN --security-opt
+apparmor=unconfined` suffisent : c'est ce que fait
+[`.github/workflows/iso.yml`](../.github/workflows/iso.yml), vérifié le
+2026-08-29 sur un conteneur d'action GitHub, là où `--privileged` accorderait
+bien davantage. Les commandes ci-dessous emploient donc les options réduites.
+
+> Réserve d'honnêteté : la **mesure locale** du 2026-08-29 (tableau plus bas) a
+> été faite avec `--privileged`. Les options réduites sont prouvées en CI, pas
+> re-mesurées sur Docker Desktop. Si la construction locale s'arrêtait sur un
+> `mount: … permission denied`, c'est là qu'il faudrait regarder d'abord.
 
 Conséquence pratique, vérifiée : **la construction locale marche sur un Mac
 Apple Silicon**, dans un conteneur x86_64 émulé.
 
 ```bash
-docker run --rm --privileged --platform linux/amd64 \
+docker run --rm --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
+  --platform linux/amd64 \
   -v "$PWD":/eschaton -w /eschaton archlinux:base-devel iso/build-iso
 ```
 
@@ -46,7 +58,8 @@ travers le montage lié (virtiofs sous Docker Desktop) est lent. La garder dans 
 conteneur et ne faire traverser que l'image :
 
 ```bash
-docker run --rm --privileged --platform linux/amd64 \
+docker run --rm --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
+  --platform linux/amd64 \
   -e ESCHATON_ISO_WORK=/tmp/iso-work -e ESCHATON_ISO_OUT=/out \
   -v "$PWD":/eschaton -v /chemin/vers/sortie:/out \
   -w /eschaton archlinux:base-devel iso/build-iso
@@ -71,9 +84,26 @@ nous avions retiré avec le chemin BIOS). mkinitcpio a rendu
 construction a continué jusqu'à produire une ISO, parce que pacman traite l'échec
 d'un crochet post-transaction comme un avertissement et que mkarchiso ne le
 regarde pas. C'est exactement la panne muette contre laquelle le Socle s'était
-déjà armé côté installeur. `build-iso` relit donc la sortie de mkarchiso, puis
-contrôle que l'image contient bien le noyau, l'initramfs, le squashfs, le binaire
-EFI et l'entrée d'amorçage, avant de mesurer et de signer.
+déjà armé côté installeur.
+
+`build-iso` relit donc la sortie de mkarchiso et cherche **deux** motifs :
+
+| Motif | Origine | Portée |
+|---|---|---|
+| `errors were encountered during the build` | mkinitcpio | la panne du 2026-08-29 |
+| `error: command failed to execute correctly` | pacman | **n'importe quel** crochet en échec |
+
+Le second est le marqueur générique : sans lui, la garde n'attraperait que la
+panne déjà vue, et le prochain crochet en échec — qui ne passera pas forcément
+par mkinitcpio — sortirait de nouveau en silence.
+
+Il contrôle ensuite que l'image contient le noyau, l'initramfs, le squashfs, le
+binaire EFI et l'entrée d'amorçage — **et que chacun pèse un minimum**, parce
+qu'un fichier vide ou tronqué passait le contrôle de présence au vert. L'image
+entière a de même un **plancher** en plus de son plafond : une image tronquée
+sort plus petite, pas plus grosse. Ce que ces seuils n'attrapent pas, et il faut
+le dire : un binaire manquant *à l'intérieur* d'un initramfs par ailleurs bien
+formé — ce cas-là reste du ressort de la relecture du journal.
 
 ## Mesure
 
@@ -146,7 +176,13 @@ demain. Elles sont sans danger tant que l'ISO reste un livrable d'ingénierie
   hors GitHub (veille §2.6) : c'est un projet en soi, pas un paramètre.
 - **Dépôt `[eschaton]` non signé** (`SigLevel = Optional TrustAll`) tant que le
   SP4a n'est pas livré. Voir plus haut.
-- **`sshd` livré mais arrêté.** `releng` l'active ; nous non. `passwd` puis
-  `systemctl start sshd` pour l'ouvrir.
+- **`sshd` livré mais arrêté, et root n'y entre que par clé.** `releng` active
+  l'unité ; nous non. `releng` livre aussi
+  `airootfs/etc/ssh/sshd_config.d/10-archiso.conf` (`PasswordAuthentication yes`,
+  `PermitRootLogin yes`) ; nous ne le reprenons pas, donc le défaut d'OpenSSH
+  — `PermitRootLogin prohibit-password` — s'applique. **`passwd` puis
+  `systemctl start sshd` ne permet donc pas d'entrer** : il faut déposer une clé
+  publique dans `/root/.ssh/authorized_keys` avant de démarrer le service.
+  La marche à suivre est dans `/etc/motd` du média.
 - **Rien n'est prouvé pour le variant T2** (Task 4 du plan) : il dépend d'arbitrages
   utilisateur non tranchés (ADR 0004 §6).

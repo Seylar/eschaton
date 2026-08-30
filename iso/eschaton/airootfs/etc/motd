@@ -19,7 +19,14 @@
 
   Clavier : AZERTY (fr) par défaut.  QWERTY :  loadkeys us
 
-  SSH est installé mais ARRÊTÉ. Pour l'ouvrir :  passwd && systemctl start sshd
+  SSH est installé mais ARRÊTÉ, et root n'y entre que par CLÉ : le réglage
+  « PermitRootLogin yes » de l'ISO Arch n'est pas repris, le défaut d'OpenSSH
+  (prohibit-password) s'applique. Un mot de passe ne suffit donc pas.
+
+      install -d -m700 /root/.ssh
+      cat > /root/.ssh/authorized_keys      (coller la clé publique, puis Ctrl-D)
+      chmod 600 /root/.ssh/authorized_keys
+      systemctl start sshd
 
   Amorçage UEFI uniquement — l'installeur refuse de démarrer en BIOS hérité.
   Secure Boot non supporté : le désactiver dans le firmware.

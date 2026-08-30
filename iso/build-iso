@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Construit l'ISO nominal d'Eschaton (spec §3, plan SP4b-1 Task 1).
 #
-# À exécuter EN ROOT dans un conteneur Arch x86_64 jetable :
-#   CI     : archlinux:base-devel  (voir .github/workflows/iso.yml)
-#   local  : docker run --rm --privileged --platform linux/amd64 \
+# À exécuter EN ROOT dans un conteneur Arch x86_64 jetable. `--privileged` n'est
+# pas nécessaire : seule la capacité de monter /proc, /sys et /dev dans le
+# `pacstrap` l'est (vérifié en CI le 2026-08-29, voir .github/workflows/iso.yml).
+#   CI     : archlinux:base-devel + --cap-add SYS_ADMIN --security-opt apparmor=unconfined
+#   local  : docker run --rm --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
+#              --platform linux/amd64 \
 #              -v "$PWD":/eschaton -w /eschaton archlinux:base-devel iso/build-iso
 #
 # CE QU'IL FAIT, ET POURQUOI IL EXISTE PLUTÔT QU'UN APPEL DIRECT À mkarchiso

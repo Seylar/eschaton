@@ -173,6 +173,37 @@ FIN
   [ ! -e "$AIROOTFS/etc/systemd/system/sockets.target.wants/sshd.socket" ]
 }
 
+@test "la marche à suivre pour sshd correspond au durcissement réellement livré" {
+  # `releng` livre etc/ssh/sshd_config.d/10-archiso.conf (PasswordAuthentication
+  # yes, PermitRootLogin yes) ; nous ne le reprenons pas, donc le défaut
+  # d'OpenSSH — prohibit-password — s'applique et root n'entre QUE par clé.
+  # Bon durcissement, mais l'instruction « passwd puis systemctl start sshd »
+  # décrivait une manœuvre qui NE PERMET PAS d'entrer.
+  [ ! -e "$AIROOTFS/etc/ssh/sshd_config.d" ]      # le durcissement est bien par abstention
+  motd="$AIROOTFS/etc/motd"
+  grep -q 'authorized_keys' "$motd"
+  ! grep -q 'passwd && systemctl start sshd' "$motd"
+  ! grep -q 'passwd puis systemctl start sshd' "$motd"
+  # …et la liste de paquets nomme le réglage qui rend l'ancienne recette fausse,
+  # plutôt que de répéter cette recette.
+  grep -q 'prohibit-password' "$PROFIL/packages.x86_64"
+  grep -q 'authorized_keys' "$PROFIL/packages.x86_64"
+}
+
+@test "les renvois relatifs du profil désignent des fichiers qui existent" {
+  # Le renvoi de serial-getty@.service.d/autologin.conf comptait CINQ niveaux
+  # là où il en faut six (…service.d → system → systemd → etc → airootfs →
+  # eschaton → iso) : il résolvait vers un fichier inexistant.
+  manque=0
+  while IFS= read -r f; do
+    d="$(dirname "$f")"
+    while IFS= read -r ref; do
+      [ -e "$d/$ref" ] || { echo "renvoi mort : $f → $ref"; manque=1; }
+    done < <(grep -o '\.\./[./A-Za-z0-9_-]*\.md' "$f" | sort -u)
+  done < <(grep -rl '\.\./[./A-Za-z0-9_-]*\.md' "$BATS_TEST_DIRNAME/../iso" 2>/dev/null)
+  [ "$manque" -eq 0 ]
+}
+
 @test "le générateur GPT automatique de systemd est masqué" {
   # Sans ce masquage, systemd peut monter tout seul des partitions trouvées sur
   # les disques — y compris l'ESP de la machine qu'on s'apprête à effacer.

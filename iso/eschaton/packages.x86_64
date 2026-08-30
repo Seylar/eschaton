@@ -54,7 +54,15 @@ pv
 # Livré mais NON activé : ce profil n'amorce aucune unité `sshd.service`,
 # contrairement à `releng`. Un média d'installation qui ouvre un port en écoute
 # dès le démarrage est une décision, pas un réglage par défaut (veille §1,
-# ligne 9). Pour s'en servir : `passwd` puis `systemctl start sshd`.
+# ligne 9).
+#
+# Second durcissement, celui-là par ABSTENTION : `releng` livre
+# `airootfs/etc/ssh/sshd_config.d/10-archiso.conf` (PasswordAuthentication yes,
+# PermitRootLogin yes) ; nous ne le reprenons pas, donc le défaut d'OpenSSH
+# — `PermitRootLogin prohibit-password` — s'applique. Conséquence à ne pas
+# oublier en écrivant la marche à suivre : `passwd` puis `systemctl start sshd`
+# NE PERMET PAS d'entrer. Il faut une clé publique dans
+# /root/.ssh/authorized_keys ; c'est ce que dit airootfs/etc/motd.
 openssh
 
 # --- place réservée au SP4a (trousseau) ---
