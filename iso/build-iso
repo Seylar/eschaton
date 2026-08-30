@@ -28,6 +28,12 @@ travail="${ESCHATON_ISO_WORK:-$racine/iso/work}"
 sortie="${ESCHATON_ISO_OUT:-$racine/iso/out}"
 # 2 Gio exactement — la limite par fichier de GitHub Releases (veille §2.6).
 budget_octets=$((2 * 1024 * 1024 * 1024))
+# Un plancher aussi, et pas seulement un plafond : une image tronquée (xorriso
+# interrompu, disque plein) sort plus PETITE, pas plus grosse, et passait le
+# contrôle de budget avec les félicitations. 300 Mio est un ordre de grandeur
+# sous la mesure réelle (1,17 Gio, README §Mesure) : ce n'est pas un seuil
+# serré, c'est un refus de publier un fichier manifestement incomplet.
+plancher_octets=$((300 * 1024 * 1024))
 
 if ((EUID != 0)); then
 	echo "build-iso : à exécuter en root dans un conteneur de build jetable." >&2
@@ -90,17 +96,27 @@ journal="$travail/mkarchiso.log"
 mkarchiso -v -w "$travail/mkarchiso" -o "$sortie" "$profil" 2>&1 | tee "$journal"
 
 # --- 4. Le piège du succès muet ----------------------------------------------
-# mkinitcpio ne signale PAS ses échecs de crochet par un code de retour qui
-# remonterait jusqu'ici : pacman traite l'échec d'un crochet post-transaction
-# comme un avertissement, mkarchiso ne le voit pas, et l'ISO sort quand même —
-# avec un initramfs amputé. Constaté le 2026-08-29 : le crochet `memdisk`
-# réclamait `memdiskfind` (paquet `syslinux`, retiré avec le chemin BIOS), la
-# construction rendait 0, et rien n'aurait alerté avant un démarrage raté.
-# On relit donc la sortie : c'est la seule trace que mkinitcpio laisse.
-if grep -q 'errors were encountered during the build' "$journal"; then
-	echo "build-iso : mkinitcpio a signalé des erreurs pendant la génération de" >&2
-	echo "  l'initramfs. L'image produite n'est PAS fiable. Les lignes en cause :" >&2
-	grep -n -B4 'errors were encountered during the build' "$journal" >&2
+# pacman traite l'échec d'un crochet post-transaction comme un AVERTISSEMENT :
+# le code de retour ne remonte pas jusqu'ici, mkarchiso ne voit rien, et l'ISO
+# sort quand même — avec, dans le cas constaté, un initramfs amputé. La sortie
+# est la seule trace qu'il en reste, on la relit donc.
+#
+# DEUX MOTIFS, ET IL EN FAUT DEUX. La panne du 2026-08-29 (crochet `memdisk`
+# réclamant `memdiskfind`, paquet `syslinux` retiré avec le chemin BIOS) a
+# laissé DEUX lignes dans le journal (tools/vm-dev.md §19.3) :
+#
+#     ==> WARNING: errors were encountered during the build. …   ← mkinitcpio
+#     error: command failed to execute correctly                 ← pacman
+#
+# La première est propre à mkinitcpio ; la seconde est le marqueur GÉNÉRIQUE de
+# pacman pour N'IMPORTE QUEL crochet en échec. Ne guetter que la première, c'est
+# n'attraper que la panne déjà connue : le prochain crochet qui échouera ne
+# passera pas forcément par mkinitcpio, et l'ISO sortirait de nouveau en silence.
+motifs='errors were encountered during the build|error: command failed to execute correctly'
+if grep -qE "$motifs" "$journal"; then
+	echo "build-iso : un crochet a échoué pendant la construction (mkinitcpio ou" >&2
+	echo "  pacman). L'image produite n'est PAS fiable. Les lignes en cause :" >&2
+	grep -nE -B4 "$motifs" "$journal" >&2
 	exit 1
 fi
 
@@ -115,23 +131,44 @@ image="${images[0]}"
 # Contrôle du contenu, dans le même esprit que la vérification de /boot que fait
 # `eschaton-install` : on n'annonce pas une image utilisable sans avoir constaté
 # que ce qui démarre s'y trouve.
+#
+# PRÉSENCE *ET* TAILLE. Le contrôle ne regardait que la présence des chemins :
+# un fichier vide ou tronqué le passait au vert. Il n'aurait donc PAS attrapé
+# l'initramfs amputé du 2026-08-29 — la panne même qui a motivé son écriture.
+# Chaque entrée porte maintenant un plancher, DÉLIBÉRÉMENT bas : il attrape une
+# génération vide ou tronquée, pas un binaire manquant à l'intérieur de
+# l'initramfs. Ce dernier cas reste du ressort de la relecture du journal
+# ci-dessus, et de rien d'autre : personne ne peut lire la liste des binaires
+# attendus dans un cpio sans savoir lesquels devaient s'y trouver.
+# Ordres de grandeur mesurés le 2026-08-29 (README §Mesure) : vmlinuz ≈ 15 Mio,
+# initramfs ≈ 90 Mio, airootfs.sfs ≈ 1,1 Gio. Les planchers sont au dixième.
 echo "==> Vérification du contenu de l'image"
 inventaire="$travail/contenu.txt"
 bsdtar -tf "$image" > "$inventaire"
 attendus=(
-	"eschaton/boot/x86_64/vmlinuz-linux"
-	"eschaton/boot/x86_64/initramfs-linux.img"
-	"eschaton/x86_64/airootfs.sfs"
-	"EFI/BOOT/BOOTx64.EFI"
-	"loader/entries/01-eschaton.conf"
+	"eschaton/boot/x86_64/vmlinuz-linux:1500000"
+	"eschaton/boot/x86_64/initramfs-linux.img:9000000"
+	"eschaton/x86_64/airootfs.sfs:110000000"
+	"EFI/BOOT/BOOTx64.EFI:65536"
+	"loader/entries/01-eschaton.conf:32"
 )
 manque=0
-for chemin in "${attendus[@]}"; do
-	if grep -qxF "$chemin" "$inventaire"; then
-		echo "    ok : $chemin"
-	else
+for entree in "${attendus[@]}"; do
+	chemin="${entree%:*}"; plancher="${entree##*:}"
+	if ! grep -qxF "$chemin" "$inventaire"; then
 		echo "build-iso : absent de l'image — $chemin" >&2
 		manque=1
+		continue
+	fi
+	# `bsdtar -xO | wc -c` plutôt que la taille lue dans `bsdtar -tv` : le format
+	# de la colonne de date varie d'une version à l'autre, le compte d'octets non.
+	taille="$(bsdtar -xOf "$image" "$chemin" | wc -c | tr -d ' ')"
+	if ((taille < plancher)); then
+		echo "build-iso : $chemin ne pèse que $taille octets (plancher $plancher) —" >&2
+		echo "  fichier vide ou tronqué, l'image ne démarrerait pas." >&2
+		manque=1
+	else
+		echo "    ok : $chemin ($taille octets)"
 	fi
 done
 ((manque == 0)) || { echo "build-iso : image incomplète, elle ne démarrerait pas." >&2; exit 1; }
@@ -152,6 +189,14 @@ if ((octets > budget_octets)); then
 	echo >&2
 	echo "build-iso : image de $octets octets — au-delà des 2 Gio par fichier que" >&2
 	echo "  GitHub Releases accepte (spec §3.4). Elle n'est PAS publiable en l'état." >&2
+	exit 1
+fi
+
+if ((octets < plancher_octets)); then
+	echo >&2
+	echo "build-iso : image de $octets octets, sous le plancher de $plancher_octets —" >&2
+	echo "  une image tronquée sort plus PETITE, pas plus grosse, et passerait le" >&2
+	echo "  contrôle de budget sans encombre. Elle n'est PAS publiable." >&2
 	exit 1
 fi
 

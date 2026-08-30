@@ -71,6 +71,47 @@ paquets() { grep -vE '^[[:space:]]*(#|$)' "$PROFIL/packages.x86_64"; }
   grep -q 'errors were encountered during the build' "$BATS_TEST_DIRNAME/../iso/build-iso"
 }
 
+@test "la garde anti-succès muet couvre AUSSI le marqueur générique de pacman" {
+  # La panne du 2026-08-29 a laissé DEUX lignes au journal (tools/vm-dev.md
+  # §19.3) : celle de mkinitcpio, et « error: command failed to execute
+  # correctly » — le marqueur que pacman pose pour N'IMPORTE QUEL crochet en
+  # échec. Ne guetter que la première, c'est n'attraper que la panne connue.
+  motifs="$(sed -n "s/^motifs='\\(.*\\)'\$/\\1/p" "$BATS_TEST_DIRNAME/../iso/build-iso")"
+  [ -n "$motifs" ]
+
+  journal="$BATS_TEST_TMPDIR/mkarchiso.log"
+  # Le journal réel de la panne, tel que consigné.
+  cat > "$journal" <<'FIN'
+==> ERROR: binary not found: 'memdiskfind'
+==> WARNING: errors were encountered during the build. The image may not be complete.
+error: command failed to execute correctly
+[mkarchiso] INFO: Done!
+FIN
+  grep -qE "$motifs" "$journal"
+
+  # Le marqueur de pacman SEUL doit suffire : le prochain crochet en échec ne
+  # passera pas forcément par mkinitcpio.
+  printf 'error: command failed to execute correctly\n' > "$journal"
+  grep -qE "$motifs" "$journal"
+
+  # …et un journal sain ne déclenche rien.
+  printf '[mkarchiso] INFO: Done!\n' > "$journal"
+  ! grep -qE "$motifs" "$journal"
+}
+
+@test "le contrôle d'inventaire pèse les fichiers, il ne fait pas que les nommer" {
+  # Vérifier la PRÉSENCE d'un chemin laisse passer un fichier vide ou tronqué :
+  # le contrôle n'aurait pas attrapé l'initramfs amputé qui l'a motivé.
+  build="$BATS_TEST_DIRNAME/../iso/build-iso"
+  # Chaque attendu porte « chemin:plancher », et le plancher est réellement comparé.
+  grep -qE '"eschaton/boot/x86_64/initramfs-linux.img:[0-9]+"' "$build"
+  grep -qE '"eschaton/x86_64/airootfs.sfs:[0-9]+"' "$build"
+  grep -q 'taille < plancher' "$build"
+  # …et l'image entière a un plancher, pas seulement un plafond : une image
+  # tronquée sort plus PETITE et passait le contrôle de budget.
+  grep -q 'octets < plancher_octets' "$build"
+}
+
 @test "le dépôt [eschaton] est préconfiguré des DEUX côtés (construction et live)" {
   grep -q '^\[eschaton\]' "$PROFIL/pacman.conf"
   grep -q '^\[eschaton\]' "$AIROOTFS/etc/pacman.conf"
