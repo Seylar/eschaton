@@ -33,6 +33,11 @@ set -euo pipefail
 
 readonly UNITE=eschaton-update
 readonly SERVICE="${UNITE}.service"
+# Chemins absolus, jamais le PATH. `pkexec` assainit bien l'environnement,
+# mais un programme privilégié ne doit pas dépendre de cette politesse : ce
+# qu'il exécute doit se lire dans son propre source.
+readonly SYSTEMCTL=/usr/bin/systemctl
+readonly SYSTEMD_RUN=/usr/bin/systemd-run
 
 usage() {
   echo "usage: eschaton-update-helper --apply|--cancel" >&2
@@ -55,16 +60,16 @@ esac
 
 case "$action" in
   apply)
-    if systemctl is-active --quiet "$SERVICE"; then
+    if "$SYSTEMCTL" is-active --quiet "$SERVICE"; then
       die "une mise à jour est déjà en cours."
     fi
     # Un échec précédent laisse l'unité en état `failed` et bloquerait le
     # démarrage suivant. On le solde, sans effacer le journal qui, lui, garde
     # la trace de cet échec.
-    systemctl reset-failed "$SERVICE" 2>/dev/null || true
+    "$SYSTEMCTL" reset-failed "$SERVICE" 2>/dev/null || true
     # `--collect` n'est PAS utilisé : après un échec, l'unité doit rester
     # visible pour l'interface. Le prochain `--apply` la solde ci-dessus.
-    exec systemd-run --system --quiet \
+    exec "$SYSTEMD_RUN" --system --quiet \
       --unit="$UNITE" \
       --description="Mise à jour Eschaton" \
       --property=StandardInput=null \
@@ -77,13 +82,13 @@ case "$action" in
     # se termine pendant que l'utilisateur clique « Annuler » ferait remonter
     # « Failed to stop … : Unit not loaded » (rc=5) dans l'interface, pour un
     # non-événement. Mesuré, tools/vm-dev.md §30.
-    if ! systemctl is-active --quiet "$SERVICE"; then
+    if ! "$SYSTEMCTL" is-active --quiet "$SERVICE"; then
       echo "eschaton-update-helper : aucune mise à jour en cours."
       exit 0
     fi
     # `systemctl stop` envoie SIGTERM à tout le groupe de contrôle : pacman le
     # traite lui-même et sort proprement, puis la transaction écrit son état
     # « annulé ». Une annulation n'est PAS un échec.
-    exec systemctl stop "$SERVICE"
+    exec "$SYSTEMCTL" stop "$SERVICE"
     ;;
 esac

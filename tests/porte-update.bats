@@ -81,16 +81,32 @@ prepare_banc() {
 }
 
 @test "la commande privilégiée est constante : aucun argument n'y est interpolé" {
-  # Les lignes qui composent l'appel à systemd-run / systemctl ne doivent
-  # contenir aucune expansion — ni "$1", ni "$@", ni "$forme". Le nom de
-  # l'unité et la ligne de commande sont des constantes du fichier.
-  suspectes=$(awk '
-    /systemd-run|systemctl/ { fenetre = 14 }
-    fenetre > 0 { print; fenetre-- }
-  ' "$PORTE" | grep -E '\$[1-9@*]|\$\{[1-9@*]' || true)
+  # Tout ce que la porte EXÉCUTE vit dans son `case "$action"`. Aucune
+  # expansion d'argument n'y est permise — ni "$1", ni "$@", ni "$*" : le nom
+  # de l'unité et la ligne de commande sont des constantes du fichier.
+  bloc=$(awk '/^case "\$action" in$/,/^esac$/' "$PORTE")
+  [ -n "$bloc" ] || {
+    echo "le bloc d'exécution de la porte est introuvable — test à réécrire"
+    return 1
+  }
+  suspectes=$(printf '%s\n' "$bloc" | grep -E '\$[1-9@*]|\$\{[1-9@*]' || true)
   [ -z "$suspectes" ] || {
     echo "argument interpolé dans la commande privilégiée :"
     echo "$suspectes"
+    return 1
+  }
+
+  # Et les commandes privilégiées sont désignées par leur chemin absolu :
+  # un programme lancé par pkexec ne doit pas dépendre du PATH qu'on lui donne.
+  run grep -F 'readonly SYSTEMCTL=/usr/bin/systemctl' "$PORTE"
+  [ "$status" -eq 0 ]
+  run grep -F 'readonly SYSTEMD_RUN=/usr/bin/systemd-run' "$PORTE"
+  [ "$status" -eq 0 ]
+  nues=$(printf '%s\n' "$bloc" | grep -E '(^|[^"/A-Za-z_-])(systemctl|systemd-run)[[:space:]]' \
+    | grep -v -E '^[[:space:]]*#' || true)
+  [ -z "$nues" ] || {
+    echo "commande privilégiée appelée sans chemin absolu :"
+    echo "$nues"
     return 1
   }
   # Et la charge de l'unité est bien le mode transaction, pas pacman en direct :
