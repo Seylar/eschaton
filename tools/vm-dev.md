@@ -4435,11 +4435,82 @@ $ checkupdates | wc -l                            → 0
 $ ls /etc/polkit-1/actions/                       → vide
 ```
 
-> **Écart assumé entre la VM et la branche** : la branche porte
-> `eschaton-base 0.1.0-18`, la VM `0.1.0-17`. La différence est **un bloc de
-> commentaire** ajouté après les mesures (pourquoi le succès dégradé sort 0),
-> et le bump que l'immutabilité du dépôt impose dès qu'un octet change. Aucune
-> ligne exécutable ne diffère : les preuves ci-dessus valent pour les deux.
+## 32. Update graphique — deux corrections d'après-preuve (2026-08-30)
+
+Trouvées en relisant et en re-mesurant après coup, pas par les tests.
+
+### 32.1 La porte n'exécutait rien par chemin absolu
+
+`pkexec` assainit l'environnement, mais un programme privilégié ne doit pas
+dépendre de cette politesse : ce qu'il exécute doit se lire dans son propre
+source. `systemctl` et `systemd-run` sont désignés par leur chemin absolu, et
+un test vérifie qu'aucune commande du bloc d'exécution n'est appelée autrement.
+
+Revérifié en VM sur `eschaton-base 0.1.0-19` : `--apply` démarre l'unité,
+`--cancel` répond `rc=0`, un argv inconnu rend `rc=2`.
+
+### 32.2 L'état pouvait rester bloqué sur « en-cours » — pour toujours
+
+C'est cette revérification qui l'a fait apparaître. Une annulation arrivée
+**après** l'installation, pendant le contrôle des services, tuait le script sur
+son `sleep` (`set -e`, code 143) avant qu'il ait rendu son verdict :
+
+```console
+--- unite ---   failed        is-failed: failed
+--- etat ---    resultat=en-cours          <- pour toujours
+--- journal --- eschaton-update.service: Main process exited, code=exited, status=143/n/a
+```
+
+L'interface aurait alors annoncé « interrompue sans rendre de résultat » alors
+que le système **était** à jour. Un mensonge par omission — la classe de défaut
+que toute cette vague traque.
+
+Deux correctifs, du plus simple au plus général :
+
+1. `sleep 3 || true` — un signal ne peut plus tuer le script au moment précis
+   où il doit rendre son verdict ;
+2. un **piège EXIT** qui écrit toujours un verdict, sauf si un verdict a déjà
+   été rendu. Il dépend de la phase atteinte : avant validation, `annule` si
+   l'utilisateur l'a demandée, sinon `interrompu` ; après, `succes-non-verifie`.
+
+**Mesuré sur une copie ralentie** (`sleep 40`, pour élargir une fenêtre devenue
+trop étroite à viser à la main), coupée en pleine vérification :
+
+```console
+--- pendant ---  active   resultat=en-cours   eschaton-filet 3-1
+$ systemctl stop eschaton-filet-test.service
+--- apres ---    inactive
+resultat=succes  code=0  snapshot_avant=148
+eschaton-filet 3-1
+```
+
+Journal : `Stopping …` → `Complété sleep 40` → `==> Mise à jour terminée.`
+
+Le verdict est donc **exact, pas approximatif** : les paquets avaient été
+installés avant que l'annulation n'arrive, et c'est ce que dit l'état. Le
+`succes-non-verifie` du piège EXIT reste le filet des sorties vraiment
+abruptes. **Réserve honnête** : un SIGKILL contourne tous les pièges — l'état
+resterait `en-cours` et l'interface annoncerait `interrompu`, ce qui est le
+comportement voulu dans ce cas.
+
+*Note d'ergonomie relevée, non traitée* : une annulation arrivée trop tard
+rend `succes`. C'est exact, mais l'utilisateur a cliqué « Annuler » et lit
+« Mise à jour installée ». Le journal montre bien le `Stopping…` ; l'interface,
+elle, ne dit pas « trop tard ».
+
+### 32.3 État final de la VM, après nettoyage des bancs
+
+```console
+$ pacman -Q eschaton-base eschaton-dms-plugin-update \
+            eschaton-dms-plugin-assistant eschaton-dms-plugin-rollback
+eschaton-base 0.1.0-20   eschaton-dms-plugin-update 0.1.0-13
+eschaton-dms-plugin-assistant 0.1.0-10   eschaton-dms-plugin-rollback 0.1.0-3
+$ systemctl is-system-running        → running
+$ dms ipc call plugins status eschatonUpdate  → loaded, aucune erreur QML
+```
+
+La VM porte donc exactement les versions de la branche, hors
+`eschaton-dms-plugin-assistant` dont le contenu n'a pas changé depuis le -10.
 
 Empreintes des captures (invité = hôte) :
 
