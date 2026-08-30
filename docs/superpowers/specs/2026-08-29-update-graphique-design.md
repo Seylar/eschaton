@@ -1,7 +1,7 @@
 # Eschaton — Spec de conception : la mise à jour graphique (veto O1)
 
 - **Date** : 2026-08-29
-- **Statut** : rédigée sur passe de veille datée ([rapport](../../veille/2026-08-29-update-graphique.md), 444 lignes sourcées) — publiée pour relecture ; exécution Codex, gates Claude
+- **Statut** : **implémentée sur `assistant` le 2026-08-30** — rédigée sur passe de veille datée ([rapport](../../veille/2026-08-29-update-graphique.md), 444 lignes sourcées), les 8 points du DoD §7 sont soldés avec leurs preuves, revue de sécurité passée et sa vague de correction intégrée. En attente du tag `v0.3.0` et de **l'acceptation produit par l'utilisateur** (le veto O1 n'est levé que par lui).
 - **Amendée le 2026-08-30** au titre de l'[ADR 0002](../../decisions/0002-veille-avant-spec.md), après le spike de terrain de la Task 1 ([`tools/vm-dev.md` §27](../../../tools/vm-dev.md)) : le §3.1 est **réécrit** (sa prémisse était fausse), le motif de rejet du §3.2 est remplacé, et la table des risques §6 est mise à jour. **L'architecture retenue ne change pas.**
 - **Déclencheur** : **veto utilisateur** du 2026-08-29 — « pour update, faut taper le sudo dans le terminal, c'est non » ([registre des arbitrages, O1](../../REGISTRE-ARBITRAGES.md))
 - **Amont** : [Spec du Bureau](2026-08-28-bureau-design.md) (le widget update actuel), [Spec de l'Assistant](2026-08-28-assistant-design.md) §5 (l'outil `trigger_update` emprunte le même chemin)

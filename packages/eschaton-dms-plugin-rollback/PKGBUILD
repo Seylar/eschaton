@@ -1,10 +1,16 @@
 pkgname=eschaton-dms-plugin-rollback
 pkgver=0.1.0
-pkgrel=4
+pkgrel=5
 pkgdesc="Plugin DMS Eschaton : liste des snapshots et restauration système"
 arch=(any)
 license=(MIT)
-depends=(dms-shell eschaton-base snapper polkit)
+# `eschaton-base>=0.1.0-23` : ce greffon a CESSÉ de livrer
+# `org.eschaton.rollback.policy` (pkgrel 3→4), l'action voyageant désormais avec
+# le binaire qu'elle contraint, dans le socle. Sans cette borne, un socle plus
+# ancien laisserait `pkexec` retomber sur l'action générique de polkit, dont le
+# défaut MÉMORISE l'autorisation — exactement le défaut critique corrigé le
+# 2026-08-30. Qui cesse de livrer l'action doit exiger le socle qui la livre.
+depends=(dms-shell 'eschaton-base>=0.1.0-23' snapper polkit)
 # Aucune règle polkit (`rules.d`) n'est livrée : les `<defaults>` de l'action
 # suffisent et exigent une authentification. Justification dans l'en-tête de
 # org.eschaton.rollback.policy — désormais livré par `eschaton-base`, avec le
