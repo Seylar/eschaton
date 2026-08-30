@@ -4778,9 +4778,30 @@ de toast rouge. Le journal montre le ménage :
 > seule lecture du code et par `tests/porte-update.bats`, c'est le traitement de
 > `deactivating`.
 
+**5. M4 — le succès non vérifié ouvre bien la porte de sortie, et elle tient
+dans le cadre.** `succes-non-verifie` n'arrive qu'en étant interrompu pendant le
+contrôle des services : l'état a donc été écrit à la main dans
+`/run/eschaton-update/etat` (`snapshot_avant=169`), puis le shell redémarré —
+ce qui exerce du même coup le rendu d'un verdict NON réussi par la
+réconciliation. Panneau obtenu :
+
+```text
+« Mise à jour installée, mais le contrôle des services n'a pas pu être fait. »
+« Un point de retour existe : l'état d'avant cette mise à jour (snapshot 169). »
+[ Actualiser ]  [ Installer ]  [ Revenir à l'état d'avant ]
+```
+
+Les trois boutons sont **entièrement dans le cadre**. Le point méritait d'être
+mesuré et non supposé : la boîte du journal ne se rétracte à 150 px que sur
+`resultatEstUnEchec`, dont `succes-non-verifie` ne fait pas partie — on pouvait
+craindre que la rangée de boutons ressorte du plafond de 479 px (risque n°11,
+§31.4). Elle n'en sort pas ; aucune retouche de hauteur n'est nécessaire. État
+réel du fichier restauré après la mesure.
+
 Empreintes des captures (invité = hôte) :
 
 ```text
+1d76cf676044961d3000184ab5ba2004a5497a98f9d10ebbecb1cb66f7b8e323  succes non vérifié, porte de sortie dans le cadre
 297d780b1d90cf170e72147c682abbe1180702f9b4011d523093e77138bd03ef  barre, badge 1
 9f58c585df8cb495886c679cc8a6f2d26eb580b28dbed3dbebc854771c2edc20  panneau ouvert
 b005df391d05a0f8425ddeeec8db5add5666e3cf5ac01698466d52bcb5db4e15  modale polkit
