@@ -212,6 +212,16 @@ FIN
   [ "$(readlink "$lien")" = "/dev/null" ]
 }
 
+@test "les extensions de vie privée IPv6 sont réellement ACTIVÉES, pas seulement nommées" {
+  # `kernel` — la valeur qui figurait ici sans motif consigné — LAISSE EN PLACE
+  # le réglage du noyau, désactivé par défaut : le fichier n'activait rien, sous
+  # un nom qui promet l'inverse. `releng` écrit `yes`, et c'est ce qui a été
+  # rétabli. Sans cette garde, un retour à `kernel` repasserait muet.
+  conf="$AIROOTFS/etc/systemd/networkd.conf.d/ipv6-privacy-extensions.conf"
+  grep -qx 'IPv6PrivacyExtensions=yes' "$conf"
+  ! grep -qE '^[[:space:]]*IPv6PrivacyExtensions=(kernel|no|false)' "$conf"
+}
+
 @test "les crochets pacman de construction portent le marqueur qui les fait disparaître" {
   # Sans « remove from airootfs », le crochet zzzz99 ne les retire pas de l'image
   # et ils s'exécutent pendant le `pacstrap` que l'installeur lance vers /mnt.
