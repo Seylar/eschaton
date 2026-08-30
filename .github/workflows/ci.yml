@@ -2,7 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    # `assistant` : lint + builds de validation SP3 (le déploiement Pages reste main-only
+    # jusqu'à la vague de publication — motif SP2, policy à ajouter à ce moment-là).
+    branches: [main, assistant]
   pull_request:
 
 # La sérialisation doit couvrir les BUILDS, pas seulement le déploiement Pages.
@@ -55,9 +57,11 @@ jobs:
             installer/lib.sh installer/eschaton-install \
             packages/eschaton-base/lib.sh \
             packages/eschaton-base/eschaton-update \
+            packages/eschaton-base/eschaton-update-helper \
             packages/eschaton-base/eschaton-rollback \
             packages/eschaton-desktop-config/eschaton-session \
-            packages/eschaton-desktop-config/eschaton-dms-provision
+            packages/eschaton-desktop-config/eschaton-dms-provision \
+            packages/eschaton-desktop-config/eschaton-assistant-shadowing
       # Différé du Socle soldé au SP4 : un fichier sudoers invalide n'est pas
       # ignoré, il rend TOUT sudo inopérant sur la machine — y compris celui qui
       # servirait à le réparer. `visudo -cf` est la seule vérification qui
@@ -80,7 +84,9 @@ jobs:
       # passerait toute la CI pour n'échouer qu'à l'installation sur la machine
       # ARM ; cette garde la rattrape ici.
       - name: dépendances du bureau (Arch x86_64 + ALARM aarch64)
-        run: tools/check-desktop-deps
+        run: |
+          tools/check-desktop-deps \
+            --also-pkgbuild packages/eschaton-dms-plugin-assistant/PKGBUILD
 
   # Un job de build PAR ARCHITECTURE (spec §5.3) : les deux paquets vendorés
   # sont des binaires natifs compilés par GraalVM, pas des paquets `any`. Chaque

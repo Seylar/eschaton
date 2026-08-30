@@ -106,7 +106,7 @@ mkarchiso -v -w "$travail/mkarchiso" -o "$sortie" "$profil" 2>&1 | tee "$journal
 #
 # DEUX MOTIFS, ET IL EN FAUT DEUX. La panne du 2026-08-29 (crochet `memdisk`
 # réclamant `memdiskfind`, paquet `syslinux` retiré avec le chemin BIOS) a
-# laissé DEUX lignes dans le journal (tools/vm-dev.md §19.3) :
+# laissé DEUX lignes dans le journal (tools/vm-dev.md §35.3) :
 #
 #     ==> WARNING: errors were encountered during the build. …   ← mkinitcpio
 #     error: command failed to execute correctly                 ← pacman

@@ -1,6 +1,6 @@
 pkgname=eschaton-desktop-config
 pkgver=0.1.0
-pkgrel=9
+pkgrel=10
 pkgdesc="Configuration du bureau Eschaton : session Wayland, greetd, défauts Hyprland"
 arch=(any)
 license=(MIT)
@@ -13,8 +13,9 @@ backup=(etc/eschaton/greetd.toml)
 source=(eschaton-session eschaton.desktop greetd-eschaton.toml greetd-override.conf
         51-eschaton-desktop.preset 90-eschaton-desktop-preset.hook hyprland-session.target
         eschaton-dms-provision eschaton-dms-provision.service eschaton-dms-provision.conf
+        eschaton-assistant-shadowing eschaton-assistant-shadowing.service
         seed-hyprland.lua eschaton-defaults.lua LICENSE)
-sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
 
 package() {
   install -Dm755 eschaton-session "$pkgdir/usr/bin/eschaton-session"
@@ -60,6 +61,15 @@ package() {
     "$pkgdir/usr/lib/systemd/user/eschaton-dms-provision.service"
   install -Dm644 eschaton-dms-provision.conf \
     "$pkgdir/usr/lib/systemd/user/dms.service.d/eschaton-dms-provision.conf"
+
+  # Ce contrôle vit hors du plugin : s'il était dans le daemon système, un
+  # plugin utilisateur de même id l'empêcherait précisément de s'exécuter.
+  install -Dm755 eschaton-assistant-shadowing \
+    "$pkgdir/usr/lib/eschaton/eschaton-assistant-shadowing"
+  install -Dm644 eschaton-assistant-shadowing.service \
+    "$pkgdir/usr/lib/systemd/user/eschaton-assistant-shadowing.service"
+  ln -s ../eschaton-assistant-shadowing.service \
+    "$pkgdir/usr/lib/systemd/user/graphical-session.target.wants/eschaton-assistant-shadowing.service"
 
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

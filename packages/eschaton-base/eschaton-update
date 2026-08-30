@@ -4,15 +4,382 @@ set -euo pipefail
 # suivre depuis le dépôt, où elle vit à packages/eschaton-base/lib.sh.
 # shellcheck source=/dev/null
 source /usr/lib/eschaton/lib.sh
-mapfile -t pacman_args < <(pacman_update_args "$@")
+
+die() { echo "eschaton-update : $*" >&2; exit 1; }
+
+# Deux modes, une seule invocation de pacman par mode.
+#
+#   (défaut)        un humain, dans un terminal. pacman lui pose ses questions.
+#   --transaction   la charge de l'unité systemd transitoire, démarrée par
+#                   eschaton-update-helper après la modale polkit.
+mode=terminal
+if (($# > 0)) && [[ $1 == --transaction ]]; then
+  mode=transaction
+  shift
+fi
+
+# Validation d'abord : `pacman_update_args` rend les arguments inchangés ou
+# échoue. On ne passe PAS par `mapfile < <(…)`, qui perdrait dans le sous-shell
+# le code de retour de la validation — l'option interdite serait alors
+# transmise à pacman après un message d'erreur ignoré.
+pacman_update_args "$@" > /dev/null || exit 1
+
+if [[ $mode == transaction ]]; then
+  ((EUID == 0)) || die "le mode --transaction est celui de l'unité systemd ; il doit être lancé comme root."
+elif [[ ! -t 0 ]]; then
+  echo "eschaton-update : pas de terminal sur l'entrée standard." >&2
+  echo "  pacman ne pourrait poser ses questions à personne et s'arrêterait." >&2
+  echo "  Lance la mise à jour depuis un terminal, ou depuis le panneau" >&2
+  echo "  Eschaton." >&2
+  exit 1
+fi
+
 min_kb=1048576  # 1 Gio de marge avant update
 avail_kb=$(df --output=avail -k / | tail -1 | tr -d ' ')
 if ! check_free_space_kb "$avail_kb" "$min_kb"; then
   echo "eschaton-update : moins de 1 Gio libre sur /, libère de l'espace d'abord." >&2
   exit 1
 fi
-echo "==> Mise à jour (Arch + [eschaton]). Snapshot automatique via snap-pac."
-sudo pacman -Syu "${pacman_args[@]}"
-if running_kernel_missing_modules /usr/lib/modules "$(uname -r)"; then
-  echo "==> Le kernel a été mis à jour : redémarre pour l'utiliser (sudo reboot)."
+
+if [[ $mode == terminal ]]; then
+  echo "==> Mise à jour (Arch + [eschaton]). Snapshot automatique via snap-pac."
+  echo "    Les questions de pacman sont posées ICI : personne n'y répond à ta place."
+  sudo pacman -Syu "$@"
+  if running_kernel_missing_modules /usr/lib/modules "$(uname -r)"; then
+    echo "==> Le kernel a été mis à jour : redémarre pour l'utiliser (sudo reboot)."
+  fi
+  exit 0
 fi
+
+# ═══════════════════ mode --transaction (unité systemd) ═══════════════════
+#
+# Deux phases, et la première est ce qui rend la seconde honnête.
+#
+# PHASE A — un pré-vol sur le VRAI chemin (`pacman -Syu`), entrée standard sur
+# /dev/null. Source pacman relue le 2026-08-30 (`src/pacman/util.c`) : sur EOF,
+# `question()` tombe sur `return 0`, c'est-à-dire **NON** — une ligne vide
+# rendrait le défaut, mais EOF n'est pas une ligne vide. Le pré-vol refuse donc
+# tout, s'arrête au sommaire sans avoir rien téléchargé ni installé, et il aura
+# AFFICHÉ chaque question rencontrée en chemin.
+#
+# Ce pré-vol utilisait `--print` jusqu'au 2026-08-30. C'était un défaut de
+# conception, trouvé en le mettant à l'épreuve d'un vrai remplacement de
+# paquet : `--print` est structurellement aveugle à l'interactivité — son
+# `cb_question` répond lui-même OUI aux remplacements, sans rien afficher
+# (`src/pacman/callback.c`, cité dans lib.sh). Le pré-vol laissait donc passer
+# exactement le cas qu'il devait attraper.
+#
+# PHASE B — la transaction, à laquelle on transmet **une seule** réponse « y ».
+# Ce n'est pas une auto-approbation : le pré-vol vient de prouver qu'AUCUNE
+# question ne précède « Proceed with installation? », et cette question-là a
+# déjà été tranchée par l'humain devant la modale polkit. Toute question
+# ultérieure (import de clé PGP, archive corrompue) tombe sur EOF, donc sur
+# NON, et fait échouer la transaction. Une seule approbation, celle qui a été
+# authentifiée, et rien d'autre.
+#
+# La locale est forcée, et ce n'est pas cosmétique : `question()` compare la
+# réponse à `_("Y")`, la traduction locale. En français, `_("Y")` vaut « O » —
+# un « y » y est compris comme « ni oui ni non », donc NON (mesuré :
+# tools/vm-dev.md §29). Une transaction qui se croirait approuvée serait en
+# réalité refusée à chaque fois. `C.UTF-8` rend le jeton déterministe tout en
+# gardant l'UTF-8 ; le journal de la transaction est donc en anglais, ce qui a
+# l'avantage collatéral de correspondre mot pour mot aux nouvelles Arch.
+readonly LOCALE_TRANSACTION=C.UTF-8
+
+etat_dir=/run/eschaton-update
+etat="$etat_dir/etat"
+prevol="$etat_dir/prevol.txt"
+install -d -m755 "$etat_dir"
+
+# Pourquoi un fichier d'état alors que systemd tient déjà l'état de l'unité :
+# une unité transitoire qui a RÉUSSI est ramassée par systemd et disparaît.
+# « terminée avec succès » et « n'a jamais tourné » seraient alors
+# indiscernables pour l'interface.
+snapshot_avant=0
+unites_en_echec=""
+etat_final_ecrit=false
+# Où en est-on : `prevol` (rien n'est modifié), `transaction` (pacman écrit),
+# `verification` (pacman a fini, on contrôle les services). Le filet de sortie
+# ci-dessous en dépend.
+phase_courante=prevol
+
+ecrire_etat() { # $1=résultat $2=code
+  local tmp="$etat.tmp"
+  {
+    printf 'resultat=%s\n' "$1"
+    printf 'code=%s\n' "$2"
+    printf 'fin=%s\n' "$(date -Is)"
+    printf 'noyau_a_recharger=%s\n' \
+      "$(running_kernel_missing_modules /usr/lib/modules "$(uname -r)" && echo oui || echo non)"
+    # Le point de retour, calculé AVANT la transaction : c'est lui qui rend
+    # l'échec réversible sans ligne de commande.
+    printf 'snapshot_avant=%s\n' "$snapshot_avant"
+    printf 'unites_en_echec=%s\n' "$unites_en_echec"
+  } > "$tmp"
+  # Renommage atomique : l'interface ne lit jamais un état à moitié écrit.
+  mv -f "$tmp" "$etat"
+  chmod 644 "$etat"
+  etat_final_ecrit=true
+}
+
+# Filet de sortie : quoi qu'il arrive, l'état ne reste jamais sur « en-cours ».
+#
+# Mesuré le 2026-08-30 : une annulation arrivée pendant le contrôle des
+# services — donc APRÈS que pacman a tout installé — tuait le script sur son
+# `sleep` (`set -e`, code 143) avant qu'il ait pu écrire son verdict. L'état
+# restait « en-cours » pour toujours, et l'interface annonçait une mise à jour
+# « interrompue sans résultat » alors que le système ÉTAIT à jour.
+finaliser() {
+  local code=$?
+  # LE VERROU EST LIBÉRÉ SUR TOUTE SORTIE — ajouté le 2026-08-30 (revue de
+  # sécurité I5). Seule la branche d'annulation de la TRANSACTION faisait ce
+  # ménage ; une annulation pendant le PRÉ-VOL en sortait sans rien libérer,
+  # alors que c'est la fenêtre la plus longue — elle contient le `-Sy`, donc
+  # toute la synchronisation des bases. Le placer ici couvre les deux, et
+  # toutes les sorties à venir : `liberer_verrou_orphelin` est déjà
+  # conditionnel (il ne retire rien tant qu'un pacman tourne), donc l'appeler
+  # sur le chemin nominal ne coûte qu'un `pgrep`.
+  # `local code=$?` doit rester la PREMIÈRE instruction : tout appel avant elle
+  # écraserait le code de sortie qu'on est en train de capturer.
+  liberer_verrou_orphelin
+  "$etat_final_ecrit" && return 0
+  case "$phase_courante" in
+    verification)
+      # La transaction est validée ; seul le contrôle des services a été coupé.
+      # On ne cache pas que le système est à jour, et on ne prétend pas avoir
+      # vérifié ce qu'on n'a pas vérifié.
+      ecrire_etat succes-non-verifie "$code"
+      ;;
+    *)
+      if "$annulee"; then
+        # Deux issues possibles, et les confondre était le défaut du §33.5 :
+        # `conclure_annulation` va LIRE ce que pacman a écrit avant de choisir.
+        conclure_annulation "$code"
+      else
+        ecrire_etat interrompu "$code"
+      fi
+      ;;
+  esac
+}
+
+# Le dernier snapshot existant avant que nous ne touchions à quoi que ce soit.
+# snap-pac en créera un autre (« pre ») pendant la transaction ; celui-ci
+# suffit et ne demande aucune analyse du type de snapshot.
+dernier_snapshot() {
+  local n
+  n=$(snapper --config root list --columns number 2>/dev/null | tail -1 | tr -d ' ')
+  valid_snapshot_number "${n:-0}" && printf '%s\n' "$n" || printf '0\n'
+}
+
+lister_unites_en_echec() {
+  systemctl list-units --state=failed --plain --no-legend --no-pager 2>/dev/null \
+    | awk '{print $1}'
+}
+
+# Un `pacman` tué en pleine récupération de paquets laisse son verrou derrière
+# lui. On ne le retire que lorsque plus aucun pacman ne tourne — sinon on
+# volerait le verrou d'une transaction légitime lancée ailleurs.
+readonly VERROU_PACMAN=/var/lib/pacman/db.lck
+liberer_verrou_orphelin() {
+  local vivants
+  vivants=$(pgrep -c -x pacman 2>/dev/null || true)
+  if verrou_pacman_orphelin "$VERROU_PACMAN" "${vivants:-0}"; then
+    rm -f "$VERROU_PACMAN"
+    echo "==> Verrou pacman orphelin retiré ($VERROU_PACMAN)."
+  elif [[ -e $VERROU_PACMAN ]]; then
+    echo "==> Verrou pacman laissé en place : un autre pacman tourne." >&2
+  fi
+}
+
+# ═════════════ Une annulation a DEUX issues, et il faut les mesurer ══════════
+#
+# Jusqu'au 2026-08-30, toute annulation écrivait `annule` et le panneau
+# annonçait « Rien n'a été installé ». Mesuré en VM (§34) : une annulation
+# arrivée pendant le `post_upgrade` d'un paquet laisse ce paquet installé. Le
+# message était donc faux, et — plus grave — `restaurationUtile` n'incluant pas
+# `annule`, aucun retour arrière n'était proposé, dans le seul cas où
+# l'utilisateur vient d'exprimer qu'il ne voulait pas de cette mise à jour.
+#
+# La frontière est celle que pacman publie dans son propre journal (voir
+# `transaction_pacman_engagee` dans lib.sh). On relève ici l'offset de ce
+# journal AVANT de rien faire : ce qui s'y ajoute ensuite est le fait de CETTE
+# transaction, et d'aucune autre. Un horodatage ne suffirait pas — il n'a que la
+# seconde pour résolution, et une transaction précédente de la même seconde
+# serait indiscernable.
+readonly JOURNAL_PACMAN=/var/log/pacman.log
+# Vide = « on n'a pas su relever le point de départ ». C'est le pire cas, et il
+# est traité comme tel ci-dessous.
+journal_pacman_offset=$(stat -c %s "$JOURNAL_PACMAN" 2>/dev/null || true)
+
+# FAIL-CLOSED sur les trois lectures. Un offset qu'on n'a pas su relever, un
+# journal devenu illisible, un journal tourné sous nos pieds : dans chacun de
+# ces cas on ne peut pas PROUVER que rien n'a été installé, donc on ne le dit
+# pas. Se tromper en annonçant une installation coûte une inquiétude et un
+# bouton ignoré ; se tromper dans l'autre sens coûte un mensonge sur l'état du
+# système ET la porte de sortie. Même motif que le `*)` du verdict de pré-vol.
+pacman_a_commence() {
+  local taille ajout
+  [[ -n $journal_pacman_offset ]] || return 0
+  taille=$(stat -c %s "$JOURNAL_PACMAN" 2>/dev/null) || return 0
+  ((taille >= journal_pacman_offset)) || return 0
+  ajout=$(tail -c "+$((journal_pacman_offset + 1))" "$JOURNAL_PACMAN" 2>/dev/null) || return 0
+  transaction_pacman_engagee "$ajout"
+}
+
+# Le seul endroit où l'on décide ce qu'une annulation a laissé derrière elle.
+# Les deux chemins d'annulation — celui du pré-vol, celui de la transaction — et
+# le filet de sortie passent tous par ici : la question ne se pose qu'une fois,
+# et sa réponse ne peut pas diverger d'un chemin à l'autre.
+conclure_annulation() { # $1=code de sortie à consigner
+  if pacman_a_commence; then
+    ecrire_etat annule-trop-tard "$1"
+    echo "==> Annulation reçue, mais pacman avait déjà commencé à installer." >&2
+    echo "    Des paquets ONT été modifiés malgré la demande d'arrêt ; la sortie" >&2
+    echo "    de pacman ci-dessus dit lesquels." >&2
+    if ((snapshot_avant > 0)); then
+      echo "    Point de retour disponible : snapshot $snapshot_avant." >&2
+    fi
+  else
+    ecrire_etat annule "$1"
+    echo "==> Mise à jour annulée. Rien n'a été installé."
+  fi
+}
+
+# Les pièges viennent APRÈS `liberer_verrou_orphelin`, et l'ordre compte depuis
+# que le filet de sortie l'appelle : armer `trap finaliser EXIT` avant que la
+# fonction existe laisse une fenêtre — courte, mais réelle — où un signal
+# ferait entrer `finaliser` dans un « command not found ». Sous `set -e`, cette
+# erreur AVORTERAIT le piège avant l'écriture du verdict, c'est-à-dire
+# exactement la panne que le filet existe pour empêcher. Une définition avant
+# son usage, y compris quand l'usage est un piège.
+#
+# Une annulation n'est pas un échec. `systemctl stop` envoie SIGTERM à tout le
+# groupe de contrôle : pacman le traite lui-même et sort, puis ce piège
+# s'exécute — bash diffère les pièges jusqu'à la fin de la commande en avant-plan.
+annulee=false
+on_term() { annulee=true; }
+trap on_term TERM INT
+trap finaliser EXIT
+
+{
+  printf 'resultat=en-cours\n'
+  printf 'debut=%s\n' "$(date -Is)"
+} > "$etat"
+chmod 644 "$etat"
+
+# Une transaction précédente tuée sans ménagement (SIGKILL après
+# TimeoutStopSec, coupure de courant) n'a pas pu faire son propre ménage.
+liberer_verrou_orphelin
+
+echo "==> Pré-vol : la transaction est jouée à blanc et REFUSÉE au sommaire."
+echo "    Rien n'est téléchargé ni installé ; les questions éventuelles"
+echo "    apparaissent ci-dessous, telles que pacman les pose."
+prevol_rc=0
+LC_ALL="$LOCALE_TRANSACTION" pacman -Syu "$@" < /dev/null > "$prevol" 2>&1 || prevol_rc=$?
+chmod 644 "$prevol"
+cat "$prevol"
+
+if "$annulee"; then
+  # Le pré-vol ne peut rien installer — il refuse tout au sommaire. On le
+  # VÉRIFIE quand même plutôt que de l'affirmer : c'est gratuit, et un `pacman`
+  # lancé ailleurs pendant cette fenêtre serait sinon attribué à personne.
+  conclure_annulation 0
+  exit 0
+fi
+
+# Le verdict est capturé UNE fois : le relire changerait de valeur si le fichier
+# de pré-vol bougeait entre deux lectures.
+verdict=$(verdict_prevol "$prevol" "$prevol_rc")
+case "$verdict" in
+  propre)
+    # Le seul verdict qui autorise la suite. Explicite, et pas simplement « ce
+    # qui reste » : voir la branche `*)` ci-dessous.
+    ;;
+  rien)
+    ecrire_etat succes 0
+    echo "==> Rien à mettre à jour."
+    exit 0
+    ;;
+  erreur)
+    ecrire_etat echec-prevol "$prevol_rc"
+    echo "==> La transaction ne se résout pas (code $prevol_rc). Rien n'a été modifié." >&2
+    echo "    La sortie exacte de pacman est ci-dessus, telle quelle." >&2
+    exit "$prevol_rc"
+    ;;
+  decision)
+    ecrire_etat decision-humaine 1
+    echo "==> Cette mise à jour demande une décision humaine que l'interface ne sait" >&2
+    echo "    pas encore poser. Rien n'a été modifié : Eschaton préfère s'arrêter" >&2
+    echo "    plutôt que de répondre à ta place." >&2
+    echo "    La question posée par pacman est dans la sortie ci-dessus." >&2
+    exit 1
+    ;;
+  *)
+    # FAIL-CLOSED — ajouté le 2026-08-30 (revue de sécurité M3). Sans cette
+    # branche, un verdict inattendu — une valeur ajoutée à `verdict_prevol` et
+    # oubliée ici, une sortie tronquée — ne correspondait à AUCUN `case` et le
+    # script POURSUIVAIT jusqu'à la transaction, `printf 'y'` compris. Le seul
+    # chemin qui installe quoi que ce soit doit être celui qui a été
+    # explicitement autorisé, jamais celui qui reste.
+    ecrire_etat verdict-inconnu 1
+    echo "==> Verdict de pré-vol inattendu : « $verdict »." >&2
+    echo "    Eschaton s'arrête sans rien modifier plutôt que de continuer sur" >&2
+    echo "    un état qu'il ne sait pas interpréter." >&2
+    exit 1
+    ;;
+esac
+
+snapshot_avant=$(dernier_snapshot)
+echecs_avant=$(lister_unites_en_echec)
+phase_courante=transaction
+echo "==> Transaction. Snapshot automatique via snap-pac."
+echo "    Point de retour avant transaction : snapshot $snapshot_avant."
+# `-Su` sans `-y` : le pré-vol vient de synchroniser les bases, et la
+# transaction doit se jouer sur CELLES-LÀ. Un second `-y` rouvrirait la fenêtre
+# entre ce qui a été vérifié et ce qui est installé.
+rc=0
+printf 'y\n' | LC_ALL="$LOCALE_TRANSACTION" pacman -Su "$@" || rc=$?
+
+if "$annulee"; then
+  # pacman a été tué en vol : c'est ici, et seulement ici, que le verrou reste.
+  liberer_verrou_orphelin
+  # Et c'est ici que la question se pose vraiment : pacman a-t-il eu le temps
+  # d'écrire ? Le fichier d'état porte la réponse ; le panneau ne la devine pas.
+  conclure_annulation "$rc"
+  exit 0
+fi
+if ((rc != 0)); then
+  ecrire_etat echec "$rc"
+  echo "==> La mise à jour a échoué (code $rc). Rien n'a été approuvé à ta place." >&2
+  echo "    Point de retour disponible : snapshot $snapshot_avant." >&2
+  exit "$rc"
+fi
+
+# À partir d'ici, les paquets SONT installés : c'est ce que dit `phase_courante`
+# au filet de sortie si l'on est interrompu avant d'avoir rendu un verdict.
+phase_courante=verification
+
+# Le code de retour de pacman ne suffit pas. Archétype `dovecot 2.4` : la
+# transaction réussit et c'est le service qui ne redémarre plus. On laisse aux
+# unités relancées par les hooks le temps de tomber, puis on compare.
+# `|| true` : un signal interrompt `sleep`, et sous `set -e` cela suffirait à
+# tuer le script au moment précis où il doit rendre son verdict.
+sleep 3 || true
+echecs_apres=$(lister_unites_en_echec)
+unites_en_echec=$(unites_nouvellement_en_echec "$echecs_avant" "$echecs_apres" | tr '\n' ' ')
+unites_en_echec=${unites_en_echec% }
+if [[ -n $unites_en_echec ]]; then
+  # On sort 0 À DESSEIN : la transaction, elle, s'est déroulée jusqu'au bout, et
+  # les paquets SONT installés. Sortir non nul ferait croire à un `pacman` en
+  # échec et pousserait à relancer, alors que le problème est ailleurs. C'est
+  # l'ÉTAT qui porte la nuance — `succes-degrade`, avec les unités nommées — et
+  # c'est lui que l'interface lit. Elle ne dit jamais « à jour ».
+  ecrire_etat succes-degrade 0
+  echo "==> Les paquets sont installés, MAIS des services ne démarrent plus :" >&2
+  echo "      $unites_en_echec" >&2
+  echo "    Ce n'est pas un succès. Point de retour : snapshot $snapshot_avant." >&2
+  exit 0
+fi
+
+ecrire_etat succes 0
+echo "==> Mise à jour terminée."

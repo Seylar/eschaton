@@ -154,7 +154,23 @@ jobs:
       # le runner et n'ajoute aucun tiers à la chaîne d'approvisionnement — ce
       # que la veille §4.4 reproche précisément aux CI publiques.
       # `--verify-tag` : refuse de créer une release sur un tag qui n'existe pas.
-      - name: GitHub Release
+      #
+      # `--draft` : NON NÉGOCIABLE tant que deux décisions ne sont pas prises.
+      # Poser un tag `v*` suffit à déclencher ce workflow ; sans `--draft`, le
+      # geste « tagger une version » publierait donc AUTOMATIQUEMENT un média
+      # téléchargeable par tous — alors que deux documents de ce dépôt le
+      # conditionnent explicitement à des arbitrages non tranchés :
+      #   - `iso/PROVENANCE.md` : le profil dérive de `configs/releng`
+      #     (GPL-3.0-or-later) dans un dépôt MIT ; la question de licence « se
+      #     poserait dès la première mise en ligne étiquetée » — or une Release
+      #     attachée à un tag EST cette mise en ligne ;
+      #   - `iso/README.md` : console série et auto-connexion root sur l'entrée
+      #     d'amorçage par défaut, root sans mot de passe — « choix de média de
+      #     développement, à repeser avant toute distribution grand public ».
+      # Un brouillon reste invisible au public et téléchargeable par les seuls
+      # mainteneurs : l'artefact existe, la publication reste un geste humain.
+      # Retirer `--draft` est une décision de produit, pas un nettoyage.
+      - name: GitHub Release (brouillon)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -162,5 +178,6 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "Eschaton $GITHUB_REF_NAME" \
             --verify-tag \
+            --draft \
             --notes-file notes.md \
             iso-out/*.iso iso-out/*.sha256

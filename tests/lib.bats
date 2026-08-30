@@ -23,11 +23,38 @@ setup() { source "$BATS_TEST_DIRNAME/../packages/eschaton-base/lib.sh"; }
   [ "$status" -eq 1 ]
 }
 
-@test "pacman_update_args traduit l'interface Eschaton --yes" {
-  run pacman_update_args --yes --needed
+@test "pacman_update_args transmet les options anodines sans les modifier" {
+  run pacman_update_args --needed --color=never
   [ "$status" -eq 0 ]
-  [ "${lines[0]}" = "--noconfirm" ]
-  [ "${lines[1]}" = "--needed" ]
+  [ "${lines[0]}" = "--needed" ]
+  [ "${lines[1]}" = "--color=never" ]
+}
+
+@test "pacman_update_args n'écrit rien quand il n'a rien reçu" {
+  run pacman_update_args
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+# Le remplacement du 2026-08-30 : `--yes` était traduit en `--noconfirm`, donc
+# la mise à jour s'auto-approuvait. Il est maintenant refusé, comme toute
+# option qui répondrait à la place de l'utilisateur. La garde d'invariant du
+# dépôt vit dans tests/update-sans-auto-approbation.bats.
+@test "pacman_update_args refuse toute option d'auto-approbation" {
+  # Appel direct plutôt que `run` : `run` fusionne stderr dans $output, or on
+  # veut précisément vérifier que la SORTIE STANDARD reste vide.
+  for interdite in --yes --noconfirm --ask --ask=4 --overwrite '--overwrite=/usr/lib/*'; do
+    if sortie=$(pacman_update_args --needed "$interdite" 2>/dev/null); then
+      echo "option acceptée à tort : $interdite"
+      return 1
+    fi
+    # L'appelant ne doit pas avoir à trier un résultat partiel avant de
+    # constater l'échec.
+    if [ -n "$sortie" ]; then
+      echo "sortie standard non vide pour $interdite : $sortie"
+      return 1
+    fi
+  done
 }
 
 # Les quatre suivantes couvrent le remplacement de sous-volume d'eschaton-rollback

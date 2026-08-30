@@ -1,0 +1,12 @@
+{
+  "id": "eschatonAssistantToolHarness",
+  "name": "Eschaton Assistant Tool Harness",
+  "description": "Harnais VM éphémère des exécuteurs assistant.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "author": "Eschaton",
+  "type": "daemon",
+  "component": "./DmsToolHarness.qml",
+  "permissions": ["process"],
+  "requires_dms": ">=1.5.0"
+}
