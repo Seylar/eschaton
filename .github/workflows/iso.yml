@@ -129,6 +129,31 @@ jobs:
       - name: Contenu à publier
         run: ls -l iso-out
 
+      # DERNIER VERROU AVANT LA PUBLICATION — plan Task 4.3, ADR 0004 §4.5.
+      # Le variant T2 embarque `apple-bcm-firmware` (firmware Apple extrait de
+      # macOS) : le publier engagerait le projet sur une zone grise juridique
+      # que personne n'a tranchée (spec §3.3).
+      #
+      # POURQUOI CETTE ÉTAPE EXISTE ALORS QUE `iso/build-iso` REFUSE DÉJÀ DE
+      # CONSTRUIRE LE VARIANT SOUS CI : parce que les deux gardes ne protègent
+      # pas du même geste. Celle de build-iso empêche l'image d'être PRODUITE
+      # ici ; celle-ci empêche une image produite AILLEURS — téléversée à la
+      # main dans l'artefact, ou apportée par un futur job — d'être publiée. Une
+      # interdiction qui ne tient que par l'absence de l'objet n'est pas une
+      # interdiction.
+      - name: Refuser tout artefact T2
+        run: |
+          set -euo pipefail
+          if compgen -G 'iso-out/*NE-PAS-PUBLIER*' > /dev/null \
+            || compgen -G 'iso-out/*eschaton-t2*' > /dev/null; then
+            echo "::error::Un artefact du variant T2 est présent dans iso-out/." >&2
+            echo "Ce variant redistribue du firmware Apple et ne se publie pas" >&2
+            echo "(spec SP4b-1 §3.3, ADR 0004 §4.5). Publication interrompue." >&2
+            ls -l iso-out >&2
+            exit 1
+          fi
+          echo "Aucun artefact T2 : publication autorisée."
+
       # Les notes passent par un FICHIER et non par `--notes "…"` : une chaîne
       # multiligne écrite dans un bloc YAML embarque son indentation dans le
       # texte publié, et les accents graves y seraient interprétés par le shell.
@@ -154,13 +179,26 @@ jobs:
       # le runner et n'ajoute aucun tiers à la chaîne d'approvisionnement — ce
       # que la veille §4.4 reproche précisément aux CI publiques.
       # `--verify-tag` : refuse de créer une release sur un tag qui n'existe pas.
+      #
+      # ⚠️ PAS DE JOKER `iso-out/*.iso` ICI. `gh release create` publie ce que le
+      # shell lui tend : le jour où un job construirait les deux images, le
+      # joker emporterait le variant T2 sans qu'une seule ligne de ce fichier ne
+      # change — donc sans relecture. On énumère, et on refuse l'ambiguïté.
       - name: GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          mapfile -t images < <(find iso-out -maxdepth 1 -name '*.iso' ! -name '*t2*' | sort)
+          if [ "${#images[@]}" -ne 1 ]; then
+            echo "::error::${#images[@]} image nominale(s) dans iso-out/ — attendu exactement 1." >&2
+            ls -l iso-out >&2
+            exit 1
+          fi
+          image="${images[0]}"
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Eschaton $GITHUB_REF_NAME" \
             --verify-tag \
             --notes-file notes.md \
-            iso-out/*.iso iso-out/*.sha256
+            "$image" "$image.sha256"
