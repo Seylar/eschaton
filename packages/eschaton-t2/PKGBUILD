@@ -1,0 +1,55 @@
+pkgname=eschaton-t2
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Adaptations Mac T2 : garde d'épinglage du noyau et matériel Apple (toléré, non supporté)"
+
+# ⚠️ ÉCART ASSUMÉ AVEC L'ADR 0004 §4.1, À RATIFIER PAR L'AUTEUR.
+# L'ADR annonce ce paquet « forcément non-`any` puisqu'il dépend de linux-t2 ».
+# L'architecture d'un paquet Arch décrit ce qu'il CONTIENT, pas ce dont il
+# dépend : ici, deux fichiers texte et un script shell — donc `any`, comme
+# eschaton-base. Le raisonnement de l'ADR anticipait un paquet qui n'existait
+# pas encore ; le voici, et il ne compile rien.
+# Ce n'est pas un détail de forme : `repo/build-repo` construit TOUS les
+# PKGBUILD de packages/ dans les DEUX jobs d'architecture (x86_64 et aarch64) et
+# refuse un dépôt incomplet. Un `arch=(x86_64)` ferait échouer le job aarch64 —
+# la doctrine `arch=(any)` du Socle n'est pas qu'une préférence, c'est ce sur
+# quoi la CI est bâtie.
+arch=(any)
+license=(MIT)
+
+# Rien ne tire ce paquet. Il s'installe À LA MAIN, sur la machine concernée :
+# le T2 est toléré et cloisonné (ADR 0004 §4.1), jamais une cible par défaut.
+#   pacman -S eschaton-t2
+# `linux-t2`, `t2fanrd` et `apple-t2-audio-config` viennent du dépôt tiers
+# `arch-mact2`, que l'auteur ajoute séparément, avec sa politique propre — il
+# n'est PAS dans la configuration livrée par Eschaton (ADR 0004 §4.2).
+depends=(
+  eschaton-base
+  # Le noyau épinglé, et la raison d'être de tout le reste.
+  linux-t2
+  # Wi-Fi/Bluetooth Broadcom : firmware extrait de macOS, déjà empaqueté.
+  apple-bcm-firmware
+  # Haut-parleurs : configuration ALSA UCM du pilote t2bce.
+  apple-t2-audio-config
+  # Ventilateurs : sans ce démon, le SMC les laisse à son régime par défaut.
+  t2fanrd
+)
+optdepends=(
+  'linux-t2-headers: pour compiler un module DKMS contre le noyau T2'
+  "tiny-dfr: Touch Bar (fragile — ne se réveille pas après veille sur 6.12.31+/7.0.5)"
+)
+
+source=(t2-garde-noyau
+        90-eschaton-t2-noyau.hook
+        91-eschaton-t2-retrait.hook
+        92-eschaton-t2-alignement.hook
+        LICENSE)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP)
+
+package() {
+  install -Dm755 t2-garde-noyau "$pkgdir/usr/lib/eschaton/t2-garde-noyau"
+  for h in 90-eschaton-t2-noyau 91-eschaton-t2-retrait 92-eschaton-t2-alignement; do
+    install -Dm644 "$h.hook" "$pkgdir/usr/share/libalpm/hooks/$h.hook"
+  done
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

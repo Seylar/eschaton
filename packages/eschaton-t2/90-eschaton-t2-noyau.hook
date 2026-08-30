@@ -1,0 +1,28 @@
+# Refus dur du noyau amont sur une machine Mac T2 (ADR 0004 §4.3).
+#
+# `When = PreTransaction` + `AbortOnFail` est le SEUL couple qui arrête pacman :
+# un crochet PostTransaction en échec ne produit qu'un avertissement, et la
+# transaction est alors déjà écrite sur le disque.
+#
+# `NeedsTargets` passe au script les noms de paquets correspondants sur l'entrée
+# standard. C'est le script — et non ce fichier — qui tranche : `linux-t2`
+# déclare `provides = linux`, et l'on ne veut pas dépendre de la façon dont
+# pacman fait correspondre une cible à un fournisseur.
+
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = linux
+Target = linux-lts
+Target = linux-zen
+Target = linux-hardened
+Target = linux-rt
+Target = linux-rt-lts
+
+[Action]
+Description = Eschaton T2 : refus du noyau amont (la puce T2 est le contrôleur NVMe)...
+When = PreTransaction
+Exec = /usr/lib/eschaton/t2-garde-noyau refuser-noyau-standard
+NeedsTargets
+AbortOnFail

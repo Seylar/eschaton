@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# Garde d'épinglage du noyau sur une machine Mac T2 (ADR 0004 §4.3).
+#
+# LE SCÉNARIO QU'ELLE EXISTE POUR EMPÊCHER (veille §2.3)
+# Sur ce matériel, la puce T2 *est* le contrôleur NVMe et le pilote `apple-bce`
+# porte le clavier et le trackpad internes. Les deux ne vivent que dans
+# `linux-t2`. Une mise à jour qui installe le `linux` amont — par dépendance,
+# par erreur de configuration, ou parce que quelqu'un l'a tapé — produit au
+# redémarrage suivant une machine SANS disque visible, SANS clavier et SANS
+# trackpad. Elle n'est pas récupérable au clavier : elle l'est au rollback, ou
+# avec une clé USB.
+#
+# CE QUE CE SCRIPT GARANTIT, ET CE QU'IL NE GARANTIT PAS
+# Il garantit qu'aucune transaction pacman n'installe un noyau amont, et
+# qu'aucune ne retire le dernier noyau T2 : ces deux-là sont des refus durs,
+# posés en PreTransaction avec AbortOnFail — pacman s'arrête avant d'écrire.
+# Il NE garantit PAS que `linux-t2` soit à jour vis-à-vis de l'amont. La veille
+# §2.3 souhaitait « un crochet qui bloque un -Syu si linux-t2 n'est pas
+# disponible pour la version cible » : pacman n'expose à un crochet ni la
+# version amont ni la notion de « version cible », et un crochet qui
+# interrogerait le réseau mentirait sur ce qu'il mesure. Ce manque est réel et
+# assumé ; le filet reste le snapshot pré-mise-à-jour et le rollback.
+#
+# La troisième vérification (`verifier-alignement`) est un CONSTAT après coup,
+# pas un refus : elle regarde ce qui va effectivement démarrer.
+set -euo pipefail
+
+# Racine à inspecter. `/` en production ; les tests y pointent une fausse
+# arborescence — c'est ce qui rend cette garde vérifiable ailleurs que sur un
+# Mac T2, c'est-à-dire ailleurs que là où on ne peut pas se permettre de la
+# découvrir fausse.
+racine="${ESCHATON_T2_RACINE:-}"
+racine="${racine%/}"
+
+# Les noyaux amont. `linux-t2` n'y est évidemment pas — et c'est le piège que
+# cette liste évite : `linux-t2` DÉCLARE `provides = linux`, donc un crochet
+# alpm déclenché sur la cible `linux` peut très bien lui être présenté. On
+# tranche sur le NOM exact du paquet, jamais sur ce qu'il fournit.
+noyaux_amont=(linux linux-lts linux-zen linux-hardened linux-rt linux-rt-lts)
+
+msg() { printf '%s\n' "$@" >&2; }
+
+# Les noms de paquets arrivent sur l'entrée standard, un par ligne : c'est ce
+# que `NeedsTargets` donne à un crochet alpm.
+cibles() {
+	local ligne
+	while IFS= read -r ligne; do
+		ligne="${ligne#"${ligne%%[![:space:]]*}"}"
+		ligne="${ligne%"${ligne##*[![:space:]]}"}"
+		[[ -n "$ligne" ]] && printf '%s\n' "$ligne"
+	done
+	return 0
+}
+
+refuser_noyau_standard() {
+	local cible noyau trouves=()
+	while IFS= read -r cible; do
+		for noyau in "${noyaux_amont[@]}"; do
+			[[ "$cible" == "$noyau" ]] && trouves+=("$cible")
+		done
+	done < <(cibles)
+
+	((${#trouves[@]} == 0)) && return 0
+
+	msg "" \
+		"REFUS — cette machine est un Mac T2, son noyau est épinglé sur linux-t2." \
+		"" \
+		"  Paquet(s) refusé(s) : ${trouves[*]}" \
+		"" \
+		"Sur ce matériel, la puce T2 est le contrôleur NVMe et le pilote apple-bce" \
+		"porte le clavier et le trackpad internes : les deux ne vivent que dans" \
+		"linux-t2. Démarrer un noyau amont donne une machine sans disque visible et" \
+		"sans clavier — donc irréparable sur place." \
+		"" \
+		"Rien n'a été écrit ; la transaction est annulée." \
+		"" \
+		"Si c'est délibéré (cette machine n'est plus un Mac T2, par exemple) :" \
+		"    pacman -Rns eschaton-t2      # retire la garde, en connaissance de cause"
+	return 1
+}
+
+refuser_retrait() {
+	local cible trouve=0
+	while IFS= read -r cible; do
+		[[ "$cible" == "linux-t2" ]] && trouve=1
+	done < <(cibles)
+
+	((trouve)) || return 0
+
+	msg "" \
+		"REFUS — retrait de linux-t2, le seul noyau qui démarre sur ce Mac." \
+		"" \
+		"Sans lui, la prochaine mise sous tension ne trouve ni le disque interne" \
+		"(la puce T2 en est le contrôleur) ni le clavier intégré." \
+		"" \
+		"Rien n'a été écrit ; la transaction est annulée." \
+		"" \
+		"Pour remplacer le noyau plutôt que le retirer, installez le nouveau dans la" \
+		"MÊME transaction — pacman ne verra alors pas de retrait."
+	return 1
+}
+
+# Après la transaction : est-ce que ce qui va démarrer est bien un noyau T2
+# complet ? On ne lit pas la base de pacman mais l'arborescence réelle — c'est
+# elle que le prochain démarrage lira.
+verifier_alignement() {
+	local defauts=() modules noyau pkgbase kver
+
+	# Arch marque chaque arbre de modules du nom du paquet qui l'a posé.
+	local trouve_t2=0
+	if [[ -d "$racine/usr/lib/modules" ]]; then
+		for modules in "$racine"/usr/lib/modules/*/; do
+			pkgbase="$modules/pkgbase"
+			[[ -f "$pkgbase" ]] || continue
+			[[ "$(cat "$pkgbase")" == "linux-t2" ]] || continue
+			trouve_t2=1
+			kver="$(basename "$modules")"
+			# apple-bce : clavier, trackpad, audio, webcam. Son absence de l'arbre
+			# de modules est exactement la panne que l'on redoute — et elle ne se
+			# voit qu'au redémarrage, quand il est trop tard pour taper quoi que
+			# ce soit.
+			if [[ -z "$(find "$modules" -name 'apple-bce.ko*' -print -quit 2>/dev/null)" ]]; then
+				defauts+=("l'arbre de modules $kver n'a pas apple-bce : au prochain démarrage, ni clavier ni trackpad internes")
+			fi
+		done
+	fi
+	((trouve_t2)) || defauts+=("aucun arbre de modules ne porte pkgbase=linux-t2 — ce système n'a plus de noyau T2 installé")
+
+	[[ -e "$racine/boot/vmlinuz-linux-t2" ]] || \
+		defauts+=("/boot/vmlinuz-linux-t2 est absent : l'entrée d'amorçage ne désignerait rien")
+
+	# Le noyau amont ne doit pas être là. S'il y est, il a franchi la garde
+	# PreTransaction — donc il est arrivé autrement (image restaurée, pacstrap
+	# depuis un live, paquet installé avant eschaton-t2).
+	for noyau in "${noyaux_amont[@]}"; do
+		[[ -e "$racine/boot/vmlinuz-$noyau" ]] && \
+			defauts+=("/boot/vmlinuz-$noyau est présent : un noyau amont a été installé hors du contrôle de la garde")
+	done
+
+	((${#defauts[@]} == 0)) && return 0
+
+	msg "" "ALERTE — le noyau de ce Mac T2 n'est plus aligné :" ""
+	for kver in "${defauts[@]}"; do msg "  - $kver"; done
+	msg "" \
+		"La transaction, elle, est TERMINÉE : ce message est un constat, pas un refus." \
+		"NE REDÉMARREZ PAS avant d'avoir corrigé, ou revenez au dernier état connu bon :" \
+		"" \
+		"    eschaton-rollback" \
+		"" \
+		"En dernier recours, la clé USB archiso-t2 voit le disque de cette machine."
+	return 1
+}
+
+case "${1-}" in
+	refuser-noyau-standard) refuser_noyau_standard ;;
+	refuser-retrait)        refuser_retrait ;;
+	verifier-alignement)    verifier_alignement ;;
+	*)
+		msg "usage : ${0##*/} refuser-noyau-standard|refuser-retrait|verifier-alignement"
+		exit 2
+		;;
+esac

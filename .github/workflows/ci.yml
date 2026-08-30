@@ -56,6 +56,7 @@ jobs:
             packages/eschaton-base/lib.sh \
             packages/eschaton-base/eschaton-update \
             packages/eschaton-base/eschaton-rollback \
+            packages/eschaton-t2/t2-garde-noyau \
             packages/eschaton-desktop-config/eschaton-session \
             packages/eschaton-desktop-config/eschaton-dms-provision
       # Différé du Socle soldé au SP4 : un fichier sudoers invalide n'est pas

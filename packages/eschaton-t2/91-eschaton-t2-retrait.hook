@@ -1,0 +1,22 @@
+# Refus du retrait de linux-t2 — l'autre façon de rendre le Mac inutilisable.
+#
+# Épingler le noyau ne suffit pas : `pacman -R linux-t2` laisse une machine dont
+# le prochain démarrage ne voit ni le disque interne ni le clavier. Le crochet
+# ci-dessus (90) ne regarde que les installations ; celui-ci regarde les
+# retraits, et c'est un déclencheur distinct — un même crochet ne peut pas
+# distinguer les deux opérations à partir de la seule liste de cibles.
+#
+# Un REMPLACEMENT dans la même transaction n'est pas un retrait pour pacman :
+# mettre linux-t2 à jour ne déclenche donc pas ce refus.
+
+[Trigger]
+Operation = Remove
+Type = Package
+Target = linux-t2
+
+[Action]
+Description = Eschaton T2 : refus du retrait du dernier noyau amorçable...
+When = PreTransaction
+Exec = /usr/lib/eschaton/t2-garde-noyau refuser-retrait
+NeedsTargets
+AbortOnFail
