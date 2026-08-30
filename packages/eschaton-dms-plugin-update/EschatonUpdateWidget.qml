@@ -25,8 +25,8 @@ PluginComponent {
 
     // "" (rien en cours) · "authentification" · "en-cours" · "termine"
     property string phase: ""
-    // "" · succes · succes-degrade · echec · echec-prevol · decision-humaine
-    // · annule · interrompu
+    // "" · succes · succes-degrade · succes-non-verifie · echec · echec-prevol
+    // · decision-humaine · annule · interrompu
     property string resultat: ""
     property int codeResultat: 0
     property bool noyauARecharger: false
@@ -63,6 +63,11 @@ PluginComponent {
             // Archétype dovecot 2.4 : pacman réussit, le service ne repart pas.
             // Le code de retour dirait « succès » ; nous, non.
             return "Paquets installés, mais des services ne démarrent plus : " + unitesEnEchec;
+        case "succes-non-verifie":
+            // Interrompue APRÈS l'installation, pendant le contrôle des
+            // services. On ne cache pas que le système est à jour, et on ne
+            // prétend pas avoir vérifié ce qu'on n'a pas vérifié.
+            return "Mise à jour installée, mais le contrôle des services n'a pas pu être fait.";
         case "annule":
             return "Mise à jour annulée. Rien n'a été installé.";
         case "decision-humaine":
@@ -212,6 +217,8 @@ PluginComponent {
         } else if (nouveauResultat === "succes-degrade") {
             // Le code de retour disait « succès ». On ne le répète pas.
             ToastService.showError("Mise à jour installée, système dégradé", root.resumeResultat);
+        } else if (nouveauResultat === "succes-non-verifie") {
+            ToastService.showInfo("Mise à jour installée", root.resumeResultat);
         } else {
             ToastService.showError("La mise à jour a échoué", root.resumeResultat);
         }

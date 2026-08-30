@@ -1,6 +1,6 @@
 pkgname=eschaton-dms-plugin-update
 pkgver=0.1.0
-pkgrel=12
+pkgrel=13
 pkgdesc="Plugin DMS Eschaton : disponibilité et installation des mises à jour"
 arch=(any)
 license=(MIT)

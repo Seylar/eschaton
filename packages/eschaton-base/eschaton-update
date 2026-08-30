@@ -97,6 +97,11 @@ install -d -m755 "$etat_dir"
 # indiscernables pour l'interface.
 snapshot_avant=0
 unites_en_echec=""
+etat_final_ecrit=false
+# Où en est-on : `prevol` (rien n'est modifié), `transaction` (pacman écrit),
+# `verification` (pacman a fini, on contrôle les services). Le filet de sortie
+# ci-dessous en dépend.
+phase_courante=prevol
 
 ecrire_etat() { # $1=résultat $2=code
   local tmp="$etat.tmp"
@@ -114,6 +119,34 @@ ecrire_etat() { # $1=résultat $2=code
   # Renommage atomique : l'interface ne lit jamais un état à moitié écrit.
   mv -f "$tmp" "$etat"
   chmod 644 "$etat"
+  etat_final_ecrit=true
+}
+
+# Filet de sortie : quoi qu'il arrive, l'état ne reste jamais sur « en-cours ».
+#
+# Mesuré le 2026-08-30 : une annulation arrivée pendant le contrôle des
+# services — donc APRÈS que pacman a tout installé — tuait le script sur son
+# `sleep` (`set -e`, code 143) avant qu'il ait pu écrire son verdict. L'état
+# restait « en-cours » pour toujours, et l'interface annonçait une mise à jour
+# « interrompue sans résultat » alors que le système ÉTAIT à jour.
+finaliser() {
+  local code=$?
+  "$etat_final_ecrit" && return 0
+  case "$phase_courante" in
+    verification)
+      # La transaction est validée ; seul le contrôle des services a été coupé.
+      # On ne cache pas que le système est à jour, et on ne prétend pas avoir
+      # vérifié ce qu'on n'a pas vérifié.
+      ecrire_etat succes-non-verifie "$code"
+      ;;
+    *)
+      if "$annulee"; then
+        ecrire_etat annule "$code"
+      else
+        ecrire_etat interrompu "$code"
+      fi
+      ;;
+  esac
 }
 
 # Le dernier snapshot existant avant que nous ne touchions à quoi que ce soit.
@@ -136,6 +169,7 @@ lister_unites_en_echec() {
 annulee=false
 on_term() { annulee=true; }
 trap on_term TERM INT
+trap finaliser EXIT
 
 # Un `pacman` tué en pleine récupération de paquets laisse son verrou derrière
 # lui. On ne le retire que lorsque plus aucun pacman ne tourne — sinon on
@@ -200,6 +234,7 @@ esac
 
 snapshot_avant=$(dernier_snapshot)
 echecs_avant=$(lister_unites_en_echec)
+phase_courante=transaction
 echo "==> Transaction. Snapshot automatique via snap-pac."
 echo "    Point de retour avant transaction : snapshot $snapshot_avant."
 # `-Su` sans `-y` : le pré-vol vient de synchroniser les bases, et la
@@ -222,10 +257,16 @@ if ((rc != 0)); then
   exit "$rc"
 fi
 
+# À partir d'ici, les paquets SONT installés : c'est ce que dit `phase_courante`
+# au filet de sortie si l'on est interrompu avant d'avoir rendu un verdict.
+phase_courante=verification
+
 # Le code de retour de pacman ne suffit pas. Archétype `dovecot 2.4` : la
 # transaction réussit et c'est le service qui ne redémarre plus. On laisse aux
 # unités relancées par les hooks le temps de tomber, puis on compare.
-sleep 3
+# `|| true` : un signal interrompt `sleep`, et sous `set -e` cela suffirait à
+# tuer le script au moment précis où il doit rendre son verdict.
+sleep 3 || true
 echecs_apres=$(lister_unites_en_echec)
 unites_en_echec=$(unites_nouvellement_en_echec "$echecs_avant" "$echecs_apres" | tr '\n' ' ')
 unites_en_echec=${unites_en_echec% }

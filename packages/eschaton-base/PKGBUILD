@@ -1,6 +1,6 @@
 pkgname=eschaton-base
 pkgver=0.1.0
-pkgrel=19
+pkgrel=20
 pkgdesc="Meta-paquet du socle Eschaton : dépendances système et configuration par défaut"
 arch=(any)
 license=(MIT)

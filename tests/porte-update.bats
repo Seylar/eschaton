@@ -479,6 +479,37 @@ FIN
   [ "$status" -eq 0 ]
 }
 
+@test "l'état ne reste jamais sur « en-cours », même tué en plein contrôle" {
+  MAJ="$RACINE/packages/eschaton-base/eschaton-update"
+  # Mesuré le 2026-08-30 : une annulation arrivée APRÈS l'installation, pendant
+  # le contrôle des services, tuait le script sur son `sleep` (`set -e`, code
+  # 143) avant qu'il ait rendu son verdict. L'état restait « en-cours » pour
+  # toujours et l'interface annonçait « interrompue sans résultat » alors que
+  # le système ÉTAIT à jour.
+  run grep -F 'trap finaliser EXIT' "$MAJ"
+  [ "$status" -eq 0 ]
+  bloc=$(awk '/^finaliser\(\)/,/^}/' "$MAJ")
+  [[ "$bloc" == *'"$etat_final_ecrit" && return 0'* ]] || {
+    echo "le filet de sortie écrase un verdict déjà rendu : $bloc"
+    return 1
+  }
+  # Interrompu après l'installation : on ne cache pas que le système est à
+  # jour, et on ne prétend pas avoir vérifié les services.
+  [[ "$bloc" == *"succes-non-verifie"* ]]
+  # Interrompu avant : annulation si elle a été demandée, sinon « interrompu ».
+  [[ "$bloc" == *"ecrire_etat annule"* ]]
+  [[ "$bloc" == *"ecrire_etat interrompu"* ]]
+  # Et le `sleep` du contrôle ne peut plus tuer le script à lui seul.
+  run grep -F 'sleep 3 || true' "$MAJ"
+  [ "$status" -eq 0 ]
+
+  # L'interface connaît le nouvel état — sans quoi elle l'afficherait comme un
+  # résultat vide.
+  run grep -F 'case "succes-non-verifie":' \
+    "$RACINE/packages/eschaton-dms-plugin-update/EschatonUpdateWidget.qml"
+  [ "$status" -eq 0 ]
+}
+
 @test "après un échec, le panneau propose le retour en arrière par la porte du rollback" {
   WIDGET="$RACINE/packages/eschaton-dms-plugin-update/EschatonUpdateWidget.qml"
 
