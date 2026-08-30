@@ -199,5 +199,25 @@ demain. Elles sont sans danger tant que l'ISO reste un livrable d'ingénierie
   `/etc/motd` du profil. S'y ajoute une conséquence de CI : l'ISO dépendrait
   alors d'un paquet publié par `ci.yml`, ce que le commentaire de `iso.yml`
   range déjà parmi les points « à réévaluer au SP4a ». À trancher, pas à bricoler.
+- **`eschaton-install` n'a AUCUNE confirmation avant d'effacer.**
+  `sgdisk --zap-all` part dès que les gardes passent. Or ces gardes vérifient la
+  *nature* de la cible — que c'est bien un disque entier, qu'il n'est pas occupé,
+  que les noms de partition s'en dérivent — **jamais laquelle**. `--disk /dev/sda`
+  tapé pour `/dev/sdb` franchit tout et détruit le mauvais disque. Depuis que la
+  garde `--disk` tient ses promesses, elle est aussi la *seule* protection qui
+  reste, et elle ne couvre pas ce cas-là.
+  Ce n'est pas corrigé ici, volontairement : une confirmation qui vaut quelque
+  chose doit **montrer ce qu'il y a sur le disque** (modèle, taille, partitions,
+  étiquettes) avant de demander, sans quoi elle n'ajoute qu'une frappe et
+  entraîne à répondre oui. Le rendu de ce `lsblk`, le descripteur d'où lire la
+  réponse (le média démarre sur une console série `ttyS0`, cf. plus haut) et le
+  comportement sur EOF — qui doit refuser, jamais consentir — ne se vérifient pas
+  depuis un poste macOS, sans ISO ni VM. Poser à l'aveugle une invite sur la
+  seule opération irrattrapable irait contre la règle même qui a motivé les
+  corrections précédentes.
+  À noter pour qui l'implémentera : **il n'y a pas d'usage scripté à préserver
+  aujourd'hui.** Le chemin réel est déjà interactif — `arch-chroot /mnt passwd`
+  attend une saisie au terminal. Un futur `--yes` devra donc trancher d'abord ce
+  qu'il fait du mot de passe, pas seulement de l'effacement.
 - **Rien n'est prouvé pour le variant T2** (Task 4 du plan) : il dépend d'arbitrages
   utilisateur non tranchés (ADR 0004 §6).
