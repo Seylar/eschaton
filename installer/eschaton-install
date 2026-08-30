@@ -64,10 +64,29 @@ valider_hote "$HOSTNAME_"
 # `valider_disque` remplace l'ancien `[[ -b "$DISK" ]]`, qui ne vérifiait RIEN
 # de ce que son message promettait, et rend le chemin canonique : c'est lui,
 # et non le lien /dev/disk/by-id/… fourni, dont les partitions se dérivent.
-# La répétition à blanc n'a pas de disque sous la main : elle s'en dispense,
-# comme avant, mais la dérivation des noms ci-dessous, elle, est vérifiée.
-if [[ "$DRY_RUN" == "0" ]]; then
+#
+# La répétition à blanc passe par la MÊME garde dès que le périphérique existe
+# ici. Elle la sautait entièrement, et ce que le commentaire présentait comme un
+# filet — `valider_noms_partitions` — n'en est pas un : son test
+# `"$p" == "$disque"[0-9p]*` est satisfait par « /dev/sda1 » → « /dev/sda1p1 ».
+# Résultat mesuré : `--dry-run --disk /dev/sda1` rendait `status 0` et annonçait
+# « sgdisk --zap-all /dev/sda1 », que le chemin réel refuse ; un lien by-id
+# donnait « attendre_bloc …_1234561 » là où le réel écrit « /dev/nvme0n1p1 »
+# (ou « …-part1 » côté udev). La répétition mentait sur les trois entrées mêmes
+# qui ont motivé la garde — alors que sa raison d'être est de DIRE À L'AVANCE ce
+# qui va se passer. Elle ne peut pas valider ce que le chemin réel refuse.
+#
+# Disque absent (répétition depuis un autre poste) : il n'y a rien à interroger.
+# On juge alors la FORME du nom, et on le DIT — c'est moins que la garde
+# complète, ce n'est pas rien, et ce n'est plus un mensonge.
+if [[ "$DRY_RUN" == "0" || -b "$DISK" ]]; then
   DISK="$(valider_disque "$DISK")"
+else
+  valider_forme_disque "$DISK"
+  echo "eschaton-install : répétition à blanc — « $DISK » est absent de cette machine." >&2
+  echo "  Seule la FORME du nom a pu être vérifiée : ni le type réel (disque," >&2
+  echo "  partition, volume LVM, chiffré), ni la canonisation d'un lien. Le chemin" >&2
+  echo "  réel, lui, les vérifie et peut donc encore refuser cette cible." >&2
 fi
 
 # Précondition spec §4.2 : boot UEFI uniquement
@@ -96,22 +115,14 @@ part() { nom_partition "$DISK" "$1"; }
 PART_ESP="$(part 1)"; PART_ROOT="$(part 2)"
 valider_noms_partitions "$DISK" "$PART_ESP" "$PART_ROOT"
 
-# `blockdev --rereadpt` brut rendrait « BLKRRPART: Device or resource busy » —
-# exact, et parfaitement inutile à qui installe. On explique.
-relire_table() { # $1 = disque, $2 = moment, pour le message
-  run_cmd blockdev --rereadpt "$1" && return 0
-  echo "eschaton-install : le noyau refuse de relire la table de partitions de $1" >&2
-  echo "  ($2). C'est qu'une de ses partitions est OCCUPÉE : montée, prise par" >&2
-  echo "  LVM, membre d'un RAID — ou c'est le média depuis lequel vous avez" >&2
-  echo "  démarré. Rien n'a été écrit. Pour voir qui la retient :" >&2
-  echo "      lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS $1 ; findmnt --source $1" >&2
-  exit 1
-}
+# `relire_table` vit dans lib.sh : le chemin réel demande un Linux (UEFI, un vrai
+# disque, blockdev), donc la seule façon d'éprouver ses messages depuis le poste
+# de développement est de pouvoir la sourcer.
 
 # Garde AVANT la première écriture : si le noyau ne peut pas relire la table de
 # partitions, c'est que le disque est OCCUPÉ — y compris la clé USB depuis
 # laquelle on a démarré. On refuse d'effacer un disque en service.
-relire_table "$DISK" "avant le partitionnement"
+relire_table "$DISK" "avant le partitionnement" intact
 
 run_cmd sgdisk --zap-all "$DISK"
 run_cmd sgdisk -n1:0:+4G -t1:ef00 -c1:ESP "$DISK"
@@ -132,7 +143,10 @@ run_cmd sgdisk -n2:0:0 -t2:8300 -c2:eschaton "$DISK"
 #  2. `udevadm settle` — vide la file d'événements udev.
 #  3. `attendre_bloc` — `settle` ne garantit pas que l'événement d'ajout de
 #     partition soit DÉJÀ dans la file au moment où on l'appelle.
-relire_table "$DISK" "après le partitionnement"
+# Troisième argument : à ce point les trois `sgdisk` ont eu lieu. Le message ne
+# peut plus dire « rien n'a été écrit » — il le disait, et un utilisateur dont la
+# table vient d'être effacée pouvait en conclure qu'il n'y avait rien à récupérer.
+relire_table "$DISK" "après le partitionnement" table-reecrite
 run_cmd udevadm settle
 run_cmd attendre_bloc "$PART_ESP"
 run_cmd attendre_bloc "$PART_ROOT"

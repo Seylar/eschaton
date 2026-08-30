@@ -166,6 +166,63 @@ valider_disque() { # $1 = valeur de --disk ; imprime le chemin CANONIQUE du disq
   printf '%s\n' "$reel"
 }
 
+valider_forme_disque() { # $1 = valeur de --disk, quand le périphérique est ABSENT
+  # Répétition à blanc depuis une machine qui n'a pas le disque cible sous la
+  # main : il n'y a rien à interroger, `valider_disque` ne peut donc RIEN
+  # constater. La répétition s'en dispensait entièrement — et rendait `status 0`
+  # avec un plan d'effacement pour les trois entrées mêmes que la garde existe
+  # pour refuser (une partition, un lien by-id nvme, un lien by-id ata).
+  # `valider_noms_partitions` ne rattrapait rien : son test
+  # `"$p" == "$disque"[0-9p]*` est satisfait par « /dev/sda1 » → « /dev/sda1p1 ».
+  # Ce qui reste jugeable sans périphérique, c'est la FORME du nom.
+  #
+  # CE QUE CE CONTRÔLE NE PEUT PAS FAIRE, et qu'il ne faut donc pas laisser
+  # croire : dire le TYPE. `/dev/dm-0`, `/dev/md0` ou un nom de famille inconnue
+  # passent ici et ne seront refusés que par `valider_disque`, le jour de la
+  # vraie installation. C'est moins que la garde complète ; ce n'est pas rien ;
+  # et ce n'est plus une promesse fausse.
+  local nom="$1" ressemble_a_une_partition=0
+  case "$nom" in
+    /dev/*/*)
+      # /dev/disk/by-id/…, /dev/mapper/…, /dev/disk/by-path/… : désigner un
+      # disque ainsi est légitime et même prudent, mais le chemin réel les
+      # CANONISE avant d'en dériver les partitions, et cette résolution demande
+      # le périphérique. Sans lui, tout ce qu'on afficherait serait faux : udev
+      # nomme « …-part1 » là où la répétition écrivait « …1 », et un lien nvme
+      # canonisé donne « /dev/nvme0n1p1 » et non « …_1234561 ».
+      echo "eschaton-install : « $nom » n'est pas un nom de nœud noyau, et le" >&2
+      echo "  périphérique est absent de cette machine : il n'y a rien à résoudre." >&2
+      echo "  Le chemin réel canonise ce genre de lien AVANT d'en dériver les noms" >&2
+      echo "  de partition ; sans le disque sous la main, la répétition à blanc" >&2
+      echo "  n'afficherait que des noms inventés — c'est ce qu'elle faisait." >&2
+      echo "  Répétez avec le nom de nœud (/dev/sda, /dev/nvme0n1), ou depuis la" >&2
+      echo "  machine qui porte réellement ce disque." >&2
+      return 1 ;;
+    /dev/?*) ;;
+    *)
+      echo "eschaton-install : « $nom » n'est pas un nœud de périphérique." >&2
+      echo "  Attendu un disque ENTIER sous /dev (/dev/sda, /dev/nvme0n1, /dev/vda)." >&2
+      return 1 ;;
+  esac
+  # Familles de noms du noyau où le suffixe distingue la partition du disque :
+  # sd/vd/hd/xvd + chiffre, et nvme…n…p… / mmcblk…p… / loop…p… pour celles où le
+  # « p » s'intercale. Le disque lui-même (« /dev/sda », « /dev/nvme0n1 ») ne
+  # correspond à aucun de ces motifs.
+  case "$nom" in
+    /dev/sd[a-z]*[0-9]|/dev/vd[a-z]*[0-9]|/dev/hd[a-z]*[0-9]|/dev/xvd[a-z]*[0-9])
+      ressemble_a_une_partition=1 ;;
+    /dev/nvme[0-9]*n[0-9]*p[0-9]*|/dev/mmcblk[0-9]*p[0-9]*|/dev/loop[0-9]*p[0-9]*)
+      ressemble_a_une_partition=1 ;;
+  esac
+  if ((ressemble_a_une_partition)); then
+    echo "eschaton-install : « $nom » est un nom de PARTITION." >&2
+    echo "  Attendu un disque ENTIER (/dev/sda, /dev/nvme0n1, /dev/vda)." >&2
+    echo "  Le chemin réel le refuse ; la répétition à blanc le refuse donc aussi," >&2
+    echo "  plutôt que d'annoncer un effacement qui n'aura jamais lieu." >&2
+    return 1
+  fi
+}
+
 nom_partition() { # $1 = chemin du disque, $2 = numéro de partition
   # nvme0n1 → nvme0n1p1, mmcblk0 → mmcblk0p1, sda → sda1 : le « p » s'intercale
   # quand le nom du disque se termine par un chiffre.
@@ -190,6 +247,75 @@ valider_noms_partitions() { # $1 = disque, $2… = noms dérivés
     esac
     vus="$vus $p"
   done
+}
+
+# --- relecture de la table de partitions -------------------------------------
+
+# Dit l'état RÉEL du disque au moment où l'on abandonne. « Rien n'a été écrit »
+# figurait dans un message appelé DEUX fois : avant le zap, où c'est vrai, et
+# après `sgdisk --zap-all` et les deux `sgdisk -n`, où c'est faux. Un utilisateur
+# dont la table de partitions vient d'être effacée lisait donc qu'il ne s'était
+# rien passé — et pouvait renoncer à toute tentative de récupération. C'est la
+# règle qu'énonce déjà `valider_disque` : une fausse promesse sur l'opération
+# irrattrapable est pire que pas de promesse du tout.
+etat_du_disque() { # $1 = disque, $2 = intact | table-reecrite
+  if [[ "$2" == "intact" ]]; then
+    echo "  Rien n'a été écrit sur $1 : sa table de partitions est intacte." >&2
+    return 0
+  fi
+  # `table-reecrite` décrit exactement le point où l'installeur en est au second
+  # appel : les trois `sgdisk` ont eu lieu, AUCUN `mkfs` n'a encore tourné.
+  echo "" >&2
+  echo "  ATTENTION — $1 A DÉJÀ ÉTÉ MODIFIÉ. Sa table de partitions a été" >&2
+  echo "  effacée (sgdisk --zap-all) puis réécrite avec deux partitions neuves." >&2
+  echo "  En revanche aucun formatage n'a encore eu lieu : le CONTENU des" >&2
+  echo "  anciennes partitions est toujours sur le disque, c'est la carte qui" >&2
+  echo "  a disparu. Si ce disque portait des données à récupérer :" >&2
+  echo "    1. n'écrivez plus rien dessus et ne relancez pas l'installeur ;" >&2
+  echo "    2. --zap-all détruit AUSSI la sauvegarde GPT de fin de disque : la" >&2
+  echo "       table ne se restaure pas telle quelle, il faut retrouver les" >&2
+  echo "       anciennes partitions en balayant le disque (testdisk, gpart)," >&2
+  echo "       depuis un autre système et sans monter $1." >&2
+}
+
+# `blockdev --rereadpt` brut rendrait « BLKRRPART: Device or resource busy » —
+# exact, et parfaitement inutile à qui installe. On explique.
+#
+# PÉRIMÈTRE RÉEL de cette garde, parce que l'ancien message le donnait trop
+# large : l'ioctl BLKRRPART ne rend EBUSY que si une PARTITION du disque est
+# encore ouverte. Un disque entier utilisé CRU — PV LVM, conteneur LUKS, membre
+# btrfs ou ZFS posé directement sur le disque, sans table de partitions — n'a
+# aucune partition à libérer : il franchit cette garde, et il franchit aussi
+# `valider_disque`, qui ne lui reproche rien (lsblk lui donne le type « disk »).
+# Aucun Linux ici pour l'éprouver — raison de plus pour que le message n'affirme
+# que ce que le code vérifie.
+relire_table() { # $1 = disque, $2 = moment, $3 = état du disque : intact|table-reecrite
+  # $3 par défaut au PIRE cas : un appelant qui oublierait l'argument sur-avertit
+  # au lieu de rassurer à tort. C'est le sens de la marche qu'on veut.
+  local disque="$1" moment="$2" etat="${3:-table-reecrite}"
+  # `blockdev` absent rend 127, que la suite prenait pour un EBUSY : l'utilisateur
+  # lisait « une partition est OCCUPÉE » et partait chercher un montage qui
+  # n'existe pas. Un diagnostic faux coûte plus cher qu'un test de présence.
+  # En répétition à blanc, `run_cmd` n'exécute rien : le cas ne se pose pas — et
+  # `blockdev` n'existe de toute façon pas sur le poste de développement macOS.
+  if [[ "${DRY_RUN:-0}" != "1" ]] && ! command -v blockdev >/dev/null 2>&1; then
+    echo "eschaton-install : blockdev introuvable — impossible de vérifier que le" >&2
+    echo "  noyau relit la table de partitions de $disque ($moment)." >&2
+    echo "  blockdev est livré par util-linux : pacman -S util-linux." >&2
+    echo "  On s'arrête plutôt que de partitionner sans cette garde." >&2
+    etat_du_disque "$disque" "$etat"
+    exit 1
+  fi
+  run_cmd blockdev --rereadpt "$disque" && return 0
+  echo "eschaton-install : le noyau refuse de relire la table de partitions de $disque" >&2
+  echo "  ($moment). C'est qu'une de ses PARTITIONS est encore ouverte : montée," >&2
+  echo "  swap actif (swapon), prise par LVM, par un RAID ou par LUKS, ou tenue" >&2
+  echo "  par un processus — ou c'est le média depuis lequel vous avez démarré." >&2
+  echo "  Pour voir qui la retient :" >&2
+  echo "      lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS $disque" >&2
+  echo "      findmnt --source $disque ; swapon --show" >&2
+  etat_du_disque "$disque" "$etat"
+  exit 1
 }
 
 # --- attente des périphériques de partition ----------------------------------

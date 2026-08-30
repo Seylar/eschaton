@@ -237,6 +237,27 @@ stub_outils() { # $1 = type rendu par lsblk
   [ ! -e "$TEMOIN" ]     # aucune écriture n'a même été TENTÉE
 }
 
+@test "la répétition à blanc applique la garde COMPLÈTE quand le disque est là" {
+  # Le cœur du correctif : dès que le périphérique existe ici, la répétition ne
+  # se contente plus de la forme du nom, elle passe par `valider_disque` — donc
+  # par lsblk et par la canonisation. Elle rend alors exactement le verdict du
+  # chemin réel, ce qui est toute sa raison d'être.
+  bloc="$(un_peripherique_bloc)" || skip "aucun périphérique bloc sur cette machine"
+  stub_outils part
+  run "$BATS_TEST_DIRNAME/../installer/eschaton-install" --dry-run --disk "$bloc" --user seylar
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"disque ENTIER"* ]]
+  [[ "$output" != *"sgdisk"* ]]
+
+  # …et un disque entier reste accepté, canonisé, avec les bons noms dérivés.
+  stub_outils disk
+  run "$BATS_TEST_DIRNAME/../installer/eschaton-install" --dry-run --disk "$bloc" --user seylar
+  [ "$status" -eq 0 ]
+  canon="$(readlink -f "$bloc")"
+  [[ "$output" == *"sgdisk --zap-all $canon"* ]]
+  [[ "$output" != *"absent de cette machine"* ]]
+}
+
 @test "les noms de partition dérivés sont validés, et le sont AVANT le zap" {
   run nom_partition /dev/sda 1;      [ "$output" = "/dev/sda1" ]
   run nom_partition /dev/nvme0n1 2;  [ "$output" = "/dev/nvme0n1p2" ]
@@ -255,6 +276,140 @@ stub_outils() { # $1 = type rendu par lsblk
   garde="$(printf '%s\n' "$output" | grep -n 'blockdev --rereadpt' | head -1 | cut -d: -f1)"
   zap="$(printf '%s\n' "$output" | grep -n 'sgdisk --zap-all' | head -1 | cut -d: -f1)"
   [ "$garde" -lt "$zap" ]
+}
+
+# --- la répétition à blanc doit refuser ce que le chemin réel refuse ----------
+
+@test "la répétition à blanc refuse les trois entrées que le chemin réel refuse" {
+  # Sondes mesurées avant correctif, avec `valider_disque` sautée en --dry-run :
+  #   --disk /dev/sda1               → status 0 et « DRY: sgdisk --zap-all /dev/sda1 »
+  #   --disk /dev/disk/by-id/nvme-…  → « DRY: attendre_bloc …_1234561 » (« p1 » en réalité)
+  #   --disk /dev/disk/by-id/ata-…   → « DRY: attendre_bloc …_XYZ1 » (udev écrit « -part1 »)
+  # Le chemin réel refuse les trois. `valider_noms_partitions` ne rattrapait
+  # rien : son test `"$p" == "$disque"[0-9p]*` est satisfait par
+  # « /dev/sda1 » → « /dev/sda1p1 ». Un mode dont la raison d'être est de DIRE À
+  # L'AVANCE ce qui va se passer ne peut pas valider ce que le vrai chemin refuse.
+  for cible in /dev/sda1 \
+               /dev/disk/by-id/nvme-ESCHATON_TEST_123456 \
+               /dev/disk/by-id/ata-ESCHATON_TEST_XYZ; do
+    run "$BATS_TEST_DIRNAME/../installer/eschaton-install" --dry-run --disk "$cible" --user seylar
+    [ "$status" -eq 1 ] || { echo "accepté en dry-run : $cible"; return 1; }
+    [[ "$output" != *"sgdisk"* ]]        # aucun effacement n'a été annoncé
+    [[ "$output" != *"attendre_bloc"* ]] # aucun nom de partition inventé
+  done
+}
+
+@test "valider_forme_disque juge le nom quand le périphérique est absent" {
+  # Répétition depuis un autre poste : il n'y a rien à interroger. Ce qui reste
+  # jugeable, c'est la FORME du nom — et c'est justement ce qui sépare les trois
+  # entrées ci-dessus d'un vrai nom de disque.
+  run valider_forme_disque /dev/sda1
+  [ "$status" -eq 1 ]; [[ "$output" == *"PARTITION"* ]]
+  run valider_forme_disque /dev/nvme0n1p2;  [ "$status" -eq 1 ]
+  run valider_forme_disque /dev/mmcblk0p1;  [ "$status" -eq 1 ]
+  run valider_forme_disque /dev/vdb3;       [ "$status" -eq 1 ]
+
+  run valider_forme_disque /dev/disk/by-id/nvme-ESCHATON_TEST_123456
+  [ "$status" -eq 1 ]; [[ "$output" == *"nœud noyau"* ]]
+  run valider_forme_disque /dev/disk/by-id/ata-ESCHATON_TEST_XYZ; [ "$status" -eq 1 ]
+  run valider_forme_disque /dev/mapper/vg-lv;                     [ "$status" -eq 1 ]
+  run valider_forme_disque sda;                                   [ "$status" -eq 1 ]
+  run valider_forme_disque /dev;                                  [ "$status" -eq 1 ]
+  run valider_forme_disque "";                                    [ "$status" -eq 1 ]
+
+  # …et les noms de disque ENTIER passent, sans quoi la répétition ne servirait plus.
+  run valider_forme_disque /dev/sda;     [ "$status" -eq 0 ]
+  run valider_forme_disque /dev/vda;     [ "$status" -eq 0 ]
+  run valider_forme_disque /dev/nvme0n1; [ "$status" -eq 0 ]
+  run valider_forme_disque /dev/mmcblk0; [ "$status" -eq 0 ]
+}
+
+@test "la répétition à blanc DIT quand elle n'a pu juger que la forme du nom" {
+  # Le commentaire de l'installeur affirmait que « la dérivation des noms est
+  # vérifiée » en répétition à blanc. Elle ne l'était pas. Le mode annonce
+  # désormais ce qu'il a réellement pu contrôler — et ce qu'il n'a pas pu.
+  [ ! -b /dev/vda ] || skip "/dev/vda existe ici : la garde complète s'applique"
+  run "$BATS_TEST_DIRNAME/../installer/eschaton-install" --dry-run --disk /dev/vda --user seylar
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"absent de cette machine"* ]]
+  [[ "$output" == *"FORME"* ]]
+}
+
+# --- ce que la relecture promet doit être vrai AU MOMENT où elle le promet ----
+
+@test "« Rien n'a été écrit » ne se dit qu'avant le partitionnement" {
+  # Le message était UNIQUE pour DEUX appels : celui d'avant le zap, où il est
+  # vrai, et celui d'après `sgdisk --zap-all` et les deux `sgdisk -n`, où il est
+  # faux. Un utilisateur dont la table vient d'être effacée lisait « Rien n'a
+  # été écrit » — et pouvait renoncer à toute tentative de récupération.
+  STUB="$BATS_TEST_TMPDIR/bin"; mkdir -p "$STUB"
+  printf '#!/bin/sh\nexit 1\n' > "$STUB/blockdev"; chmod +x "$STUB/blockdev"
+  PATH="$STUB:$PATH"; DRY_RUN=0
+
+  run relire_table /dev/eschaton-test "avant le partitionnement" intact
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Rien n'a été écrit"* ]]
+  [[ "$output" != *"A DÉJÀ ÉTÉ MODIFIÉ"* ]]
+
+  run relire_table /dev/eschaton-test "après le partitionnement" table-reecrite
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"Rien n'a été écrit"* ]]
+  [[ "$output" == *"A DÉJÀ ÉTÉ MODIFIÉ"* ]]
+  # …et il ne suffit pas de retirer la fausse promesse : il faut dire quoi faire.
+  [[ "$output" == *"testdisk"* ]]
+
+  # Un état non renseigné retombe sur le pire cas, jamais sur le rassurant.
+  run relire_table /dev/eschaton-test "moment non précisé"
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"Rien n'a été écrit"* ]]
+}
+
+@test "chaque appel de relire_table annonce l'état RÉEL du disque à ce moment" {
+  # Le chemin réel exige un Linux (/sys/firmware/efi, un vrai disque) : il ne
+  # peut pas tourner ici. On verrouille donc le CÂBLAGE, qui est précisément ce
+  # qui était faux — un message unique pour deux moments opposés.
+  src="$BATS_TEST_DIRNAME/../installer/eschaton-install"
+  grep -q 'relire_table "$DISK" "avant le partitionnement" intact' "$src"
+  grep -q 'relire_table "$DISK" "après le partitionnement" table-reecrite' "$src"
+  # Les motifs sont ancrés en début de ligne : les COMMENTAIRES du script citent
+  # eux aussi `sgdisk --zap-all`, et un `grep` lâche les prendrait pour le code.
+  avant="$(grep -n '^relire_table .* intact'         "$src" | head -1 | cut -d: -f1)"
+  zap="$(  grep -n '^run_cmd sgdisk --zap-all'       "$src" | head -1 | cut -d: -f1)"
+  apres="$(grep -n '^relire_table .* table-reecrite' "$src" | head -1 | cut -d: -f1)"
+  [ -n "$avant" ] && [ -n "$zap" ] && [ -n "$apres" ]
+  [ "$avant" -lt "$zap" ]
+  [ "$zap" -lt "$apres" ]
+}
+
+@test "le message de relecture nomme le vrai périmètre de BLKRRPART" {
+  # L'ancienne énumération (« montée, prise par LVM, membre d'un RAID ») oubliait
+  # le swap actif, cas très courant sur une machine déjà installée. Et elle
+  # laissait croire que la garde couvre le disque : BLKRRPART ne rend EBUSY que
+  # si une PARTITION est ouverte — un disque entier utilisé cru (PV LVM, LUKS,
+  # membre btrfs/ZFS sans table) franchit cette garde comme il franchit
+  # `valider_disque`.
+  STUB="$BATS_TEST_TMPDIR/bin"; mkdir -p "$STUB"
+  printf '#!/bin/sh\nexit 1\n' > "$STUB/blockdev"; chmod +x "$STUB/blockdev"
+  PATH="$STUB:$PATH"; DRY_RUN=0
+
+  run relire_table /dev/eschaton-test "avant le partitionnement" intact
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"swap"* ]]
+  [[ "$output" == *"PARTITIONS"* ]]   # le sujet est la partition, pas le disque
+}
+
+@test "blockdev absent est nommé pour ce qu'il est, pas pris pour un disque occupé" {
+  # `blockdev` manquant rend 127, que la suite prenait pour un EBUSY : le message
+  # « une partition est OCCUPÉE » envoyait chercher un montage inexistant.
+  STUB="$BATS_TEST_TMPDIR/vide"; mkdir -p "$STUB"
+  DRY_RUN=0
+  PATH="$STUB" run relire_table /dev/eschaton-test "avant le partitionnement" intact
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"blockdev introuvable"* ]]
+  [[ "$output" == *"util-linux"* ]]
+  [[ "$output" != *"OCCUPÉE"* ]]
+  # …et l'état du disque reste dit, puisque c'est ce que l'utilisateur cherche.
+  [[ "$output" == *"Rien n'a été écrit"* ]]
 }
 
 @test "la relecture de la table est VÉRIFIÉE, pas seulement espérée" {
