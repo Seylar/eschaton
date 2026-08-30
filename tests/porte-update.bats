@@ -342,6 +342,10 @@ FIN
     echo "la branche par défaut ne publie pas d'état lisible par l'interface : $defaut"
     return 1
   }
+  # Et l'interface connaît cet état, sinon elle l'afficherait comme un vide.
+  run grep -F 'case "verdict-inconnu":' \
+    "$RACINE/packages/eschaton-dms-plugin-update/EschatonUpdateWidget.qml"
+  [ "$status" -eq 0 ]
 }
 
 @test "le pré-vol emprunte le vrai chemin, jamais --print" {
@@ -656,6 +660,127 @@ FIN
   premiere=$(printf '%s\n' "$bloc" | sed -n '2p')
   [[ "$premiere" == *'local code=$?'* ]] || {
     echo "le filet de sortie ne capture plus le code en premier : « $premiere »"
+    return 1
+  }
+}
+
+@test "le panneau adopte une transaction qu'il n'a pas lancée" {
+  WIDGET="$RACINE/packages/eschaton-dms-plugin-update/EschatonUpdateWidget.qml"
+  # REVUE DE SÉCURITÉ I3. La sonde n'était armée que par `phase === "en-cours"`,
+  # donc uniquement après un clic sur « Installer ». Une mise à jour déclenchée
+  # par l'ASSISTANT n'affichait rien — alors que tool-catalog.json promet au
+  # modèle que « sa progression s'affiche dans le panneau » — et après un
+  # rechargement du shell le verdict n'était rendu à personne.
+  bloc=$(awk '/Component.onCompleted: \{/,/^    \}/' "$WIDGET")
+  [[ "$bloc" == *"_reconciliation = true"* ]] || {
+    echo "le composant ne cherche pas de transaction existante au démarrage : $bloc"
+    return 1
+  }
+  [[ "$bloc" == *"uniteProcess.running = true"* ]] || {
+    echo "la réconciliation ne consulte pas l'état de l'unité : $bloc"
+    return 1
+  }
+  # Elle lit les DEUX sources, comme la sonde : l'unité et le fichier d'état.
+  bloc=$(awk '/function reconcilier\(/,/^    \}/' "$WIDGET")
+  [ -n "$bloc" ] || {
+    echo "reconcilier() est introuvable — test à réécrire"
+    return 1
+  }
+  [[ "$bloc" == *'phase = "en-cours"'* ]] || {
+    echo "une transaction en vol n'est pas adoptée : $bloc"
+    return 1
+  }
+  [[ "$bloc" == *"suivreJournal()"* ]] || {
+    echo "la transaction adoptée n'est pas suivie dans le journal : $bloc"
+    return 1
+  }
+  # Le journal adopté est borné par le début publié par la TRANSACTION, pas par
+  # l'instant du démarrage du panneau : sinon on rejouerait tout le boot, ou on
+  # perdrait le début de ce qui tourne.
+  [[ "$bloc" == *"champs.debut"* ]] || {
+    echo "le journal adopté n'est pas borné par le début de la transaction : $bloc"
+    return 1
+  }
+  # Un verdict découvert après coup est RENDU, mais sans notification : un toast
+  # annoncerait comme un événement ce qui n'est qu'un constat, et se répéterait
+  # à chaque rechargement du shell.
+  [[ "$bloc" == *"relireJournal()"* ]] || {
+    echo "le verdict découvert après coup n'affiche pas son journal : $bloc"
+    return 1
+  }
+  [[ "$bloc" != *"ToastService"* ]] || {
+    echo "la réconciliation notifie un événement passé : $bloc"
+    return 1
+  }
+}
+
+@test "une annulation n'est pas rendue comme un échec" {
+  WIDGET="$RACINE/packages/eschaton-dms-plugin-update/EschatonUpdateWidget.qml"
+  # REVUE DE SÉCURITÉ I4. `is-active` rend `deactivating` pendant tout le repli
+  # de pacman après un `systemctl stop`. Le panneau testait l'égalité à
+  # « active » seul : il concluait donc « interrompu » — toast rouge « La mise à
+  # jour a échoué » — et ARRÊTAIT la sonde, si bien que le `resultat=annule`
+  # réellement écrit ensuite n'était jamais lu. Fenêtre atteinte dès que pacman
+  # met plus d'une seconde à se replier.
+  run grep -F '"deactivating"' "$WIDGET"
+  [ "$status" -eq 0 ]
+  # L'appartenance à la liste des états vivants, jamais l'égalité à « active ».
+  suspectes=$(grep -n 'uniteOutput.text.trim() === "active"' "$WIDGET" || true)
+  [ -z "$suspectes" ] || {
+    echo "l'unité est encore jugée par égalité à « active » : $suspectes"
+    return 1
+  }
+  bloc=$(awk '/readonly property var etatsUniteVivante/,/\]$/' "$WIDGET")
+  for etat in active activating deactivating reloading; do
+    [[ "$bloc" == *"\"$etat\""* ]] || {
+      echo "l'état « $etat » manque à la liste des états vivants : $bloc"
+      return 1
+    }
+  done
+  # Et « interrompu » n'est admis qu'après plusieurs lectures terminales
+  # concordantes, jamais sur la seconde où l'unité se replie.
+  bloc=$(awk '/id: etatProcess/,/^    \}/' "$WIDGET")
+  [[ "$bloc" == *"_lecturesTerminales"* ]] || {
+    echo "« interrompu » est encore conclu sur une seule lecture : $bloc"
+    return 1
+  }
+}
+
+@test "un succès non vérifié laisse la porte de sortie ouverte" {
+  WIDGET="$RACINE/packages/eschaton-dms-plugin-update/EschatonUpdateWidget.qml"
+  # REVUE DE SÉCURITÉ M4. `succes-non-verifie` est l'état « installé mais NON
+  # vérifié » : les paquets sont en place, le contrôle des services n'a pas pu
+  # être fait. C'est exactement la situation où revenir en arrière peut servir ;
+  # l'omettre retirait la porte de sortie au moment de plus grande incertitude.
+  bloc=$(awk '/readonly property bool restaurationUtile/,/snapshotAvant > 0/' "$WIDGET")
+  [[ "$bloc" == *'"succes-non-verifie"'* ]] || {
+    echo "le retour en arrière n'est pas proposé après un succès non vérifié : $bloc"
+    return 1
+  }
+  # …et toujours pas après un pré-vol qui n'a rien modifié.
+  [[ "$bloc" != *'"echec-prevol"'* ]] || {
+    echo "le rollback est proposé alors que rien n'a été modifié : $bloc"
+    return 1
+  }
+}
+
+@test "toute donnée machine interpolée dans le panneau est affichée en texte brut" {
+  WIDGET="$RACINE/packages/eschaton-dms-plugin-update/EschatonUpdateWidget.qml"
+  # REVUE DE SÉCURITÉ M5. Le délégué du journal posait bien `Text.PlainText`,
+  # mais les deux textes qui interpolent `unitesEnEchec` et `snapshotAvant` —
+  # des valeurs venues de `systemctl` et du fichier d'état — ne le posaient pas.
+  # Les noms d'unités systemd n'admettent pas `<` aujourd'hui ; on ne parie pas
+  # là-dessus pour du texte affiché.
+  #
+  # Chaque StyledText qui interpole une propriété de `root` doit porter
+  # `textFormat: Text.PlainText`. On compte : autant de blocs interpolants que
+  # de déclarations de format brut.
+  interpolants=$(grep -c 'root\.unitesEnEchec\|root\.snapshotAvant' "$WIDGET")
+  [ "$interpolants" -gt 0 ]
+  formats=$(grep -c 'textFormat: Text.PlainText' "$WIDGET")
+  [ "$formats" -ge 3 ] || {
+    echo "seulement $formats déclaration(s) de texte brut : le journal, l'explication"
+    echo "d'échec et l'offre de retour arrière doivent toutes les trois en porter une"
     return 1
   }
 }

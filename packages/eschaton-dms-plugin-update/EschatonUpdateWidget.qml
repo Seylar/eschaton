@@ -26,13 +26,30 @@ PluginComponent {
     // "" (rien en cours) · "authentification" · "en-cours" · "termine"
     property string phase: ""
     // "" · succes · succes-degrade · succes-non-verifie · echec · echec-prevol
-    // · decision-humaine · annule · interrompu
+    // · decision-humaine · annule · interrompu · verdict-inconnu
     property string resultat: ""
     property int codeResultat: 0
     property bool noyauARecharger: false
     property bool annulationEnCours: false
     property string erreurPorte: ""
     property bool _uniteActive: false
+    // Vrai le temps de la toute première sonde, celle qui cherche une
+    // transaction que le panneau n'a PAS lancée (voir reconcilier()).
+    property bool _reconciliation: false
+    // Combien de sondes consécutives ont vu l'unité éteinte SANS verdict écrit.
+    // Conclure sur une seule lecture confondait un repli en cours avec une
+    // disparition — voir la sonde.
+    property int _lecturesTerminales: 0
+
+    // Les états que `systemctl is-active` rend pour une unité qui n'a pas fini.
+    // `deactivating` en fait partie, et son absence était un défaut : une
+    // annulation y passe forcément, pendant tout le repli de pacman. Le panneau
+    // la lisait comme une unité éteinte, concluait « interrompu » — toast rouge
+    // « La mise à jour a échoué » — et ARRÊTAIT la sonde, si bien que le
+    // `resultat=annule` réellement écrit ensuite n'était jamais lu. Corrigé le
+    // 2026-08-30 (revue de sécurité I4).
+    readonly property var etatsUniteVivante:
+        ["active", "activating", "deactivating", "reloading", "refreshing"]
     // Le point de retour calculé par la transaction avant d'agir. C'est lui
     // qui rend l'échec réversible sans ligne de commande.
     property int snapshotAvant: 0
@@ -78,6 +95,11 @@ PluginComponent {
             return "La mise à jour a échoué (code " + codeResultat + ").";
         case "interrompu":
             return "La mise à jour s'est interrompue sans rendre de résultat.";
+        case "verdict-inconnu":
+            // Le pré-vol a rendu un mot que la transaction ne sait pas
+            // interpréter : elle s'arrête sans rien modifier plutôt que de
+            // continuer sur un état inconnu (fail-closed, cf. eschaton-update).
+            return "Le pré-vol a rendu un verdict inattendu. Rien n'a été modifié.";
         default:
             return "";
         }
@@ -86,13 +108,21 @@ PluginComponent {
     readonly property bool resultatEstUnEchec:
         resultat === "echec" || resultat === "echec-prevol"
         || resultat === "decision-humaine" || resultat === "interrompu"
-        || resultat === "succes-degrade"
+        || resultat === "succes-degrade" || resultat === "verdict-inconnu"
 
     // La restauration n'est proposée que lorsqu'elle a un sens : quelque chose
     // a été modifié, et un point de retour existe. Après un échec de pré-vol,
     // rien n'a bougé — proposer un rollback y serait du bruit alarmiste.
+    //
+    // `succes-non-verifie` y a été ajouté le 2026-08-30 (revue de sécurité M4).
+    // C'est l'état « installé mais NON vérifié » : les paquets sont en place et
+    // le contrôle des services n'a pas pu être fait. C'est exactement la
+    // situation où l'utilisateur peut avoir besoin de revenir en arrière —
+    // l'omettre lui retirait la porte de sortie au moment où l'incertitude est
+    // la plus grande.
     readonly property bool restaurationUtile:
-        (resultat === "echec" || resultat === "succes-degrade" || resultat === "interrompu")
+        (resultat === "echec" || resultat === "succes-degrade"
+         || resultat === "interrompu" || resultat === "succes-non-verifie")
         && snapshotAvant > 0
 
     // ————————————————————————— actions —————————————————————————
@@ -102,6 +132,42 @@ PluginComponent {
         checking = true;
         checkError = "";
         checkProcess.running = true;
+    }
+
+    // Le suivi en direct, borné au début de LA transaction observée. Partagé
+    // par le lancement depuis le panneau et par l'adoption d'une transaction
+    // lancée ailleurs : les deux regardent la même unité, de la même façon.
+    function suivreJournal() {
+        journalProcess.command = [
+            "/usr/bin/journalctl",
+            "--no-pager",
+            "-q",
+            "-f",
+            "-o", "cat",
+            "-u", "eschaton-update.service",
+            "--since", "@" + _debutEpoch
+        ];
+        journalProcess.running = true;
+    }
+
+    // Relecture COMPLÈTE du journal de cette transaction, sans `-f`.
+    //
+    // Mesuré le 2026-08-30 : le suiveur était arrêté à l'instant même où la
+    // sonde voyait l'unité s'éteindre, et la fin du journal n'arrivait jamais.
+    // Sur le cas « décision humaine », le panneau affichait donc tout sauf LA
+    // question — précisément ce que l'utilisateur doit lire. Une relecture
+    // bornée supprime la course au lieu de la temporiser.
+    function relireJournal() {
+        journalProcess.running = false;
+        journalFinalProcess.command = [
+            "/usr/bin/journalctl",
+            "--no-pager",
+            "-q",
+            "-o", "cat",
+            "-u", "eschaton-update.service",
+            "--since", "@" + _debutEpoch
+        ];
+        journalFinalProcess.running = true;
     }
 
     function startUpdate() {
@@ -116,22 +182,72 @@ PluginComponent {
         snapshotAvant = 0;
         unitesEnEchec = "";
         confirmRestauration = false;
+        _lecturesTerminales = 0;
         phase = "authentification";
         // `--since` sur l'instant du clic : on ne rejoue pas le journal des
         // transactions précédentes, et on ne rate pas les premières lignes de
         // celle-ci si l'unité démarre avant que le suiveur soit prêt.
         _debutEpoch = Math.floor(Date.now() / 1000);
-        journalProcess.command = [
-            "/usr/bin/journalctl",
-            "--no-pager",
-            "-q",
-            "-f",
-            "-o", "cat",
-            "-u", "eschaton-update.service",
-            "--since", "@" + _debutEpoch
-        ];
-        journalProcess.running = true;
+        suivreJournal();
         applyProcess.running = true;
+    }
+
+    // ————————————————— adoption d'une transaction tierce —————————————————
+    //
+    // LE PANNEAU NE PORTE PAS LA TRANSACTION, donc il ne doit pas supposer
+    // l'avoir lancée. Jusqu'au 2026-08-30 la sonde n'était armée que par
+    // `phase === "en-cours"`, c'est-à-dire uniquement après un clic sur
+    // « Installer ». Deux conséquences, toutes deux corrigées ici (revue de
+    // sécurité I3) :
+    //
+    //   - une mise à jour déclenchée par l'ASSISTANT (`trigger_update`)
+    //     n'affichait rien, alors que `tool-catalog.json` promet au modèle que
+    //     « sa progression s'affiche dans le panneau « Mises à jour » ».
+    //     L'artefact mentait au modèle qui le lit ;
+    //   - après un rechargement du shell — qui arrive, et que la spec §5.3
+    //     revendique comme sans effet sur la transaction — le verdict n'était
+    //     jamais rendu à personne.
+    //
+    // La réconciliation lit les deux mêmes sources que la sonde : l'état de
+    // l'unité, et le fichier d'état de la transaction.
+    function reconcilier(champs) {
+        const resultatLu = champs.resultat || "";
+        if (!resultatLu)
+            return;   // rien ne s'est passé depuis le démarrage : /run est vide
+
+        // L'instant de début est publié par la transaction elle-même. C'est lui
+        // qui borne le journal, exactement comme l'instant du clic le fait pour
+        // une transaction que nous avons lancée — sans quoi nous rejouerions le
+        // journal de toutes les transactions du boot.
+        const debut = Date.parse(champs.debut || "");
+        _debutEpoch = isNaN(debut) ? 0 : Math.floor(debut / 1000);
+
+        if (_uniteActive) {
+            // Une transaction est EN VOL, et ce n'est pas nous qui l'avons
+            // lancée. On l'adopte : même journal, même sonde, même verdict à
+            // l'arrivée. Le bouton « Annuler » redevient disponible avec elle.
+            journalModel.clear();
+            resultat = "";
+            codeResultat = 0;
+            erreurPorte = "";
+            annulationEnCours = false;
+            confirmRestauration = false;
+            _lecturesTerminales = 0;
+            phase = "en-cours";
+            suivreJournal();
+            return;
+        }
+
+        if (resultatLu === "en-cours")
+            return;   // unité éteinte sans verdict : rien d'honnête à afficher
+
+        // Transaction déjà terminée. On rend le verdict et son journal, mais
+        // SANS notification : un toast annoncerait comme un événement ce qui
+        // n'est qu'un constat, et se répéterait à chaque rechargement du shell.
+        phase = "termine";
+        resultat = resultatLu;
+        codeResultat = parseInt(champs.code || "0") || 0;
+        relireJournal();
     }
 
     function cancelUpdate() {
@@ -187,23 +303,7 @@ PluginComponent {
     }
 
     function terminer(nouveauResultat, code) {
-        journalProcess.running = false;
-        // Relecture COMPLÈTE du journal de cette transaction, sans `-f`.
-        //
-        // Mesuré le 2026-08-30 : le suiveur était arrêté à l'instant même où la
-        // sonde voyait l'unité s'éteindre, et la fin du journal n'arrivait
-        // jamais. Sur le cas « décision humaine », le panneau affichait donc
-        // tout sauf LA question — précisément ce que l'utilisateur doit lire.
-        // Une relecture bornée supprime la course au lieu de la temporiser.
-        journalFinalProcess.command = [
-            "/usr/bin/journalctl",
-            "--no-pager",
-            "-q",
-            "-o", "cat",
-            "-u", "eschaton-update.service",
-            "--since", "@" + _debutEpoch
-        ];
-        journalFinalProcess.running = true;
+        relireJournal();
         annulationEnCours = false;
         confirmRestauration = false;
         phase = "termine";
@@ -224,7 +324,13 @@ PluginComponent {
         }
     }
 
-    Component.onCompleted: Qt.callLater(root.refresh)
+    Component.onCompleted: {
+        // Première chose : chercher une transaction qui tournerait déjà, ou un
+        // verdict que personne n'a encore lu (voir reconcilier()).
+        _reconciliation = true;
+        uniteProcess.running = true;
+        Qt.callLater(root.refresh);
+    }
 
     Timer {
         interval: root.checkIntervalMinutes * 60 * 1000
@@ -386,7 +492,14 @@ PluginComponent {
         onExited: function(exitCode, exitStatus) {
             // `is-active` rend un code non nul dès que l'unité n'est plus
             // active : c'est la SORTIE qui porte l'information.
-            root._uniteActive = uniteOutput.text.trim() === "active";
+            //
+            // On teste l'appartenance aux états VIVANTS, jamais l'égalité à
+            // « active » seul : `deactivating` est l'état de tout le repli de
+            // pacman après un `systemctl stop`, et le prendre pour une unité
+            // éteinte transformait chaque annulation un peu lente en échec
+            // (revue de sécurité I4).
+            root._uniteActive =
+                root.etatsUniteVivante.indexOf(uniteOutput.text.trim()) !== -1;
             etatProcess.running = true;
         }
     }
@@ -402,14 +515,35 @@ PluginComponent {
             root.noyauARecharger = champs.noyau_a_recharger === "oui";
             root.snapshotAvant = parseInt(champs.snapshot_avant || "0") || 0;
             root.unitesEnEchec = champs.unites_en_echec || "";
-            if (root._uniteActive)
+
+            // La toute première sonde ne conclut pas : elle adopte, ou rend un
+            // verdict que personne n'avait lu.
+            if (root._reconciliation) {
+                root._reconciliation = false;
+                root.reconcilier(champs);
                 return;
+            }
+
+            if (root._uniteActive) {
+                root._lecturesTerminales = 0;
+                return;
+            }
             if (root.phase !== "en-cours")
                 return;
             const resultatLu = champs.resultat || "";
             if (!resultatLu || resultatLu === "en-cours") {
-                // L'unité s'est arrêtée sans que la transaction ait pu écrire
-                // son verdict : tuée sans ménagement, ou disparue. On ne
+                // L'unité paraît éteinte sans que la transaction ait écrit son
+                // verdict. Avant de le croire, on le CONFIRME : le filet de
+                // sortie de la transaction écrit toujours un verdict, donc
+                // cette combinaison désigne presque toujours l'instant précis
+                // du repli, pas une disparition. Conclure sur une seule lecture
+                // rendait « interrompu » — toast rouge — pour une annulation
+                // parfaitement propre, et arrêtait la sonde avant que le
+                // `resultat=annule` réel ne soit lisible (revue I4).
+                root._lecturesTerminales += 1;
+                if (root._lecturesTerminales < 3)
+                    return;
+                // Trois secondes d'unité éteinte sans un mot : là, on ne
                 // prétend pas savoir — et surtout on n'appelle pas ça un succès.
                 root.terminer("interrompu", 0);
                 return;
@@ -572,6 +706,12 @@ PluginComponent {
                             return "pacman a posé une question à laquelle Eschaton refuse de répondre à votre place. La question exacte est dans le journal ci-dessus, ainsi que, le cas échéant, la nouvelle Arch qui la documente. Rien n'a été modifié.";
                         return "Rien n'a été approuvé à votre place. La sortie exacte de pacman est ci-dessus, telle quelle.";
                     }
+                    // `unitesEnEchec` vient de `systemctl list-units` : une
+                    // donnée machine interpolée dans du texte affiché. Comme le
+                    // délégué du journal, on interdit toute interprétation en
+                    // balisage plutôt que de parier sur le jeu de caractères
+                    // des noms d'unités (revue de sécurité M5).
+                    textFormat: Text.PlainText
                     wrapMode: Text.WordWrap
                     color: Theme.error
                     font.pixelSize: Theme.fontSizeSmall
@@ -588,6 +728,9 @@ PluginComponent {
                           + root.snapshotAvant + "). L'état actuel n'est pas détruit : il est mis de côté."
                         : "Un point de retour existe : l'état d'avant cette mise à jour (snapshot "
                           + root.snapshotAvant + ")."
+                    // Même règle que ci-dessus : rien de ce qui vient du
+                    // fichier d'état n'est interprété comme du balisage.
+                    textFormat: Text.PlainText
                     wrapMode: Text.WordWrap
                     color: Theme.surfaceVariantText
                     font.pixelSize: Theme.fontSizeSmall
