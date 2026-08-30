@@ -88,6 +88,13 @@ plafonne à 1 Go par site, Releases à 2 Gio par fichier).
 | `ESCHATON_ISO_WORK` | `iso/work` | arborescence de travail de mkarchiso |
 | `ESCHATON_ISO_OUT` | `iso/out` | où atterrissent l'image et sa somme |
 | `ESCHATON_ISO_VERSION` | la date du jour | estampille l'image (la CI y met le tag) |
+| `ESCHATON_ISO_VARIANT` | `nominal` | équivaut à `--variant` ; `t2` **refusé sous CI** |
+| `ESCHATON_T2_GPU` | `indetermine` | équivaut à `--gpu` ; sans effet hors variant T2 |
+
+| Option | Valeurs | Effet |
+|---|---|---|
+| `--variant` | `nominal` (défaut), `t2` | choisit l'image ; un variant inconnu est **refusé**, jamais rabattu sur le nominal |
+| `--gpu` | `indetermine` (défaut), `igpu`, `amd` | paramètres GPU du variant T2 — voir §Points ouverts |
 
 ### Ce que `build-iso` vérifie, et pourquoi il le vérifie
 
@@ -314,10 +321,18 @@ le réseau mentirait sur ce qu'il mesure. Le filet reste le **snapshot
 pré-mise-à-jour et le rollback** — ce que l'ADR 0004 §4.4 appelle précisément le
 test de résistance le plus sévère de notre fonctionnalité phare.
 
-*Note de terrain (2026-08-30)* : `linux-t2` est en **7.1.8.arch1-3** alors que la
-veille relevait un amont en 7.1.5 début août. Le retard structurel décrit par la
-veille §2.2 est réel dans son mécanisme (mainteneur unique, dépôt tiers), mais il
-**n'était pas observable ce jour-là**. Il reste à mesurer dans la durée.
+*Mesure de terrain (2026-08-30)* — les deux ISO ont été construites le même jour,
+ce qui donne le retard sans avoir à l'estimer :
+
+| ISO | Paquet noyau | Version |
+|---|---|---|
+| nominal | `extra/linux` | **7.1.11**.arch1-1 |
+| variant T2 | `arch-mact2/linux-t2` | **7.1.8**.arch1-3 |
+
+**Trois versions correctives de retard**, constatées. C'est le risque R2 de la
+veille, et c'est la première fois qu'il porte un chiffre — la veille le donnait
+« qualitativement avéré, pas chiffré » (§10.3). Un instantané n'est pas une
+tendance, mais l'ordre de grandeur est établi.
 
 ## L'interdiction de publier — trois verrous
 

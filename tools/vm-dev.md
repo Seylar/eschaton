@@ -3284,3 +3284,188 @@ et se reconstruit en cinq minutes de toute façon.
 
 > Le compte `seylar` de cette VM a le mot de passe `eschaton`, comme les deux
 > autres (§8.2, §10.8). VM jetable, à ne pas exposer.
+
+---
+
+## 20. Le variant T2 — construction réelle (SP4b-1, Task 4)
+
+Déroulé le **2026-08-30**, même Mac Apple Silicon, conteneur x86_64 **émulé**.
+
+**Ce que cette section prouve, et ce qu'elle ne prouve pas.** Elle prouve que
+l'image existe, qu'elle contient le bon noyau, et que le dépôt tiers n'en sort
+pas. Elle **ne prouve rien sur le démarrage** : aucune machine T2 n'a été
+approchée, et il n'existe pas de VM capable de simuler une puce T2. Tout le §4
+du DoD de la spec reste ouvert — c'est la Task 5, et elle appartient à l'auteur.
+
+### 20.1 Trois affirmations du brief, vérifiées et corrigées
+
+Avant de construire quoi que ce soit, trois points du dossier ne résistaient pas
+à la vérification. Ils sont consignés ici parce qu'ils changent la tâche.
+
+| Affirmation | Réalité constatée le 2026-08-30 |
+|---|---|
+| « `apple-bce` est un paquet » (plan Task 4.1, spec §3.3) | **Faux.** L'index de `https://mirror.funami.tech/arch-mact2/os/x86_64/arch-mact2.db` publie **37 paquets**, aucun de ce nom. Le pilote est compilé *dans* `linux-t2`. L'inscrire aurait fait échouer le `pacstrap` sur « target not found ». |
+| « les sections de ce document vont jusqu'à §35 » | **Faux.** Elles s'arrêtaient à **§19** ; d'où ce §20. |
+| « `bats tests/` : 146 tests attendus » | **80** sur `origin/main`. Les 146 comptent vraisemblablement les tests non versionnés de la branche `socle`. |
+
+Deux constats de dépôt, non prévus par la veille, ont aussi orienté la liste :
+
+- **`linux-t2` déclare `provides = linux`** et *ne déclare pas* `conflicts`. Deux
+  conséquences : rien ne signale le doublon si l'on garde le paquet amont — d'où
+  le retrait explicite de `linux` — et un crochet alpm déclenché sur la cible
+  `linux` peut se voir présenter `linux-t2`. La garde tranche donc sur le **nom
+  exact**, jamais sur ce que le paquet fournit.
+- **`mkinitcpio-archiso-t2` (version 73)** livre les mêmes chemins que le
+  `mkinitcpio-archiso` d'Arch **sans déclarer ni `conflicts` ni `provides`** :
+  les deux ensemble donnent un conflit de fichiers. Il est écarté — voir la
+  réserve au §20.5.
+
+### 20.2 Le faux positif qui a arrêté la première construction
+
+La toute première tentative s'est arrêtée **avant `mkarchiso`**, sur ma propre
+garde de cloisonnement :
+
+```
+build-iso : le dépôt tiers arch-mact2 a fui dans airootfs/ …
+/tmp/iso-work/profil/airootfs/etc/motd:38:  Noyau linux-t2, issu du dépôt tiers arch-mact2 : non signé…
+```
+
+La garde cherchait la chaîne `arch-mact2` dans tout `airootfs/`. Or le motd du
+variant **nomme le dépôt exprès**, pour prévenir l'utilisateur. L'invariant à
+tenir n'est pas « le mot n'apparaît nulle part » mais « aucune **configuration
+pacman** de l'image ne déclare ce dépôt ». Une garde qui confond les deux se
+fait désarmer au premier faux positif — ce qui la rendrait pire qu'inutile.
+
+Elle cherche désormais une section `[arch-mact2]` où que ce soit sous
+`airootfs/`, **plus** toute mention dans les fichiers que pacman lit vraiment
+(`etc/pacman.conf`, `etc/pacman.d/`). Le motd passe ; une vraie fuite non.
+
+### 20.3 Construction
+
+```bash
+docker run --rm --privileged --platform linux/amd64 \
+  -e ESCHATON_ISO_WORK=/tmp/iso-work -e ESCHATON_ISO_OUT=/out \
+  -v "$PWD":/eschaton -v /chemin/sortie:/out \
+  -w /eschaton archlinux:base-devel iso/build-iso --variant t2
+```
+
+```
+==> Variant T2 : application du delta (ADR 0004 — toléré, jamais supporté)
+    paquets ajoutés : linux-t2 apple-bcm-firmware t2fanrd
+    paquets retirés : linux
+```
+
+| | Variant T2 | ISO nominal (§19.2, pour comparaison) |
+|---|---|---|
+| Image | `eschaton-t2-2026.08.30-x86_64.iso` | `eschaton-2026.08.29-x86_64.iso` |
+| Taille | **1 270 255 616 o (1,18 Gio)** | 1 257 252 864 o (1,17 Gio) |
+| SHA-256 | `62f10f3094806ada953d9cccf0f723ceca1e5c535b977a67022aa5522eb4cc42` | `c71bdeb…` |
+| `vmlinuz` | `vmlinuz-linux-t2`, 17 097 216 o | `vmlinuz-linux`, ≈ 15 Mio |
+| `initramfs` | `initramfs-linux-t2.img`, **218 866 918 o** | ≈ 90 Mio |
+| `airootfs.sfs` | 788 348 928 o | ≈ 1,1 Gio |
+| Paquets dans le live | **180** | 178 |
+| Noyau | `linux-t2 7.1.8.arch1-3` | `linux` amont |
+| Durée | ≈ 7 min, **non chronométrée précisément** | 4 min 55 s |
+
+> **L'initramfs pèse 2,4 fois celui du nominal** (219 Mio contre ≈ 90). Ce n'est
+> pas expliqué ici, seulement constaté : `linux-t2` embarque davantage de
+> modules, et le crochet `archiso` les emporte largement. Sur une machine de
+> 16 Gio ce n'est pas un problème de démarrage, mais c'est un écart à surveiller
+> — et une raison de plus de mesurer le temps de démarrage réel en Task 5.
+
+### 20.4 Ce que l'image contient réellement
+
+Le journal de construction n'est pas une preuve du contenu : on relit donc
+l'image produite.
+
+```console
+$ bsdtar -tf eschaton-t2-…iso | grep -E 'vmlinuz|initramfs'
+eschaton/boot/x86_64/initramfs-linux-t2.img
+eschaton/boot/x86_64/vmlinuz-linux-t2
+```
+
+**Le noyau amont a bien disparu de l'image** — il n'y a qu'un seul vmlinuz.
+De même, `/etc/mkinitcpio.d/` du système livré ne contient que `linux-t2.preset`.
+
+Les trois entrées d'amorçage, extraites de l'image :
+
+```
+01  Eschaton — installation (x86_64, UEFI) — Mac T2
+    vmlinuz-linux-t2 … console=ttyS0,115200 intel_iommu=on iommu=pt pcie_ports=compat pm_async=off
+02  Eschaton — installation (sans console série) — Mac T2
+    (idem, sans console série)
+03  Eschaton — Mac T2, écran noir (nomodeset)
+    (idem 01, plus nomodeset)
+```
+
+**Le cloisonnement du dépôt tiers, vérifié sur l'artefact** — c'est-à-dire en
+extrayant le squashfs et en lisant le `pacman.conf` que la machine installée
+recevrait :
+
+```console
+$ unsquashfs … airootfs.sfs etc/pacman.conf etc/pacman.d
+$ grep -rn 'arch-mact2' root/etc/pacman.conf root/etc/pacman.d/
+(aucune occurrence)
+```
+
+Le `[eschaton]` y est, en `SigLevel = Optional TrustAll` comme sur le nominal ;
+`arch-mact2` n'y est pas. C'est l'ADR 0004 §4.2 tenu, constaté sur le produit et
+non sur l'intention.
+
+Liste de paquets du live, extraite de `eschaton/pkglist.x86_64.txt` :
+`linux-t2 7.1.8.arch1-3`, `apple-bcm-firmware 14.0-1`, `t2fanrd r16.48baf96-1`,
+`iwd 3.12-1` — et **ni `linux`, ni `wpa_supplicant`**.
+
+### 20.5 Réserves de cette passe
+
+- **Aucun démarrage.** L'image n'a jamais été amorcée, nulle part. Une machine
+  T2 ne se simule pas : le disque *est* derrière la puce.
+- **`mkinitcpio-archiso-t2` écarté sans contre-épreuve.** C'est ce
+  qu'`archiso-t2` utilise, et nous lui préférons le `mkinitcpio-archiso` d'Arch
+  pour éviter un conflit de fichiers et seize versions de retard. Si le média
+  démarre puis **n'arrive pas à trouver son propre système de fichiers racine**
+  sur le Mac, c'est la première piste à remonter.
+- **Le retard de `linux-t2` est mesuré, et il est réel.** Les deux
+  constructions du jour donnent la comparaison directe, sur la même machine et
+  à la même date :
+
+  | | Paquet | Version tirée le 2026-08-30 |
+  |---|---|---|
+  | ISO nominal | `extra/linux` | **7.1.11**.arch1-1 |
+  | Variant T2 | `arch-mact2/linux-t2` | **7.1.8**.arch1-3 |
+
+  **Trois versions correctives de retard**, constatées et non déduites. C'est
+  exactement le risque R2 de la veille (§2.2), et c'est la première fois qu'on
+  lui met un chiffre — la veille elle-même le disait « qualitativement avéré,
+  pas chiffré » (§10.3). Un instantané n'est pas une tendance : à re-mesurer,
+  mais l'ordre de grandeur est là.
+- **`--privileged` de nouveau.** Comme au §19, la construction locale emploie
+  `--privileged` ; le jeu réduit `--cap-add SYS_ADMIN` n'est prouvé qu'en CI, et
+  la CI ne construit pas ce variant — par conception.
+- **La garde d'alignement n'a tourné que sur des arborescences factices**
+  (`ESCHATON_T2_RACINE` pointé sur un faux `/`), jamais sur un système installé.
+
+### 20.6 L'interdiction de publier, exercée
+
+Les trois verrous du §« Le variant T2 » de `iso/README.md` sont couverts par
+`tests/iso-variant-t2.bats`. Le premier est le seul qu'on puisse *exécuter*
+depuis ce Mac, et c'est pour cela qu'il est placé avant les contrôles de root et
+d'architecture :
+
+```console
+$ GITHUB_ACTIONS=true iso/build-iso --variant t2
+build-iso : le variant T2 ne se construit PAS en intégration continue.
+  Il embarque apple-bcm-firmware — du firmware Apple extrait de macOS — …
+$ echo $?
+1
+```
+
+…et le chemin nominal, lui, franchit ce contrôle sans le voir (il s'arrête plus
+loin, sur son propre refus de tourner hors root) : c'est le test
+« le chemin nominal reste inchangé sous CI ».
+
+### 20.7 Nettoyage
+
+L'image T2 et son `NE-PAS-PUBLIER.txt` sont restés hors du dépôt, dans un
+répertoire de travail temporaire. **Elle n'est ni versionnée, ni téléversée, ni
+publiée** — c'est tout l'objet de la Task 4.3.
