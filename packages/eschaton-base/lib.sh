@@ -111,16 +111,31 @@ update_marqueur_sommaire() {
 # On échoue fermé : tout ce qui n'est pas franchement propre est traité comme
 # une décision humaine.
 verdict_prevol() { # $1=fichier de sortie du pré-vol $2=code de retour de pacman
-  local invites sommaire
-  invites=$(grep -cE "$(update_marqueurs_invite)" "$1" || true)
-  sommaire=$(grep -cF "$(update_marqueur_sommaire)" "$1" || true)
+  local invites invites_du_sommaire
+  # ON COMPTE LES INVITES, PAS LES LIGNES — corrigé le 2026-08-30 (revue de
+  # sécurité I2). `grep -cE` compte des LIGNES : deux invites qui partagent une
+  # ligne n'en valaient qu'une, le verdict tombait sur « propre », et le
+  # `printf 'y'` de la transaction allait approuver LA PREMIÈRE question — un
+  # remplacement de paquet — au lieu du sommaire. Ce n'est pas théorique :
+  # pacman écrit bien deux messages sur une même ligne, on l'a mesuré (le cas
+  # « … [Y/n]  there is nothing to do » ci-dessous, vm-dev.md §31.3).
+  # `grep -oE | wc -l` compte les OCCURRENCES. Le `|| true` protège du
+  # `pipefail` de l'appelant quand il n'y en a aucune.
+  invites=$({ grep -oE "$(update_marqueurs_invite)" "$1" || true; } | wc -l | tr -d ' ')
+  # Et l'unique invite doit être CELLE DU SOMMAIRE. On ne se contente pas de
+  # constater que le sommaire est quelque part dans le fichier : on exige que
+  # l'invite comptée soit portée par une ligne de sommaire. Sans cela, une
+  # question isolée sur une ligne et un sommaire sans invite lisible ailleurs
+  # passeraient ensemble pour un pré-vol propre.
+  invites_du_sommaire=$({ grep -F "$(update_marqueur_sommaire)" "$1" || true; } \
+    | { grep -oE "$(update_marqueurs_invite)" || true; } | wc -l | tr -d ' ')
   # Les questions AVANT « rien à faire », et l'ordre n'est pas cosmétique.
   # Mesuré le 2026-08-30 sur un vrai remplacement de paquet : après notre refus
   # du remplacement, pacman n'avait plus rien à faire et écrivait
   # « there is nothing to do » — sur la même ligne que la question. Tester
   # « rien à faire » d'abord transformait donc une décision humaine en succès
   # silencieux, ce qui est précisément le mensonge qu'on veut interdire.
-  if ((invites == 1)) && ((sommaire >= 1)); then
+  if ((invites == 1)) && ((invites_du_sommaire == 1)); then
     printf 'propre\n'
   elif ((invites >= 1)); then
     printf 'decision\n'

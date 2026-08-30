@@ -277,6 +277,73 @@ FIN
   [ "$output" = "erreur" ]
 }
 
+@test "deux invites sur UNE ligne ne passent pas pour un pré-vol propre" {
+  source "$RACINE/packages/eschaton-base/lib.sh"
+  sortie="$BATS_TEST_TMPDIR/prevol.txt"
+
+  # REVUE DE SÉCURITÉ I2. Le verdict comptait des LIGNES (`grep -cE`), pas des
+  # invites. Deux questions partageant une ligne n'en valaient donc qu'une, le
+  # verdict tombait sur « propre », et le `printf 'y'` de la transaction allait
+  # approuver LA PREMIÈRE — un remplacement de paquet — au lieu du sommaire.
+  # Que pacman écrive deux messages sur une même ligne n'est pas une hypothèse :
+  # c'est mesuré (vm-dev.md §31.3, le cas « … [Y/n]  there is nothing to do »).
+  printf ':: Replace varnish with extra/vinyl-cache? [Y/n] :: Proceed with installation? [Y/n]\n' \
+    > "$sortie"
+  run verdict_prevol "$sortie" 1
+  [ "$output" = "decision" ] || {
+    echo "deux invites sur une ligne ont été prises pour un pré-vol propre : $output"
+    return 1
+  }
+
+  # Et l'unique invite doit être CELLE DU SOMMAIRE : une question isolée, avec
+  # un sommaire mentionné ailleurs sans invite lisible, n'est pas « propre ».
+  printf ':: Replace varnish with extra/vinyl-cache? [Y/n]\nProceed with installation\n' \
+    > "$sortie"
+  run verdict_prevol "$sortie" 1
+  [ "$output" = "decision" ] || {
+    echo "une invite hors sommaire a été prise pour le sommaire : $output"
+    return 1
+  }
+
+  # Contre-épreuve : le vrai sommaire, seul, reste « propre ». Une garde qui
+  # refuserait tout ne prouverait rien.
+  printf 'Total Download Size:   14.11 MiB\n:: Proceed with installation? [Y/n]\n' > "$sortie"
+  run verdict_prevol "$sortie" 1
+  [ "$output" = "propre" ]
+}
+
+@test "un verdict de pré-vol inattendu arrête la transaction (fail-closed)" {
+  MAJ="$RACINE/packages/eschaton-base/eschaton-update"
+  # REVUE DE SÉCURITÉ M3. Le `case` du verdict n'avait ni branche `propre`
+  # explicite ni `*)` : un mot inattendu — valeur ajoutée à `verdict_prevol` et
+  # oubliée ici, sortie tronquée — ne correspondait à AUCUNE branche, et le
+  # script POURSUIVAIT jusqu'à la transaction. Le seul chemin qui installe doit
+  # être celui qui a été explicitement autorisé, jamais celui qui reste.
+  bloc=$(awk '/^case "\$verdict" in$/,/^esac$/' "$MAJ")
+  [ -n "$bloc" ] || {
+    echo "le case du verdict est introuvable — test à réécrire"
+    return 1
+  }
+  [[ "$bloc" == *"propre)"* ]] || {
+    echo "le verdict « propre » n'est pas une branche explicite : $bloc"
+    return 1
+  }
+  [[ "$bloc" == *"*)"* ]] || {
+    echo "le case du verdict n'a pas de branche par défaut : $bloc"
+    return 1
+  }
+  # La branche par défaut s'ARRÊTE : elle ne se contente pas de journaliser.
+  defaut=$(printf '%s\n' "$bloc" | awk '/^  \*\)$/,/;;/')
+  [[ "$defaut" == *"exit 1"* ]] || {
+    echo "la branche par défaut ne s'arrête pas : $defaut"
+    return 1
+  }
+  [[ "$defaut" == *"ecrire_etat verdict-inconnu"* ]] || {
+    echo "la branche par défaut ne publie pas d'état lisible par l'interface : $defaut"
+    return 1
+  }
+}
+
 @test "le pré-vol emprunte le vrai chemin, jamais --print" {
   MAJ="$RACINE/packages/eschaton-base/eschaton-update"
   # `--print` est structurellement aveugle : son `cb_question` répond OUI aux
@@ -370,7 +437,25 @@ FIN
   [ "$status" -eq 0 ]
 
   # Une seule réponse transmise, et une seule fois.
-  [ "$(grep -c "printf 'y" "$MAJ")" -eq 1 ]
+  #
+  # On compte dans le CODE, commentaires exclus (ils parlent de cette réponse,
+  # justement pour l'encadrer), et on compte des OCCURRENCES, pas des lignes :
+  # `grep -c` comptait des lignes, si bien que `printf 'y\ny\n'` — deux
+  # approbations sur une seule ligne, donc une question de plus approuvée à la
+  # place de l'utilisateur — passait la garde au vert (revue de sécurité M1).
+  ligne_approbation=$(grep -v -E '^[[:space:]]*#' "$MAJ" | grep -F "printf 'y" || true)
+  [ "$(printf '%s\n' "$ligne_approbation" | grep -c .)" -eq 1 ] || {
+    echo "il n'y a pas exactement une ligne qui transmet une approbation :"
+    printf '%s\n' "$ligne_approbation"
+    return 1
+  }
+  # Et cette ligne unique ne transmet qu'un seul « y ».
+  nb_y=$(printf '%s' "$ligne_approbation" | grep -oE 'y\\n' | grep -c . || true)
+  [ "$nb_y" -eq 1 ] || {
+    echo "l'approbation transmise porte $nb_y réponses au lieu d'une :"
+    printf '%s\n' "$ligne_approbation"
+    return 1
+  }
 }
 
 @test "le panneau montre le journal de l'unité, et ne fabrique pas son verdict" {
@@ -553,6 +638,26 @@ FIN
   # Et le paquet déclare la dépendance qui fournit l'action `org.eschaton.rollback`.
   run grep -F 'eschaton-dms-plugin-rollback' "$RACINE/packages/eschaton-dms-plugin-update/PKGBUILD"
   [ "$status" -eq 0 ]
+}
+
+@test "le verrou est libéré sur TOUTE sortie, pas seulement après la transaction" {
+  MAJ="$RACINE/packages/eschaton-base/eschaton-update"
+  # REVUE DE SÉCURITÉ I5. Seule la branche d'annulation de la TRANSACTION
+  # libérait le verrou. Une annulation pendant le PRÉ-VOL en sortait sans rien
+  # libérer — et c'est la fenêtre la plus longue, celle qui contient le `-Sy`.
+  # Le filet de sortie couvre désormais tous les chemins.
+  bloc=$(awk '/^finaliser\(\)/,/^}/' "$MAJ")
+  [[ "$bloc" == *"liberer_verrou_orphelin"* ]] || {
+    echo "le filet de sortie ne libère pas le verrou : $bloc"
+    return 1
+  }
+  # `local code=$?` doit rester la PREMIÈRE instruction du filet : tout appel
+  # avant elle écraserait le code de sortie qu'on capture.
+  premiere=$(printf '%s\n' "$bloc" | sed -n '2p')
+  [[ "$premiere" == *'local code=$?'* ]] || {
+    echo "le filet de sortie ne capture plus le code en premier : « $premiere »"
+    return 1
+  }
 }
 
 @test "eschaton-update refuse le mode transaction à un appelant non privilégié" {

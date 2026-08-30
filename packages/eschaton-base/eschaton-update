@@ -131,6 +131,17 @@ ecrire_etat() { # $1=résultat $2=code
 # « interrompue sans résultat » alors que le système ÉTAIT à jour.
 finaliser() {
   local code=$?
+  # LE VERROU EST LIBÉRÉ SUR TOUTE SORTIE — ajouté le 2026-08-30 (revue de
+  # sécurité I5). Seule la branche d'annulation de la TRANSACTION faisait ce
+  # ménage ; une annulation pendant le PRÉ-VOL en sortait sans rien libérer,
+  # alors que c'est la fenêtre la plus longue — elle contient le `-Sy`, donc
+  # toute la synchronisation des bases. Le placer ici couvre les deux, et
+  # toutes les sorties à venir : `liberer_verrou_orphelin` est déjà
+  # conditionnel (il ne retire rien tant qu'un pacman tourne), donc l'appeler
+  # sur le chemin nominal ne coûte qu'un `pgrep`.
+  # `local code=$?` doit rester la PREMIÈRE instruction : tout appel avant elle
+  # écraserait le code de sortie qu'on est en train de capturer.
+  liberer_verrou_orphelin
   "$etat_final_ecrit" && return 0
   case "$phase_courante" in
     verification)
@@ -210,7 +221,14 @@ if "$annulee"; then
   exit 0
 fi
 
-case "$(verdict_prevol "$prevol" "$prevol_rc")" in
+# Le verdict est capturé UNE fois : le relire changerait de valeur si le fichier
+# de pré-vol bougeait entre deux lectures.
+verdict=$(verdict_prevol "$prevol" "$prevol_rc")
+case "$verdict" in
+  propre)
+    # Le seul verdict qui autorise la suite. Explicite, et pas simplement « ce
+    # qui reste » : voir la branche `*)` ci-dessous.
+    ;;
   rien)
     ecrire_etat succes 0
     echo "==> Rien à mettre à jour."
@@ -228,6 +246,19 @@ case "$(verdict_prevol "$prevol" "$prevol_rc")" in
     echo "    pas encore poser. Rien n'a été modifié : Eschaton préfère s'arrêter" >&2
     echo "    plutôt que de répondre à ta place." >&2
     echo "    La question posée par pacman est dans la sortie ci-dessus." >&2
+    exit 1
+    ;;
+  *)
+    # FAIL-CLOSED — ajouté le 2026-08-30 (revue de sécurité M3). Sans cette
+    # branche, un verdict inattendu — une valeur ajoutée à `verdict_prevol` et
+    # oubliée ici, une sortie tronquée — ne correspondait à AUCUN `case` et le
+    # script POURSUIVAIT jusqu'à la transaction, `printf 'y'` compris. Le seul
+    # chemin qui installe quoi que ce soit doit être celui qui a été
+    # explicitement autorisé, jamais celui qui reste.
+    ecrire_etat verdict-inconnu 1
+    echo "==> Verdict de pré-vol inattendu : « $verdict »." >&2
+    echo "    Eschaton s'arrête sans rien modifier plutôt que de continuer sur" >&2
+    echo "    un état qu'il ne sait pas interpréter." >&2
     exit 1
     ;;
 esac
