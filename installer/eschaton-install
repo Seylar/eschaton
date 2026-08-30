@@ -1,23 +1,93 @@
 #!/usr/bin/env bash
 # Installeur Eschaton — spec docs/superpowers/specs/2026-08-27-socle-design.md §4.
-# S'exécute depuis un environnement live Arch (archboot aarch64 / ISO officielle x86_64).
+# S'exécute depuis un environnement live Arch : l'ISO Eschaton (SP4b-1), où il est
+# déjà présent en /usr/local/bin, ou un live tiers (archboot aarch64, ISO Arch x86_64).
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib.sh
 source "$(dirname "$0")/lib.sh"
 
+usage() {
+  echo "usage: eschaton-install [--dry-run] --disk /dev/X --user NOM [--hostname H]" >&2
+}
+
 DRY_RUN=0; DISK=""; HOSTNAME_="eschaton"; USERNAME=""
+disk_vu=0; hote_vu=0; user_vu=0
 while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --dry-run) DRY_RUN=1 ;;
-    --disk) DISK="$2"; shift ;;
-    --hostname) HOSTNAME_="$2"; shift ;;
-    --user) USERNAME="$2"; shift ;;
-    *) echo "option inconnue : $1" >&2; exit 1 ;;
-  esac; shift
+  # `--option=valeur` est acceptée au même titre que `--option valeur` : la
+  # première forme est courante et se faisait rejeter en « option inconnue »,
+  # un message qui accuse l'option alors que seule sa FORME posait problème.
+  opt="$1"; val=""; colle=0
+  if [[ "$opt" == --*=* ]]; then val="${opt#*=}"; opt="${opt%%=*}"; colle=1; fi
+  case "$opt" in
+    --dry-run)
+      ((colle == 0)) || { echo "eschaton-install : --dry-run n'attend pas de valeur." >&2; usage; exit 1; }
+      DRY_RUN=1 ;;
+    # `$# -ge 2` avant de consommer $2 : sans ce test, `--disk` en DERNIER token
+    # fait échouer le script sur « $2: unbound variable » sous `set -u` — un
+    # message de bash, pas de nous, qui n'apprend rien à celui qui installe.
+    --disk|--hostname|--user)
+      if ((colle == 0)); then
+        [[ $# -ge 2 ]] || { echo "eschaton-install : $opt attend un argument." >&2; usage; exit 1; }
+        val="$2"; shift
+      fi
+      [[ -n "$val" ]] || { echo "eschaton-install : $opt attend un argument." >&2; usage; exit 1; }
+      # Une option de valeur RÉPÉTÉE est refusée. `--disk /dev/sda --disk
+      # /dev/sdb` retenait silencieusement la dernière : sur la seule opération
+      # irréversible du dépôt, deviner laquelle des deux cibles est la bonne
+      # n'est pas un service à rendre.
+      case "$opt" in
+        --disk)
+          ((disk_vu == 0)) || { echo "eschaton-install : --disk indiqué plusieurs fois (« $DISK » puis « $val »)." >&2
+                                echo "  Le disque désigné est EFFACÉ : on refuse de choisir à votre place." >&2; exit 1; }
+          disk_vu=1; DISK="$val" ;;
+        --hostname)
+          ((hote_vu == 0)) || { echo "eschaton-install : --hostname indiqué plusieurs fois (« $HOSTNAME_ » puis « $val »)." >&2; exit 1; }
+          hote_vu=1; HOSTNAME_="$val" ;;
+        --user)
+          ((user_vu == 0)) || { echo "eschaton-install : --user indiqué plusieurs fois (« $USERNAME » puis « $val »)." >&2; exit 1; }
+          user_vu=1; USERNAME="$val" ;;
+      esac ;;
+    *) echo "option inconnue : $1" >&2; usage; exit 1 ;;
+  esac
+  shift
 done
 export DRY_RUN
-[[ -n "$DISK" && -n "$USERNAME" ]] || { echo "usage: eschaton-install [--dry-run] --disk /dev/X --user NOM [--hostname H]" >&2; exit 1; }
+[[ -n "$DISK" && -n "$USERNAME" ]] || { usage; exit 1; }
+
+# Validation AVANT toute écriture : ces trois valeurs finissent dans des
+# commandes privilégiées et dans des fichiers de configuration du système cible.
+# Le disque, en plus, est effacé sans confirmation à l'étape 1 — se tromper de
+# cible est la seule erreur de cet installeur qui ne se rattrape pas.
+valider_utilisateur "$USERNAME"
+valider_hote "$HOSTNAME_"
+# `valider_disque` remplace l'ancien `[[ -b "$DISK" ]]`, qui ne vérifiait RIEN
+# de ce que son message promettait, et rend le chemin canonique : c'est lui,
+# et non le lien /dev/disk/by-id/… fourni, dont les partitions se dérivent.
+#
+# La répétition à blanc passe par la MÊME garde dès que le périphérique existe
+# ici. Elle la sautait entièrement, et ce que le commentaire présentait comme un
+# filet — `valider_noms_partitions` — n'en est pas un : son test
+# `"$p" == "$disque"[0-9p]*` est satisfait par « /dev/sda1 » → « /dev/sda1p1 ».
+# Résultat mesuré : `--dry-run --disk /dev/sda1` rendait `status 0` et annonçait
+# « sgdisk --zap-all /dev/sda1 », que le chemin réel refuse ; un lien by-id
+# donnait « attendre_bloc …_1234561 » là où le réel écrit « /dev/nvme0n1p1 »
+# (ou « …-part1 » côté udev). La répétition mentait sur les trois entrées mêmes
+# qui ont motivé la garde — alors que sa raison d'être est de DIRE À L'AVANCE ce
+# qui va se passer. Elle ne peut pas valider ce que le chemin réel refuse.
+#
+# Disque absent (répétition depuis un autre poste) : il n'y a rien à interroger.
+# On juge alors la FORME du nom, et on le DIT — c'est moins que la garde
+# complète, ce n'est pas rien, et ce n'est plus un mensonge.
+if [[ "$DRY_RUN" == "0" || -b "$DISK" ]]; then
+  DISK="$(valider_disque "$DISK")"
+else
+  valider_forme_disque "$DISK"
+  echo "eschaton-install : répétition à blanc — « $DISK » est absent de cette machine." >&2
+  echo "  Seule la FORME du nom a pu être vérifiée : ni le type réel (disque," >&2
+  echo "  partition, volume LVM, chiffré), ni la canonisation d'un lien. Le chemin" >&2
+  echo "  réel, lui, les vérifie et peut donc encore refuser cette cible." >&2
+fi
 
 # Précondition spec §4.2 : boot UEFI uniquement
 if [[ "$DRY_RUN" == "0" && ! -d /sys/firmware/efi ]]; then
@@ -36,27 +106,71 @@ fi
 # au-delà de LIMIT_USAGE_PERCENT (85 % par défaut) de l'ESP, et chaque snapshot
 # amarré au menu y stocke son kernel et son initramfs. Trop petit = filet de
 # sécurité qui s'arrête en silence.
+part() { nom_partition "$DISK" "$1"; }
+# TOUTE la validation dérivée précède le premier appel destructeur : les noms
+# des partitions se déduisent du nom du disque, et cette déduction n'était
+# confrontée au réel qu'APRÈS `sgdisk --zap-all` — l'installeur détruisait
+# d'abord et abandonnait ensuite. Rien d'irréversible ne doit précéder une
+# validation complète.
+PART_ESP="$(part 1)"; PART_ROOT="$(part 2)"
+valider_noms_partitions "$DISK" "$PART_ESP" "$PART_ROOT"
+
+# `relire_table` vit dans lib.sh : le chemin réel demande un Linux (UEFI, un vrai
+# disque, blockdev), donc la seule façon d'éprouver ses messages depuis le poste
+# de développement est de pouvoir la sourcer.
+
+# Garde AVANT la première écriture : si le noyau ne peut pas relire la table de
+# partitions, c'est que le disque est OCCUPÉ — y compris la clé USB depuis
+# laquelle on a démarré. On refuse d'effacer un disque en service.
+relire_table "$DISK" "avant le partitionnement" intact
+
 run_cmd sgdisk --zap-all "$DISK"
 run_cmd sgdisk -n1:0:+4G -t1:ef00 -c1:ESP "$DISK"
 run_cmd sgdisk -n2:0:0 -t2:8300 -c2:eschaton "$DISK"
-part() { [[ "$DISK" == *[0-9] ]] && echo "${DISK}p$1" || echo "${DISK}$1"; }
-run_cmd mkfs.vfat -F32 -n ESP "$(part 1)"
-run_cmd mkfs.btrfs -f -L eschaton "$(part 2)"
+
+# La relecture de la table de partitions par le noyau est ASYNCHRONE. `sgdisk`
+# rend la main avant que /dev/<disque>1 n'existe : sans attente, le `mkfs.vfat`
+# ci-dessous échoue par intermittence, et d'autant plus rarement que la machine
+# est rapide — donc jamais en VM et parfois sur du vrai matériel.
+#
+# Trois gardes, et il en faut trois :
+#  1. `blockdev --rereadpt` — la seule DÉTECTION réelle. `sgdisk` peut rendre 0
+#     en avertissant que le noyau n'a pas relu la table ; les anciens nœuds
+#     /dev/sdX1 survivent alors au partitionnement, l'attente ci-dessous les
+#     prend pour les nouveaux et `mkfs.vfat` formate l'ANCIENNE géométrie.
+#     BLKRRPART rend EBUSY dans ce cas : c'est le `partprobe` que prescrivait le
+#     plan Task 2.3, avec util-linux (déjà tiré par `base`) au lieu de parted.
+#  2. `udevadm settle` — vide la file d'événements udev.
+#  3. `attendre_bloc` — `settle` ne garantit pas que l'événement d'ajout de
+#     partition soit DÉJÀ dans la file au moment où on l'appelle.
+# Troisième argument : à ce point les trois `sgdisk` ont eu lieu. Le message ne
+# peut plus dire « rien n'a été écrit » — il le disait, et un utilisateur dont la
+# table vient d'être effacée pouvait en conclure qu'il n'y avait rien à récupérer.
+relire_table "$DISK" "après le partitionnement" table-reecrite
+run_cmd udevadm settle
+run_cmd attendre_bloc "$PART_ESP"
+run_cmd attendre_bloc "$PART_ROOT"
+
+run_cmd mkfs.vfat -F32 -n ESP "$PART_ESP"
+run_cmd mkfs.btrfs -f -L eschaton "$PART_ROOT"
 
 # 2. Subvolumes
-run_cmd mount "$(part 2)" /mnt
+run_cmd mount "$PART_ROOT" /mnt
 for sv in @ @home @log @pkg @snapshots; do run_cmd btrfs subvolume create "/mnt/$sv"; done
 run_cmd umount /mnt
 opts="compress=zstd:1,noatime"
-run_cmd mount -o "subvol=@,$opts" "$(part 2)" /mnt
+run_cmd mount -o "subvol=@,$opts" "$PART_ROOT" /mnt
 run_cmd mkdir -p /mnt/home /mnt/var/log /mnt/var/cache/pacman/pkg /mnt/.snapshots /mnt/boot
-run_cmd mount -o "subvol=@home,$opts" "$(part 2)" /mnt/home
-run_cmd mount -o "subvol=@log,$opts" "$(part 2)" /mnt/var/log
-run_cmd mount -o "subvol=@pkg,$opts" "$(part 2)" /mnt/var/cache/pacman/pkg
-run_cmd mount -o "subvol=@snapshots,$opts" "$(part 2)" /mnt/.snapshots
-run_cmd mount "$(part 1)" /mnt/boot
+run_cmd mount -o "subvol=@home,$opts" "$PART_ROOT" /mnt/home
+run_cmd mount -o "subvol=@log,$opts" "$PART_ROOT" /mnt/var/log
+run_cmd mount -o "subvol=@pkg,$opts" "$PART_ROOT" /mnt/var/cache/pacman/pkg
+run_cmd mount -o "subvol=@snapshots,$opts" "$PART_ROOT" /mnt/.snapshots
+run_cmd mount "$PART_ESP" /mnt/boot
 
 # 3. Dépôt [eschaton] dans le live env, puis pacstrap
+# Idempotent : sur l'ISO Eschaton le dépôt est DÉJÀ déclaré (le profil archiso
+# livre le même bloc et le même fichier de miroir), les deux commandes ne font
+# alors que constater. Sur un live tiers, elles l'installent.
 run_cmd bash -c 'grep -q "^\[eschaton\]" /etc/pacman.conf || printf "\n[eschaton]\nSigLevel = Optional TrustAll\nInclude = /etc/pacman.d/eschaton-mirror\n" >> /etc/pacman.conf'
 # Le `\$` est indispensable : `$arch` doit atterrir LITTÉRALEMENT dans le
 # fichier, c'est pacman qui le substitue (dépôt publié par architecture,
@@ -80,7 +194,9 @@ chroot_cmd 'pacman-key --init && pacman-key --populate'
 chroot_cmd 'ln -sf /usr/share/zoneinfo/Europe/Paris /etc/localtime && hwclock --systohc || true'
 chroot_cmd 'sed -i "s/^#fr_FR.UTF-8/fr_FR.UTF-8/; s/^#en_US.UTF-8/en_US.UTF-8/" /etc/locale.gen && locale-gen'
 chroot_cmd 'echo LANG=fr_FR.UTF-8 > /etc/locale.conf && echo KEYMAP=fr > /etc/vconsole.conf'
-run_cmd bash -c "echo '$HOSTNAME_' > /mnt/etc/hostname"
+# `write_file` et non `bash -c "echo '$HOSTNAME_' > …"` : plus aucune valeur
+# fournie par l'utilisateur n'est interpolée dans du code shell (cf. lib.sh).
+write_file /mnt/etc/hostname "$HOSTNAME_"
 # `rm -f` d'abord : /etc/os-release est un LIEN SYMBOLIQUE vers
 # ../usr/lib/os-release (paquet `filesystem`). Sans la suppression, le `cp` suit
 # le lien et écrase /usr/lib/os-release — un fichier que `filesystem` possède et
@@ -92,7 +208,9 @@ chroot_cmd 'rm -f /etc/os-release && cp /usr/share/eschaton/os-release /etc/os-r
 # Provisioning autorisé (spec §3) : activer le dépôt [eschaton] sur le système cible
 chroot_cmd 'grep -q "eschaton.conf" /etc/pacman.conf || printf "\nInclude = /etc/pacman.d/eschaton.conf\n" >> /etc/pacman.conf'
 chroot_cmd 'sed -i "s/^SNAPPER_CONFIGS=.*/SNAPPER_CONFIGS=\"root\"/" /etc/conf.d/snapper'
-chroot_cmd "useradd -m -G wheel $USERNAME"
+# Appel direct, sans `bash -c` : le nom d'utilisateur n'est plus interpolé dans
+# une chaîne de commande, il est passé comme argument.
+run_cmd arch-chroot /mnt useradd -m -G wheel "$USERNAME"
 if [[ "$DRY_RUN" == "0" ]]; then arch-chroot /mnt passwd "$USERNAME"; else echo "DRY: passwd $USERNAME"; fi
 chroot_cmd 'systemctl preset-all'
 

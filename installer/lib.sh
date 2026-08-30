@@ -5,6 +5,19 @@ run_cmd() {
   if [[ "${DRY_RUN:-0}" == "1" ]]; then echo "DRY: $*"; else "$@"; fi
 }
 
+# Écrit un contenu dans un fichier SANS passer par une chaîne shell.
+# Motif : `bash -c "echo '$VAR' > fichier"` interpole VAR dans du code shell ;
+# une valeur contenant une apostrophe ou un `;` s'y exécuterait. Les valeurs
+# concernées (hostname) sont désormais validées en amont, mais la validation et
+# l'absence d'interpolation sont deux défenses distinctes : on garde les deux.
+write_file() { # $1 = chemin, $2 = contenu (une ligne)
+  if [[ "${DRY_RUN:-0}" == "1" ]]; then
+    echo "DRY: écrire « $2 » dans $1"
+  else
+    printf '%s\n' "$2" > "$1"
+  fi
+}
+
 detect_arch() {
   # macOS dit « arm64 » là où Linux dit « aarch64 » : les tests bats tournent
   # sur le Mac, le script sur le live env — un seul dialecte en sortie.
@@ -44,4 +57,296 @@ microcode_for_cpu() { # x86_64 uniquement : détection du vendeur
   if grep -q GenuineIntel /proc/cpuinfo 2>/dev/null; then echo intel-ucode
   elif grep -q AuthenticAMD /proc/cpuinfo 2>/dev/null; then echo amd-ucode
   fi
+}
+
+# --- validation des arguments (différés SP4 du bilan du Socle) ----------------
+
+# Comptes que `base` crée TOUJOURS sur une cible Arch. `useradd` les refuserait
+# — mais il ne tourne qu'à l'étape 4, c'est-à-dire APRÈS l'effacement du disque
+# et après le pacstrap : l'installation s'arrêterait sur un disque déjà vidé.
+# Liste volontairement courte : ce sont les comptes du paquet `filesystem`
+# (/usr/lib/sysusers.d/basic.conf) plus les trois que `base` amène avec systemd,
+# dbus et util-linux. Le préfixe « systemd- » couvre le reste de la famille.
+COMPTES_RESERVES=(root bin daemon mail ftp http nobody dbus uuidd polkitd)
+
+valider_utilisateur() { # $1 = nom de compte
+  # Règle de useradd(8) telle qu'appliquée par shadow : commence par une
+  # minuscule ou un souligné, puis minuscules, chiffres, souligné ou tiret ;
+  # 32 caractères au plus. Volontairement plus stricte que « ce que useradd
+  # accepte » : ce nom finit dans un `arch-chroot … useradd`, dans un chemin de
+  # /home et dans une invite `passwd`.
+  local nom="$1"
+  if [[ ! "$nom" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+    echo "eschaton-install : nom d'utilisateur invalide « $nom »." >&2
+    echo "  Attendu : minuscule ou « _ » en tête, puis [a-z0-9_-], 32 signes au plus." >&2
+    return 1
+  fi
+  # La regex seule laisse passer « root » : conforme à useradd(8) dans sa forme,
+  # impossible dans les faits. Deux filets, dans cet ordre :
+  local reserve
+  for reserve in "${COMPTES_RESERVES[@]}"; do
+    if [[ "$nom" == "$reserve" ]]; then
+      echo "eschaton-install : « $nom » est un compte SYSTÈME, pas un compte d'utilisateur." >&2
+      echo "  useradd le refuserait — mais seulement après l'effacement du disque" >&2
+      echo "  et le pacstrap, sur un système déjà à moitié installé." >&2
+      return 1
+    fi
+  done
+  if [[ "$nom" == systemd-* ]]; then
+    echo "eschaton-install : « $nom » est réservé aux comptes de service systemd." >&2
+    return 1
+  fi
+  # …et, hors répétition à blanc, une interrogation de la base locale : l'ISO
+  # Eschaton et le système cible partagent leurs paquets, donc leurs comptes
+  # système. Elle attrape ce que la liste ci-dessus ignore. Écartée en dry-run :
+  # la répétition se fait souvent sur son propre poste, où le compte que l'on
+  # s'apprête à créer sur la cible existe déjà — le refus y serait faux.
+  if [[ "${DRY_RUN:-0}" != "1" ]] && command -v getent >/dev/null 2>&1 &&
+     getent passwd "$nom" >/dev/null 2>&1; then
+    echo "eschaton-install : le compte « $nom » existe déjà dans cet environnement." >&2
+    echo "  L'environnement live et la cible partagent leurs paquets, donc leurs" >&2
+    echo "  comptes système : useradd échouerait sur la cible, après l'effacement." >&2
+    return 1
+  fi
+}
+
+valider_hote() { # $1 = nom d'hôte
+  # RFC 1123 : lettres, chiffres et tirets ; ni tiret ni point en tête ou en
+  # queue ; 63 caractères au plus pour une étiquette. On n'accepte qu'une seule
+  # étiquette (pas de point) : /etc/hostname n'est pas un FQDN.
+  local nom="$1"
+  if [[ ! "$nom" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$ ]]; then
+    echo "eschaton-install : nom d'hôte invalide « $nom »." >&2
+    echo "  Attendu : [a-zA-Z0-9-], sans tiret en tête ni en queue, 63 signes au plus." >&2
+    return 1
+  fi
+}
+
+# --- validation du disque cible ----------------------------------------------
+
+valider_disque() { # $1 = valeur de --disk ; imprime le chemin CANONIQUE du disque
+  # `[[ -b ]]` NE DISTINGUE PAS un disque entier d'une partition, d'un volume
+  # LVM ou d'un lien /dev/disk/by-id/… — le test suit les liens. Le message
+  # d'erreur promettait pourtant « un disque ENTIER » sans que rien ne le
+  # vérifie, et l'unique opération irréversible du dépôt (`sgdisk --zap-all`)
+  # s'exécutait AVANT que les noms de partition dérivés ne soient confrontés au
+  # réel. Trois cas, relevés par la revue de sécurité et confirmés en relisant
+  # l'ordre des appels (le zap précédait `attendre_bloc`) :
+  #   /dev/sda1                → le zap s'appliquait à la PARTITION, puis abandon
+  #   /dev/disk/by-id/nvme-…   → la table du disque était effacée, puis abandon
+  #                              (udev nomme la partition « -part1 », pas « 1 »)
+  #   /dev/mapper/vg-lv        → le volume logique était effacé, puis abandon
+  # Le cas by-id est le pire : c'est la façon canonique et prudente de désigner
+  # un disque, donc l'utilisateur le plus soigneux perdait sa table. Une fausse
+  # promesse de sécurité sur la seule opération irrattrapable du dépôt est pire
+  # que pas de promesse du tout.
+  local demande="$1" reel type
+  if [[ ! -b "$demande" ]]; then
+    echo "eschaton-install : « $demande » n'est pas un périphérique bloc." >&2
+    echo "  Attendu un disque ENTIER (/dev/sda, /dev/nvme0n1, /dev/vda), pas une" >&2
+    echo "  partition ni un fichier. Pour lister les candidats : lsblk -dno NAME,SIZE,MODEL" >&2
+    return 1
+  fi
+  # On résout AVANT de juger : /dev/disk/by-id/… est légitime, mais seuls les
+  # noms de noyau (sda, nvme0n1) portent la règle de dérivation des partitions.
+  reel="$(readlink -f -- "$demande")" || reel="$demande"
+  if ! command -v lsblk >/dev/null 2>&1; then
+    echo "eschaton-install : lsblk introuvable — impossible de vérifier que" >&2
+    echo "  « $demande » est un disque entier. On refuse plutôt que d'effacer à l'aveugle." >&2
+    return 1
+  fi
+  type="$(lsblk -dno TYPE "$reel" 2>/dev/null | tr -d '[:space:]')"
+  if [[ "$type" != "disk" ]]; then
+    echo "eschaton-install : « $demande » désigne $reel, de type « ${type:-inconnu} »." >&2
+    echo "  Attendu « disk », c'est-à-dire un disque ENTIER : ni partition (« part »)," >&2
+    echo "  ni volume LVM (« lvm »), ni RAID, ni chiffré (« crypt »)." >&2
+    echo "  Pour lister les candidats : lsblk -dno NAME,SIZE,MODEL" >&2
+    return 1
+  fi
+  printf '%s\n' "$reel"
+}
+
+valider_forme_disque() { # $1 = valeur de --disk, quand le périphérique est ABSENT
+  # Répétition à blanc depuis une machine qui n'a pas le disque cible sous la
+  # main : il n'y a rien à interroger, `valider_disque` ne peut donc RIEN
+  # constater. La répétition s'en dispensait entièrement — et rendait `status 0`
+  # avec un plan d'effacement pour les trois entrées mêmes que la garde existe
+  # pour refuser (une partition, un lien by-id nvme, un lien by-id ata).
+  # `valider_noms_partitions` ne rattrapait rien : son test
+  # `"$p" == "$disque"[0-9p]*` est satisfait par « /dev/sda1 » → « /dev/sda1p1 ».
+  # Ce qui reste jugeable sans périphérique, c'est la FORME du nom.
+  #
+  # CE QUE CE CONTRÔLE NE PEUT PAS FAIRE, et qu'il ne faut donc pas laisser
+  # croire : dire le TYPE. `/dev/dm-0`, `/dev/md0` ou un nom de famille inconnue
+  # passent ici et ne seront refusés que par `valider_disque`, le jour de la
+  # vraie installation. C'est moins que la garde complète ; ce n'est pas rien ;
+  # et ce n'est plus une promesse fausse.
+  local nom="$1" ressemble_a_une_partition=0
+  case "$nom" in
+    /dev/*/*)
+      # /dev/disk/by-id/…, /dev/mapper/…, /dev/disk/by-path/… : désigner un
+      # disque ainsi est légitime et même prudent, mais le chemin réel les
+      # CANONISE avant d'en dériver les partitions, et cette résolution demande
+      # le périphérique. Sans lui, tout ce qu'on afficherait serait faux : udev
+      # nomme « …-part1 » là où la répétition écrivait « …1 », et un lien nvme
+      # canonisé donne « /dev/nvme0n1p1 » et non « …_1234561 ».
+      echo "eschaton-install : « $nom » n'est pas un nom de nœud noyau, et le" >&2
+      echo "  périphérique est absent de cette machine : il n'y a rien à résoudre." >&2
+      echo "  Le chemin réel canonise ce genre de lien AVANT d'en dériver les noms" >&2
+      echo "  de partition ; sans le disque sous la main, la répétition à blanc" >&2
+      echo "  n'afficherait que des noms inventés — c'est ce qu'elle faisait." >&2
+      echo "  Répétez avec le nom de nœud (/dev/sda, /dev/nvme0n1), ou depuis la" >&2
+      echo "  machine qui porte réellement ce disque." >&2
+      return 1 ;;
+    /dev/?*) ;;
+    *)
+      echo "eschaton-install : « $nom » n'est pas un nœud de périphérique." >&2
+      echo "  Attendu un disque ENTIER sous /dev (/dev/sda, /dev/nvme0n1, /dev/vda)." >&2
+      return 1 ;;
+  esac
+  # Familles de noms du noyau où le suffixe distingue la partition du disque :
+  # sd/vd/hd/xvd + chiffre, et nvme…n…p… / mmcblk…p… / loop…p… pour celles où le
+  # « p » s'intercale. Le disque lui-même (« /dev/sda », « /dev/nvme0n1 ») ne
+  # correspond à aucun de ces motifs.
+  case "$nom" in
+    /dev/sd[a-z]*[0-9]|/dev/vd[a-z]*[0-9]|/dev/hd[a-z]*[0-9]|/dev/xvd[a-z]*[0-9])
+      ressemble_a_une_partition=1 ;;
+    /dev/nvme[0-9]*n[0-9]*p[0-9]*|/dev/mmcblk[0-9]*p[0-9]*|/dev/loop[0-9]*p[0-9]*)
+      ressemble_a_une_partition=1 ;;
+  esac
+  if ((ressemble_a_une_partition)); then
+    echo "eschaton-install : « $nom » est un nom de PARTITION." >&2
+    echo "  Attendu un disque ENTIER (/dev/sda, /dev/nvme0n1, /dev/vda)." >&2
+    echo "  Le chemin réel le refuse ; la répétition à blanc le refuse donc aussi," >&2
+    echo "  plutôt que d'annoncer un effacement qui n'aura jamais lieu." >&2
+    return 1
+  fi
+}
+
+nom_partition() { # $1 = chemin du disque, $2 = numéro de partition
+  # nvme0n1 → nvme0n1p1, mmcblk0 → mmcblk0p1, sda → sda1 : le « p » s'intercale
+  # quand le nom du disque se termine par un chiffre.
+  if [[ "$1" == *[0-9] ]]; then printf '%s\n' "${1}p$2"; else printf '%s\n' "${1}$2"; fi
+}
+
+valider_noms_partitions() { # $1 = disque, $2… = noms dérivés
+  # Rien d'irréversible ne doit précéder la validation COMPLÈTE. Les noms des
+  # partitions se DÉDUISENT du nom du disque, et jusqu'ici cette déduction
+  # n'était confrontée au réel qu'après le `sgdisk --zap-all` : quand elle était
+  # fausse, l'installeur détruisait d'abord et abandonnait ensuite.
+  local disque="$1"; shift
+  local p vus=""
+  for p in "$@"; do
+    if [[ -z "$p" || "$p" == "$disque" || "$p" != "$disque"[0-9p]* ]]; then
+      echo "eschaton-install : nom de partition dérivé invalide — « $p » pour $disque." >&2
+      echo "  Le disque doit être désigné par son nom de noyau (/dev/sda, /dev/nvme0n1)." >&2
+      return 1
+    fi
+    case " $vus " in
+      *" $p "*) echo "eschaton-install : deux partitions porteraient le même nom « $p »." >&2; return 1 ;;
+    esac
+    vus="$vus $p"
+  done
+}
+
+# --- relecture de la table de partitions -------------------------------------
+
+# Dit l'état RÉEL du disque au moment où l'on abandonne. « Rien n'a été écrit »
+# figurait dans un message appelé DEUX fois : avant le zap, où c'est vrai, et
+# après `sgdisk --zap-all` et les deux `sgdisk -n`, où c'est faux. Un utilisateur
+# dont la table de partitions vient d'être effacée lisait donc qu'il ne s'était
+# rien passé — et pouvait renoncer à toute tentative de récupération. C'est la
+# règle qu'énonce déjà `valider_disque` : une fausse promesse sur l'opération
+# irrattrapable est pire que pas de promesse du tout.
+etat_du_disque() { # $1 = disque, $2 = intact | table-reecrite
+  if [[ "$2" == "intact" ]]; then
+    echo "  Rien n'a été écrit sur $1 : sa table de partitions est intacte." >&2
+    return 0
+  fi
+  # `table-reecrite` décrit exactement le point où l'installeur en est au second
+  # appel : les trois `sgdisk` ont eu lieu, AUCUN `mkfs` n'a encore tourné.
+  echo "" >&2
+  echo "  ATTENTION — $1 A DÉJÀ ÉTÉ MODIFIÉ. Sa table de partitions a été" >&2
+  echo "  effacée (sgdisk --zap-all) puis réécrite avec deux partitions neuves." >&2
+  echo "  En revanche aucun formatage n'a encore eu lieu : le CONTENU des" >&2
+  echo "  anciennes partitions est toujours sur le disque, c'est la carte qui" >&2
+  echo "  a disparu. Si ce disque portait des données à récupérer :" >&2
+  echo "    1. n'écrivez plus rien dessus et ne relancez pas l'installeur ;" >&2
+  echo "    2. --zap-all détruit AUSSI la sauvegarde GPT de fin de disque : la" >&2
+  echo "       table ne se restaure pas telle quelle, il faut retrouver les" >&2
+  echo "       anciennes partitions en balayant le disque (testdisk, gpart)," >&2
+  echo "       depuis un autre système et sans monter $1." >&2
+}
+
+# `blockdev --rereadpt` brut rendrait « BLKRRPART: Device or resource busy » —
+# exact, et parfaitement inutile à qui installe. On explique.
+#
+# PÉRIMÈTRE RÉEL de cette garde, parce que l'ancien message le donnait trop
+# large : l'ioctl BLKRRPART ne rend EBUSY que si une PARTITION du disque est
+# encore ouverte. Un disque entier utilisé CRU — PV LVM, conteneur LUKS, membre
+# btrfs ou ZFS posé directement sur le disque, sans table de partitions — n'a
+# aucune partition à libérer : il franchit cette garde, et il franchit aussi
+# `valider_disque`, qui ne lui reproche rien (lsblk lui donne le type « disk »).
+# Aucun Linux ici pour l'éprouver — raison de plus pour que le message n'affirme
+# que ce que le code vérifie.
+relire_table() { # $1 = disque, $2 = moment, $3 = état du disque : intact|table-reecrite
+  # $3 par défaut au PIRE cas : un appelant qui oublierait l'argument sur-avertit
+  # au lieu de rassurer à tort. C'est le sens de la marche qu'on veut.
+  local disque="$1" moment="$2" etat="${3:-table-reecrite}"
+  # `blockdev` absent rend 127, que la suite prenait pour un EBUSY : l'utilisateur
+  # lisait « une partition est OCCUPÉE » et partait chercher un montage qui
+  # n'existe pas. Un diagnostic faux coûte plus cher qu'un test de présence.
+  # En répétition à blanc, `run_cmd` n'exécute rien : le cas ne se pose pas — et
+  # `blockdev` n'existe de toute façon pas sur le poste de développement macOS.
+  if [[ "${DRY_RUN:-0}" != "1" ]] && ! command -v blockdev >/dev/null 2>&1; then
+    echo "eschaton-install : blockdev introuvable — impossible de vérifier que le" >&2
+    echo "  noyau relit la table de partitions de $disque ($moment)." >&2
+    echo "  blockdev est livré par util-linux : pacman -S util-linux." >&2
+    echo "  On s'arrête plutôt que de partitionner sans cette garde." >&2
+    etat_du_disque "$disque" "$etat"
+    exit 1
+  fi
+  run_cmd blockdev --rereadpt "$disque" && return 0
+  echo "eschaton-install : le noyau refuse de relire la table de partitions de $disque" >&2
+  echo "  ($moment). C'est qu'une de ses PARTITIONS est encore ouverte : montée," >&2
+  echo "  swap actif (swapon), prise par LVM, par un RAID ou par LUKS, ou tenue" >&2
+  echo "  par un processus — ou c'est le média depuis lequel vous avez démarré." >&2
+  echo "  Pour voir qui la retient :" >&2
+  echo "      lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS $disque" >&2
+  echo "      findmnt --source $disque ; swapon --show" >&2
+  etat_du_disque "$disque" "$etat"
+  exit 1
+}
+
+# --- attente des périphériques de partition ----------------------------------
+
+attendre_bloc() { # $1 = chemin attendu, $2 = délai maximal en secondes (10 par défaut)
+  # Le noyau relit la table de partitions de façon ASYNCHRONE : `sgdisk` rend la
+  # main avant que /dev/<disque>1 n'existe, et le `mkfs.vfat` qui suit échoue
+  # alors par intermittence — d'autant plus pénible que la panne dépend de la
+  # vitesse du disque et ne se reproduit pas en VM rapide.
+  # `udevadm settle` seul ne suffit pas : il attend que la file d'événements
+  # udev se vide, pas que l'événement d'ajout de partition y soit entré.
+  #
+  # CE QUE CETTE FONCTION NE PEUT PAS FAIRE — et pourquoi elle ne suffit pas
+  # seule. Elle constate une PRÉSENCE. Sur un disque déjà partitionné dont le
+  # noyau refuse de relire la table (partition montée, LVM, RAID), `sgdisk`
+  # rend 0 en avertissant, les ANCIENS nœuds /dev/sdX1 sont toujours là, et
+  # cette attente rend 0 immédiatement — sur l'ancienne géométrie, que le
+  # `mkfs.vfat` suivant formate. Le message d'erreur ci-dessous nommait
+  # exactement ce cas sans que le code puisse jamais l'atteindre.
+  # La détection réelle est `blockdev --rereadpt`, appelé par eschaton-install
+  # avant ET après le partitionnement : l'ioctl BLKRRPART rend EBUSY quand le
+  # noyau ne peut pas relire, donc un code de retour non nul, donc un arrêt.
+  # C'est le `partprobe` que le plan Task 2.3 prescrivait, avec un outil déjà
+  # présent (util-linux, tiré par `base`) plutôt qu'un paquet de plus.
+  local chemin="$1" essais=$(( ${2:-10} * 10 ))
+  while ((essais-- > 0)); do
+    [[ -b "$chemin" ]] && return 0
+    sleep 0.1
+  done
+  echo "eschaton-install : $chemin n'est pas apparu dans le délai imparti." >&2
+  echo "  Le noyau n'a pas créé le nœud de partition. Vérifier que le disque" >&2
+  echo "  n'est pas occupé (montage, LVM, RAID) : lsblk, findmnt." >&2
+  return 1
 }

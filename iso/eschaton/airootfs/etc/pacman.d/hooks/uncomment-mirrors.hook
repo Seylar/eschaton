@@ -1,0 +1,17 @@
+# remove from airootfs!
+# Repris tel quel de configs/releng d'archiso (GPL-3.0-or-later, ../../../../../PROVENANCE.md).
+# Sans lui, /etc/pacman.d/mirrorlist n'a QUE des lignes commentées et la
+# construction échoue faute de miroir. Le marqueur « remove from airootfs » de la
+# première ligne est ce qui le fait disparaître de l'image finale (crochet zzzz99).
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = pacman-mirrorlist
+
+[Action]
+Description = Uncommenting HTTPS mirrors in /etc/pacman.d/mirrorlist...
+When = PostTransaction
+Depends = pacman-mirrorlist
+Depends = sed
+Exec = /usr/bin/sed -E -i 's/#(Server = https:)/\1/g' /etc/pacman.d/mirrorlist

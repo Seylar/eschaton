@@ -1,0 +1,71 @@
+# Paquets de l'environnement live d'Eschaton (spec §3.3).
+#
+# Cette liste est une RÉDUCTION de celle de `releng` (130 paquets), pas une
+# extension. Principe : l'ISO est *en ligne* (spec §3.4) — il n'embarque aucun
+# paquet du système cible, seulement de quoi partitionner, `pacstrap`, et se
+# dépanner. Tout ce qui relève du sauvetage de systèmes tiers (clonezilla,
+# partclone, fsarchiver, ddrescue), du PXE, du cloud-init, des intégrations
+# invité (VirtualBox, VMware, Hyper-V) et des systèmes de fichiers que nous
+# n'utilisons pas (xfs, f2fs, jfs, nilfs, bcachefs, ntfs) est retiré.
+#
+# ⚠️ `wpa_supplicant` est ABSENT, volontairement : régression 2.11 constatée par
+# la veille (docs/veille/2026-08-28-sp4-grand-public.md). `releng` embarque les
+# deux ; nous n'embarquons qu'`iwd`.
+
+# --- socle ---
+base
+linux
+linux-firmware
+mkinitcpio
+mkinitcpio-archiso
+amd-ucode
+intel-ucode
+
+# --- dépendances directes d'eschaton-install ---
+# Exactement les quatre paquets que la procédure d'installation vérifiée
+# installait à la main dans l'environnement live tiers (tools/vm-dev.md §8.2),
+# plus e2fsprogs (dépendance d'archiso, et de `base` par ailleurs).
+arch-install-scripts
+gptfdisk
+btrfs-progs
+dosfstools
+e2fsprogs
+
+# --- réseau ---
+# `iwd` seul pour le Wi-Fi (voir l'avertissement en tête de fichier).
+iwd
+iw
+wireless-regdb
+systemd-resolvconf
+
+# --- outils de secours (spec §3.3) ---
+snapper
+limine
+efibootmgr
+nano
+less
+pciutils
+usbutils
+terminus-font
+# `pv` sert au crochet archiso quand on démarre avec `copytoram` : sans lui,
+# mkinitcpio avertit « pv not found; falling back to cp » à chaque construction.
+# 50 Kio pour ne pas apprendre à ignorer un avertissement.
+pv
+# Livré mais NON activé : ce profil n'amorce aucune unité `sshd.service`,
+# contrairement à `releng`. Un média d'installation qui ouvre un port en écoute
+# dès le démarrage est une décision, pas un réglage par défaut (veille §1,
+# ligne 9).
+#
+# Second durcissement, celui-là par ABSTENTION : `releng` livre
+# `airootfs/etc/ssh/sshd_config.d/10-archiso.conf` (PasswordAuthentication yes,
+# PermitRootLogin yes) ; nous ne le reprenons pas, donc le défaut d'OpenSSH
+# — `PermitRootLogin prohibit-password` — s'applique. Conséquence à ne pas
+# oublier en écrivant la marche à suivre : `passwd` puis `systemctl start sshd`
+# NE PERMET PAS d'entrer. Il faut une clé publique dans
+# /root/.ssh/authorized_keys ; c'est ce que dit airootfs/etc/motd.
+openssh
+
+# --- place réservée au SP4a (trousseau) ---
+# `eschaton-keyring` s'ajoutera ICI, en même temps que le passage de
+# `SigLevel = Optional TrustAll` à `Required DatabaseOptional` dans pacman.conf
+# et airootfs/etc/pacman.conf. Voir ../README.md § « La place du trousseau ».

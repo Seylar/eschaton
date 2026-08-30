@@ -2938,3 +2938,349 @@ finales : un seul `Hyprland` en vie (`-c …/hyprland.lua`), une seule signature
 sous `/run/user/1000/hypr/`, `diff` de l'inventaire de `~/.config/hypr` vide,
 `dms.service` toujours `active`, pastilles et fond d'écran inchangés à la
 capture.
+
+---
+
+## 19. L'ISO Eschaton — construction locale et preuve d'installation (SP4b-1)
+
+Déroulé le **2026-08-29**, sur le même Mac Apple Silicon que tout ce qui
+précède. C'est la preuve des Tasks 1 et 2 du plan SP4b-1 : le média Eschaton
+existe, il démarre, et il installe.
+
+### 19.1 L'infirmation qui change le plan de travail
+
+Le brief de la tâche annonçait `mkarchiso` comme **infaisable localement** :
+« exige root et des périphériques loop — c'est probablement impossible sur le
+Mac hôte ». **C'est faux depuis archiso 89**, et la vérification est directe :
+
+```console
+$ docker run --rm --platform linux/amd64 archlinux:base-devel \
+    bash -c 'pacman -Syu --noconfirm --disable-sandbox archiso >/dev/null 2>&1;
+             grep -c "losetup\|mount " /usr/bin/mkarchiso'
+0
+```
+
+`mkarchiso` **ne contient aucune occurrence de `losetup` ni de `mount`**. Il
+assemble l'ESP avec `mtools` (`mmd`/`mcopy`), l'image racine avec `mksquashfs`
+et l'ISO avec `xorriso` — aucun de ces outils ne monte quoi que ce soit. Le
+`Depends On` du paquet le confirme : `arch-install-scripts bash dosfstools
+e2fsprogs erofs-utils libarchive libisoburn mtools squashfs-tools`.
+
+Ce qui reste nécessaire, c'est de pouvoir **monter `/proc`, `/sys`, `/dev` dans
+le `pacstrap`** : d'où root et `--privileged`. (`mkarchiso` sait même s'en
+passer — `_unshare()` bascule sur `unshare --map-auto --map-root-user` dès que
+`EUID != 0`, et `pacstrap` reçoit alors `-N` — mais il faut des plages
+`/etc/subuid` / `/etc/subgid`, hors périmètre de notre outillage.)
+
+**Conséquence** : la construction en CI n'est pas un pis-aller, c'est un
+doublon utile — et le cycle de développement local est de **cinq minutes**, pas
+d'un aller-retour GitHub.
+
+### 19.2 Construction locale — durées réelles
+
+```bash
+docker run --rm --privileged --platform linux/amd64 \
+  -e ESCHATON_ISO_WORK=/tmp/iso-work -e ESCHATON_ISO_OUT=/out \
+  -v "$PWD":/eschaton -v ~/Downloads:/out \
+  -w /eschaton archlinux:base-devel iso/build-iso
+```
+
+| | |
+|---|---|
+| Durée | **4 min 55 s** (22:46:02 → 22:50:57), conteneur x86_64 **émulé** |
+| Image | `eschaton-2026.08.29-x86_64.iso` |
+| Taille | **1 257 252 864 octets** (1,17 Gio) — budget 2 Gio, marge 849 Mio |
+| SHA-256 | `c71bdeb93b3dbbeb9ab5df4961fd5e5a1407da435090041b6aa19a1c2388669b` |
+| Paquets dans le live | **178** (`eschaton/pkglist.x86_64.txt` dans l'image) |
+
+`ESCHATON_ISO_WORK=/tmp/iso-work` n'est pas décoratif : l'arborescence pacstrap
+pèse plusieurs Gio et l'écrire à travers virtiofs est lent. Seule l'image
+traverse le montage.
+
+> **Ne pas supprimer `~/Downloads/eschaton-2026.08.29-x86_64.iso`** tant que la
+> VM de preuve existe : même piège de *security-scoped bookmark* qu'au §10.8.
+
+### 19.3 Le succès muet attrapé au premier essai
+
+La **première** construction a rendu 0 et produit une ISO — avec un initramfs
+amputé :
+
+```
+==> ERROR: binary not found: 'memdiskfind'
+==> WARNING: errors were encountered during the build. The image may not be complete.
+error: command failed to execute correctly
+[mkarchiso] INFO: Done!            ← et la construction continue
+```
+
+Cause : le crochet mkinitcpio `memdisk` appelle `memdiskfind`, livré par
+`syslinux` — que le profil avait retiré avec le chemin BIOS. Mécanique du
+silence : pacman traite l'échec d'un crochet **post-transaction** comme un
+avertissement, `pacstrap` rend 0, `mkarchiso` ne relit rien, l'image sort.
+
+Deux correctifs, tous deux dans le dépôt :
+1. `memdisk` retiré des `HOOKS` (sans BIOS, il n'a de toute façon aucun usage) ;
+2. **`iso/build-iso` relit la sortie de `mkarchiso`** et échoue sur
+   `errors were encountered during the build`, puis vérifie que l'image contient
+   bien noyau, initramfs, squashfs, binaire EFI et entrée d'amorçage — même
+   discipline que la vérification de `/boot` d'`eschaton-install` (§8.4).
+
+C'est la leçon du §8.4 reconduite d'un cran plus haut : **sur ce socle, une
+panne se signale rarement.**
+
+### 19.4 La console série est dans l'image — le §10.3 n'a plus lieu d'être
+
+Le §10.3 décrit le poste le plus coûteux du smoke test x86_64 : l'ISO Arch
+n'ayant pas de console série, il fallait la patcher **à l'octet**, en deux
+exemplaires, à taille constante.
+
+**Ce problème disparaît avec notre ISO.** L'entrée d'amorçage par défaut porte
+`console=tty0 console=ttyS0,115200`, et
+`airootfs/etc/systemd/system/serial-getty@.service.d/autologin.conf` ouvre une
+session root sur la série. Le média est pilotable **au premier démarrage, sans
+aucune manipulation** :
+
+```
+[  OK  ] Started Serial Getty on ttyS0.
+Arch Linux 7.1.11-arch1-1 (ttyS0)
+eschaton-live login: root (automatic login)
+```
+
+Une entrée `02-eschaton-sans-serie.conf` reste offerte dans le menu pour les
+machines où la série gênerait. Ces deux choix sont documentés comme *choix de
+média de développement* dans `iso/README.md`, à repeser avant toute
+distribution grand public.
+
+### 19.5 La VM de preuve `eschaton-iso-preuve`
+
+Recette du §10.2 sans changement, sauf le disque (16 Gio suffisent largement à
+une installation de base : elle en consomme moins de 2) et l'ISO, qui est
+la nôtre :
+
+```applescript
+tell application "UTM"
+	set isoPath to POSIX file "/Users/<vous>/Downloads/eschaton-2026.08.29-x86_64.iso"
+	set vm to make new virtual machine with properties {backend:qemu, configuration:{name:"eschaton-iso-preuve", architecture:"x86_64", machine:"q35", memory:4096, cpu cores:4, hypervisor:false, uefi:true, drives:{{removable:false, interface:VirtIO, guest size:16384}, {removable:true, interface:IDE, source:isoPath}}, network interfaces:{{mode:shared, hardware:"virtio-net-pci"}}, displays:{{hardware:"virtio-vga"}}, «class SrPt»:{{interface:ptty}}}}
+	return id of vm
+end tell
+```
+
+Les quatre écarts du §10.2 restent tous nécessaires (disque en tête pour le
+`bootindex`, CD sur `IDE` et non `USB`, `hypervisor:false`, `virtio-net-pci`).
+**Ne pas toucher à `update configuration`** : le §10.2 rappelle qu'il fait
+planter UTM 4.7.5 et que le plantage emporte les autres VM en cours.
+
+### 19.6 L'environnement live, constaté
+
+```
+/etc/hostname                    → eschaton-live
+ls /usr/local/bin/               → eschaton-install  lib.sh
+ls -d /sys/firmware/efi          → /sys/firmware/efi          (amorçage UEFI)
+grep -c . /etc/pacman.d/mirrorlist → 500                      (crochet uncomment-mirrors)
+curl -fsI https://archlinux.org  → NET_OK
+pacman -Sl eschaton              → 8 paquets, dépôt actif SANS aucune préparation
+```
+
+Le dépôt `[eschaton]` répond immédiatement : c'est ce que la spec §3.3 appelle
+« préconfiguré ». `eschaton-install` sait toujours l'ajouter lui-même sur un
+live tiers — ses deux commandes sont idempotentes et ne font ici que constater.
+
+### 19.7 Les gardes d'arguments de l'installeur, exercées sur le vrai média
+
+Les différés routés SP4 par le bilan du Socle, vérifiés dans l'environnement
+live avant l'installation réelle — aucun n'a touché au disque :
+
+```console
+# eschaton-install --disk
+eschaton-install : --disk attend un argument.                            RC=1
+# eschaton-install --disk /dev/nexistepas --user seylar
+eschaton-install : « /dev/nexistepas » n'est pas un périphérique bloc.   RC=1
+# eschaton-install --disk /dev/vda --user Seylar
+eschaton-install : nom d'utilisateur invalide « Seylar ».                RC=1
+# eschaton-install --disk /dev/vda --user seylar --hostname -x
+eschaton-install : nom d'hôte invalide « -x ».                           RC=1
+```
+
+Avant ce correctif, le premier cas rendait `$2: unbound variable` — un message
+de bash, qui n'apprend rien à celui qui installe.
+
+### 19.8 L'installation, et ses durées
+
+```bash
+eschaton-install --disk /dev/vda --user seylar
+#   → deux invites `passwd`, ~11 min après le lancement
+umount -R /mnt && reboot
+```
+
+| Étape | Durée |
+|---|---|
+| Démarrage de la VM → invite root sur la série | ≈ 1 min 30 s |
+| `eschaton-install` jusqu'à l'invite `New password:` | **10 min 52 s** |
+| Fin de l'installeur après la saisie du mot de passe | ≈ 1 min |
+| `reboot` → `eschaton login:` | **1 min 08 s** |
+| **Total, VM créée → invite de connexion Eschaton** | **≈ 15 min** |
+
+À comparer au §10.5 (ISO Arch officielle, mêmes conditions d'émulation) :
+8 min 46 s pour l'installeur. L'écart tient au disque de 16 Gio contre 40 et à
+la variabilité du miroir ; l'ordre de grandeur est le même. **La règle du §8.1
+tient : un pilotage qui abandonne au bout de deux minutes se trompe de
+diagnostic.**
+
+Comme au §10.3 b, la console série du système **installé** reste une étape
+manuelle du banc d'essai — `eschaton-install` n'écrit pas de `console=` dans
+`limine.conf`, et c'est très bien ainsi :
+
+```bash
+# encore dans le live env, /mnt/boot toujours monté
+sed -i 's|rw quiet|rw console=tty0 console=ttyS0,115200|' /mnt/boot/limine.conf
+```
+
+### 19.9 État vérifié du système installé
+
+Tout ce qui suit a été lu sur la console série de la VM, après redémarrage :
+
+```
+Eschaton 7.1.11-arch1-1 (ttyS0)          bannière getty — l'identité est prise
+eschaton login: seylar                   uid=1000(seylar) groupes=…,998(wheel)
+/etc/os-release                          ID=eschaton, fichier RÉEL (plus un lien)
+findmnt -nrt btrfs                       / @ · /.snapshots @snapshots · /home @home
+                                         · /var/cache/pacman/pkg @pkg · /var/log @log
+findmnt -no TARGET,FSTYPE /boot          /boot vfat                    (ESP, spec §4.3)
+localectl                                LANG=fr_FR.UTF-8, VC Keymap fr
+curl -fsI https://archlinux.org          NET_OK
+/etc/pacman.d/eschaton.conf              [eschaton] présent sur la cible
+SNAPPER_CONFIGS                          "root"
+systemctl is-enabled limine-snapper-sync enabled   (snapper-cleanup.timer aussi)
+systemctl --failed                       (vide)
+```
+
+**Et le filet de sécurité a été exercé, pas seulement lu** — c'est la règle du
+§8.4. Une installation de paquet quelconque :
+
+```console
+$ sudo pacman -S --noconfirm --needed tree
+(2/2) Performing snapper post snapshots for the following configurations...
+==> root: 2
+
+$ snapper -c root list
+1 │ pre  │     │ sam. 29 août 2026 23:11:37 │ root │ number │ pacman -S … tree
+2 │ post │   1 │ sam. 29 août 2026 23:11:45 │ root │ number │ tree
+
+$ grep -A3 Snapshots /boot/limine.conf
+    //Snapshots
+     ### Auto-generated by limine-snapper-sync
+     comment: 2 snapshots
+     ///2 │ 2026-08-29 23:11:45
+```
+
+Snapshots `pre`/`post` créés, **et l'entrée de snapshot écrite dans le menu
+Limine** : la panne muette n° 3 du §8.4 ne s'est pas reproduite, sur un système
+installé depuis notre propre média.
+
+### 19.10 Jusqu'à la session graphique et aux pastilles
+
+Le DoD de la spec §4.1 ne s'arrête pas au démarrage : « premier démarrage en
+session graphique, pastilles rendues ». Depuis le système installé par notre
+ISO, le bureau ne demande qu'une commande — c'est tout l'intérêt d'un média
+*en ligne* : il n'embarque rien du bureau, il l'installe depuis `[eschaton]`.
+
+```bash
+sudo pacman -S --noconfirm eschaton-desktop     # DESKTOP_RC=0, ≈ 4 min
+sudo reboot
+```
+
+Après redémarrage, `greetd` ouvre la session (`[initial_session]` de
+`/etc/eschaton/greetd.toml`, auto-login `seylar` — la dette de dogfooding de la
+spec Bureau §7) :
+
+```
+loginctl list-sessions   → session 1, seylar, seat0, tty1
+pgrep -a Hyprland        → Hyprland --watchdog-fd 4 -c /home/seylar/.config/hypr/hyprland.lua
+systemctl --user is-active dms  → active
+dms ipc call plugins list       → eschatonRollback [loaded] · eschatonUpdate [loaded]
+jq '.barConfigs[0].rightWidgets' → [… "eschatonUpdate", "eschatonRollback"]
+dms ipc call wallpaper get      → /usr/share/backgrounds/eschaton/default.png
+```
+
+**Capture** par la méthode du §12.5 (`grim` dans l'invité, base64 sur la ligne
+série, empreinte vérifiée des deux côtés) : PNG **1280 × 800**, 17 213 octets,
+`0b5e57fbe728d24a70f24cc696c842f5c5d792e28ab00a3030a7e8f27c835fb8`. On y lit la
+DankBar complète — grille d'applications, pastille d'espace de travail, horloge
+`23:26 · sam. 29`, météo, presse-papiers, CPU 42 %, RAM 24 %, notifications,
+batterie, réseau, volume — **et, à droite, les deux pastilles Eschaton**
+(mise à jour et rollback), sur le fond d'écran de la marque.
+
+> **`base64 -w0` ne passe pas la ligne série** : la sortie revient tronquée et
+> `base64 -d` échoue sur « Incorrect padding ». Le `-w 200` du §12.5 n'est pas
+> une préférence de mise en forme, c'est ce qui marche. (Constaté ici en
+> essayant l'autre.)
+
+#### Le provisioning des pastilles échoue à la PREMIÈRE session sur machine lente
+
+Constat de terrain, non bloquant mais à connaître :
+
+```
+23:19:15  eschaton-dms-provision démarre
+23:20     dms écrit ~/.config/DankMaterialShell/settings.json
+```
+
+`eschaton-dms-provision` commence par `[[ -r "$settings" ]]` et, si le fichier
+n'existe pas encore, journalise « provisioning reporté à la prochaine session »
+et rend 1 **sans poser son marqueur** — exactement comme il est écrit pour le
+faire. Sur cette VM émulée, DMS met plus d'une minute à matérialiser
+`settings.json`, et la première session s'ouvre donc **sans les pastilles**.
+
+La reprise fonctionne : au second passage (`systemctl --user restart
+eschaton-dms-provision`, ou simplement la session suivante), les deux plugins
+passent `[loaded]`, sont ajoutés à `rightWidgets`, le marqueur est posé et DMS
+est rejoué pour recomposer la barre. **Le mécanisme de reprise est donc prouvé,
+pas seulement écrit.**
+
+Ce n'est pas un défaut de l'ISO — c'est le SP2 qui s'exerce ici pour la première
+fois sur une machine réellement lente. À router vers le SP2 si l'on veut que la
+première session soit déjà complète (le service gagnerait à attendre
+`settings.json` comme il attend déjà l'IPC, plutôt qu'à abandonner).
+
+### 19.11 Ce que la CI doit demander de plus que le poste local
+
+`mkarchiso` n'a besoin ni de loop ni de root *en principe*, mais le `pacstrap`
+qu'il lance monte `/proc`, `/sys` et `/dev` dans la cible. Un conteneur de job
+GitHub Actions n'a pas `CAP_SYS_ADMIN` par défaut :
+
+```console
+$ docker run --rm --platform linux/amd64 archlinux:base-devel \
+    bash -c 'mkdir -p /tmp/t/proc && mount -t proc proc /tmp/t/proc && echo OK'
+mount: /tmp/t/proc: permission denied.
+
+$ docker run --rm --platform linux/amd64 \
+    --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
+    archlinux:base-devel bash -c '… même commande …'
+MOUNT_OK
+```
+
+D'où, dans `.github/workflows/iso.yml` :
+
+```yaml
+container:
+  image: archlinux:base-devel
+  options: --cap-add SYS_ADMIN --security-opt apparmor=unconfined
+```
+
+Ces deux options **suffisent pour le `mount`** — vérifié ci-dessus — là où
+`--privileged` (utilisé pour les constructions locales de ce document)
+accorderait bien davantage. **Réserve honnête : la construction complète n'a
+été exécutée qu'avec `--privileged`.** Le premier passage du workflow confirmera
+ou infirmera que le jeu réduit suffit de bout en bout ; si non, la correction
+est d'une ligne.
+
+### 19.12 Nettoyage
+
+La VM `eschaton-iso-preuve` est **jetable** : elle n'a servi qu'à cette preuve
+et le disque de l'hôte était à moins de 9 Gio libres pendant toute l'opération
+(à surveiller — une VM de 40 Gio comme celle du §10.2 n'y tiendrait plus).
+Elle a été arrêtée et supprimée après la capture.
+
+L'ISO reste en `~/Downloads/eschaton-2026.08.29-x86_64.iso` avec son `.sha256`,
+et se reconstruit en cinq minutes de toute façon.
+
+> Le compte `seylar` de cette VM a le mot de passe `eschaton`, comme les deux
+> autres (§8.2, §10.8). VM jetable, à ne pas exposer.
