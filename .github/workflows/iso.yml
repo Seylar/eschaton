@@ -1,0 +1,166 @@
+name: iso
+
+# Construction et publication de l'ISO nominal x86_64 (spec SP4b-1 §3, plan Task 3).
+#
+# POURQUOI UN WORKFLOW SÉPARÉ DE ci.yml
+# `ci.yml` construit les PAQUETS et publie le dépôt Pages ; il tourne à chaque
+# push et chaque PR. La construction de l'ISO dure des dizaines de minutes et
+# produit un artefact d'un gigaoctet : la mettre dans ci.yml ralentirait toutes
+# les PR pour un livrable qu'on ne fabrique qu'à la demande ou au tag.
+# Les GARDES du profil, elles, tournent bien à chaque PR — ce sont les tests
+# bats `tests/iso-profil.bats` du job `lint` de ci.yml.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+# Groupe de concurrence PROPRE, distinct de `eschaton-repository-ci`.
+# Ce n'est pas un oubli : la sérialisation de ci.yml existe pour protéger
+# l'IMMUTABILITÉ DES PAQUETS (ne jamais republier des octets différents sous le
+# même pkgrel). Ce workflow ne construit aucun paquet — il consomme le dépôt
+# déjà publié. Partager le groupe ferait attendre les PR de paquets derrière une
+# construction d'ISO, sans rien protéger de plus.
+#
+# ⚠️ À RÉÉVALUER AU SP4a : le jour où `packages.x86_64` embarquera
+# `eschaton-keyring`, l'ISO dépendra d'un paquet publié par ci.yml et les deux
+# workflows cesseront d'être indépendants.
+concurrency:
+  group: eschaton-iso
+  cancel-in-progress: false
+
+# Permissions minimales par défaut ; seul le job de publication est élevé.
+permissions:
+  contents: read
+
+# TOUT CE QUI S'EXÉCUTE ICI EST ÉPINGLÉ PAR EMPREINTE (plan Task 3.4) :
+# les actions par SHA de commit, les IMAGES DE CONTENEUR par digest.
+# Ce n'est plus une hygiène mais un prérequis de sécurité : la clé de signature
+# du dépôt approchera la CI au SP4a (veille §4.4), et une étiquette mouvante
+# (`@v7`, `:base-devel`) laisse son mainteneur réécrire ce qui tourne ici.
+# L'argument valait pour les actions ; il vaut d'autant plus pour l'image du
+# job `construire`, qui tourne en root avec CAP_SYS_ADMIN.
+# SHA relevés le 2026-08-29 via l'API GitHub (`/git/ref/tags/<tag>`).
+# Digests relevés le 2026-08-30 via l'API du registre Docker Hub
+# (`/v2/<dépôt>/manifests/<étiquette>`, en-tête `Docker-Content-Digest`).
+jobs:
+  construire:
+    runs-on: ubuntu-latest
+    container:
+      # Index OCI multi-plateforme (linux/amd64) de `archlinux:base-devel`.
+      # Le commentaire garde l'étiquette lisible ; c'est le digest qui fait foi.
+      image: archlinux@sha256:68bfc3b0d277b08a99101dc9b94aaa03e5ae70cf1b4fb965c03b2b87b915760d # base-devel
+      # SANS CE `options`, LE JOB ÉCHOUE. `mkarchiso` n'a besoin ni de `losetup`
+      # ni de périphériques loop (depuis archiso 89 il passe par `mtools`,
+      # `mksquashfs` et `xorriso`), mais le `pacstrap` qu'il lance monte
+      # /proc, /sys et /dev dans l'arborescence cible — et un conteneur
+      # d'action GitHub n'a pas CAP_SYS_ADMIN par défaut :
+      #     mount: /tmp/t/proc: permission denied.
+      # Vérifié le 2026-08-29 : ces deux options SUFFISENT (le `mount` passe),
+      # là où `--privileged` accorderait bien plus.
+      options: --cap-add SYS_ADMIN --security-opt apparmor=unconfined
+    timeout-minutes: 90
+    steps:
+      # Avant le checkout : sans git dans le conteneur, actions/checkout se
+      # rabat sur un téléchargement d'archive REST. `-Syu` et non `-Sy` pour ne
+      # pas fabriquer une mise à jour partielle ; --disable-sandbox parce que le
+      # bac à sable Landlock de pacman 7 est refusé par le profil seccomp par
+      # défaut de Docker (même piège que ci.yml et repo/build-repo).
+      - name: git dans le conteneur
+        run: pacman -Syu --noconfirm --needed --disable-sandbox git
+
+      # `persist-credentials: false` : aucune étape de ce job ne parle à git
+      # après le checkout, donc laisser le `GITHUB_TOKEN` inscrit dans
+      # .git/config n'aurait qu'un effet — le rendre lisible à tout ce que
+      # `build-iso` fait tourner, `makepkg` et `pacman` compris.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # `iso/build-iso` mesure l'image et ÉCHOUE au-delà de 2 Gio : au-delà,
+      # GitHub Releases refuse le fichier et l'image n'est pas publiable
+      # (spec §3.4). Autant l'apprendre ici que dans le job de publication.
+      - name: build-iso
+        env:
+          # Le tag donne son nom à la version de l'image ; hors tag, la date.
+          ESCHATON_ISO_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        run: iso/build-iso
+
+      - name: Inventaire publié
+        run: ls -l iso/out
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: iso-x86_64
+          path: iso/out
+          if-no-files-found: error
+          # L'ISO est reconstructible ; la garder 90 jours ne sert à personne et
+          # consomme le quota du dépôt.
+          retention-days: 14
+
+  # Publication en GitHub Release, et NON sur Pages : Pages plafonne à 1 Go par
+  # site publié (le dépôt de paquets y vit déjà), Releases à 2 Gio PAR FICHIER
+  # sans limite de total (veille §2.6).
+  publier:
+    needs: construire
+    # L'ÉVÉNEMENT autant que la référence. `startsWith(github.ref, 'refs/tags/')`
+    # seul est satisfait par un `workflow_dispatch` lancé SUR UNE RÉF DE TAG :
+    # la publication en Release, qui demande `contents: write`, se déclenchait
+    # alors à la main, hors de tout push de tag. On veut exactement un cas :
+    # quelqu'un a poussé un tag `v*`.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    # Un job qui écrit dans les Releases ne doit pas pouvoir tourner
+    # indéfiniment : GitHub le tuerait au bout de 6 h par défaut.
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: iso-x86_64
+          path: iso-out
+
+      # Vérification de la somme AVANT publication : elle a voyagé par
+      # l'artefact, et c'est le seul endroit où le contrôle coûte zéro.
+      - name: Vérifier la somme de contrôle
+        working-directory: iso-out
+        run: sha256sum --check ./*.sha256
+
+      - name: Contenu à publier
+        run: ls -l iso-out
+
+      # Les notes passent par un FICHIER et non par `--notes "…"` : une chaîne
+      # multiligne écrite dans un bloc YAML embarque son indentation dans le
+      # texte publié, et les accents graves y seraient interprétés par le shell.
+      - name: Notes de version
+        run: |
+          cat > notes.md <<'FIN'
+          ISO nominal x86_64, amorçage **UEFI**.
+
+          Vérifier l'image avant de l'écrire sur une clé :
+
+              sha256sum --check *.sha256
+
+          Réserves connues :
+
+          - **Secure Boot non supporté** — archiso ne le supporte pas ; le désactiver dans le firmware.
+          - **UEFI uniquement** : ce média ne démarre pas en BIOS hérité.
+          - **Installation en ligne** : le réseau est requis pendant toute l'installation.
+          - Le dépôt `[eschaton]` n'est pas encore signé (SP4a).
+          FIN
+          cat notes.md
+
+      # `gh` plutôt qu'une action tierce de release : l'outil est préinstallé sur
+      # le runner et n'ajoute aucun tiers à la chaîne d'approvisionnement — ce
+      # que la veille §4.4 reproche précisément aux CI publiques.
+      # `--verify-tag` : refuse de créer une release sur un tag qui n'existe pas.
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Eschaton $GITHUB_REF_NAME" \
+            --verify-tag \
+            --notes-file notes.md \
+            iso-out/*.iso iso-out/*.sha256

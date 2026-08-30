@@ -7,3 +7,9 @@ packages/**/pkg/
 packages/**/src/
 repo/out/
 __pycache__/
+
+# Construction de l'ISO (SP4b-1). `iso/work/` contient l'arborescence pacstrap
+# de mkarchiso (plusieurs Gio) et la copie de travail du profil ; `iso/out/`
+# l'image et sa somme. Les deux sont des artefacts dérivés, jamais des sources.
+iso/work/
+iso/out/

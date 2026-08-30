@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# Construit l'ISO nominal d'Eschaton (spec §3, plan SP4b-1 Task 1).
+#
+# À exécuter EN ROOT dans un conteneur Arch x86_64 jetable. `--privileged` n'est
+# pas nécessaire : seule la capacité de monter /proc, /sys et /dev dans le
+# `pacstrap` l'est (vérifié en CI le 2026-08-29, voir .github/workflows/iso.yml).
+#   CI     : archlinux:base-devel + --cap-add SYS_ADMIN --security-opt apparmor=unconfined
+#   local  : docker run --rm --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
+#              --platform linux/amd64 \
+#              -v "$PWD":/eschaton -w /eschaton archlinux:base-devel iso/build-iso
+#
+# CE QU'IL FAIT, ET POURQUOI IL EXISTE PLUTÔT QU'UN APPEL DIRECT À mkarchiso
+#
+# 1. Il construit depuis une COPIE du profil, jamais depuis l'arborescence
+#    versionnée : le profil doit recevoir `eschaton-install` et sa `lib.sh`, et
+#    on ne veut ni les dupliquer dans le dépôt (deux sources de vérité qui
+#    divergent) ni salir le checkout à chaque construction.
+# 2. Il réserve la place du trousseau (SP4a) : si iso/keyring/eschaton.gpg
+#    existe, il est importé et signé localement AVANT le `pacstrap`. Tant qu'il
+#    n'existe pas, l'étape ne fait rien — le script n'aura pas à être retouché.
+# 3. Il MESURE l'image et échoue au-delà de 2 Gio. Ce n'est pas une coquetterie :
+#    GitHub Releases refuse les fichiers plus gros (spec §3.4), donc une image
+#    qui dépasse n'est pas publiable et il vaut mieux le savoir ici que dans le
+#    job de publication.
+# 4. Il écrit la somme de contrôle à côté de l'image, au format `sha256sum -c`.
+set -euo pipefail
+
+racine="$(cd "$(dirname "$0")/.." && pwd)"
+profil_src="$racine/iso/eschaton"
+travail="${ESCHATON_ISO_WORK:-$racine/iso/work}"
+sortie="${ESCHATON_ISO_OUT:-$racine/iso/out}"
+# 2 Gio exactement — la limite par fichier de GitHub Releases (veille §2.6).
+budget_octets=$((2 * 1024 * 1024 * 1024))
+# Un plancher aussi, et pas seulement un plafond : une image tronquée (xorriso
+# interrompu, disque plein) sort plus PETITE, pas plus grosse, et passait le
+# contrôle de budget avec les félicitations. 300 Mio est un ordre de grandeur
+# sous la mesure réelle (1,17 Gio, README §Mesure) : ce n'est pas un seuil
+# serré, c'est un refus de publier un fichier manifestement incomplet.
+plancher_octets=$((300 * 1024 * 1024))
+
+if ((EUID != 0)); then
+	echo "build-iso : à exécuter en root dans un conteneur de build jetable." >&2
+	echo "  mkarchiso 89 sait travailler sans root (unshare --map-auto), mais il" >&2
+	echo "  lui faut alors des espaces de noms utilisateur et des plages" >&2
+	echo "  /etc/subuid /etc/subgid : hors périmètre de notre outillage." >&2
+	exit 1
+fi
+
+if [[ "$(uname -m)" != "x86_64" ]]; then
+	echo "build-iso : ce profil est x86_64 ; conteneur $(uname -m) détecté." >&2
+	echo "  Sur un hôte arm64, lancer le conteneur avec --platform linux/amd64." >&2
+	exit 1
+fi
+
+# --disable-sandbox : le bac à sable Landlock de pacman 7 est refusé par le
+# profil seccomp par défaut de Docker (« Landlock ruleset could not be
+# applied »). Même contournement que repo/build-repo et tools/build-pkg.
+echo "==> Préparation du conteneur de construction"
+pacman -Syu --noconfirm --needed --disable-sandbox archiso >/dev/null
+
+# --- 1. Copie de travail du profil -------------------------------------------
+profil="$travail/profil"
+rm -rf "$travail"
+mkdir -p "$profil" "$sortie"
+# On vide le CONTENU du répertoire de sortie sans supprimer le répertoire :
+# il peut être un point de montage (`-v … :/out` en conteneur), et `rm -rf` sur
+# un point de montage rend « Device or resource busy ».
+find "$sortie" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+cp -a "$profil_src/." "$profil/"
+
+echo "==> Intégration d'eschaton-install dans l'environnement live"
+# Source unique de vérité : installer/. Le profil ne contient PAS de copie —
+# c'est ici, et seulement ici, que les deux se rencontrent.
+install -Dm755 "$racine/installer/eschaton-install" "$profil/airootfs/usr/local/bin/eschaton-install"
+install -Dm644 "$racine/installer/lib.sh" "$profil/airootfs/usr/local/bin/lib.sh"
+
+# --- 2. Place réservée au trousseau (SP4a) -----------------------------------
+# Le motif est celui d'Omarchy, relevé par la veille §4.3 : la clé publique est
+# versionnée dans le dépôt de construction, ajoutée et signée LOCALEMENT pendant
+# le build. C'est la réponse au problème « comment faire confiance à la toute
+# première installation, sans serveur de clés ».
+cle="$racine/iso/keyring/eschaton.gpg"
+if [[ -f "$cle" ]]; then
+	echo "==> Trousseau Eschaton : import et signature locale"
+	pacman-key --init
+	pacman-key --populate archlinux
+	pacman-key --add "$cle"
+	# L'empreinte est lue depuis la clé elle-même : rien à tenir à jour ici.
+	empreinte="$(gpg --with-colons --show-keys "$cle" | awk -F: '$1 == "fpr" { print $10; exit }')"
+	[[ -n "$empreinte" ]] || { echo "build-iso : empreinte illisible dans $cle." >&2; exit 1; }
+	pacman-key --lsign-key "$empreinte"
+else
+	echo "==> Trousseau Eschaton absent ($cle) — dépôt [eschaton] en SigLevel Optional (SP4a non livré)."
+fi
+
+# --- 3. Construction ----------------------------------------------------------
+echo "==> mkarchiso"
+journal="$travail/mkarchiso.log"
+mkarchiso -v -w "$travail/mkarchiso" -o "$sortie" "$profil" 2>&1 | tee "$journal"
+
+# --- 4. Le piège du succès muet ----------------------------------------------
+# pacman traite l'échec d'un crochet post-transaction comme un AVERTISSEMENT :
+# le code de retour ne remonte pas jusqu'ici, mkarchiso ne voit rien, et l'ISO
+# sort quand même — avec, dans le cas constaté, un initramfs amputé. La sortie
+# est la seule trace qu'il en reste, on la relit donc.
+#
+# DEUX MOTIFS, ET IL EN FAUT DEUX. La panne du 2026-08-29 (crochet `memdisk`
+# réclamant `memdiskfind`, paquet `syslinux` retiré avec le chemin BIOS) a
+# laissé DEUX lignes dans le journal (tools/vm-dev.md §35.3) :
+#
+#     ==> WARNING: errors were encountered during the build. …   ← mkinitcpio
+#     error: command failed to execute correctly                 ← pacman
+#
+# La première est propre à mkinitcpio ; la seconde est le marqueur GÉNÉRIQUE de
+# pacman pour N'IMPORTE QUEL crochet en échec. Ne guetter que la première, c'est
+# n'attraper que la panne déjà connue : le prochain crochet qui échouera ne
+# passera pas forcément par mkinitcpio, et l'ISO sortirait de nouveau en silence.
+motifs='errors were encountered during the build|error: command failed to execute correctly'
+if grep -qE "$motifs" "$journal"; then
+	echo "build-iso : un crochet a échoué pendant la construction (mkinitcpio ou" >&2
+	echo "  pacman). L'image produite n'est PAS fiable. Les lignes en cause :" >&2
+	grep -nE -B4 "$motifs" "$journal" >&2
+	exit 1
+fi
+
+shopt -s nullglob
+images=("$sortie"/*.iso)
+if ((${#images[@]} != 1)); then
+	echo "build-iso : ${#images[@]} image(s) dans $sortie — attendu exactement 1." >&2
+	exit 1
+fi
+image="${images[0]}"
+
+# Contrôle du contenu, dans le même esprit que la vérification de /boot que fait
+# `eschaton-install` : on n'annonce pas une image utilisable sans avoir constaté
+# que ce qui démarre s'y trouve.
+#
+# PRÉSENCE *ET* TAILLE. Le contrôle ne regardait que la présence des chemins :
+# un fichier vide ou tronqué le passait au vert. Il n'aurait donc PAS attrapé
+# l'initramfs amputé du 2026-08-29 — la panne même qui a motivé son écriture.
+# Chaque entrée porte maintenant un plancher, DÉLIBÉRÉMENT bas : il attrape une
+# génération vide ou tronquée, pas un binaire manquant à l'intérieur de
+# l'initramfs. Ce dernier cas reste du ressort de la relecture du journal
+# ci-dessus, et de rien d'autre : personne ne peut lire la liste des binaires
+# attendus dans un cpio sans savoir lesquels devaient s'y trouver.
+# Ordres de grandeur mesurés le 2026-08-29 (README §Mesure) : vmlinuz ≈ 15 Mio,
+# initramfs ≈ 90 Mio, airootfs.sfs ≈ 1,1 Gio. Les planchers sont au dixième.
+echo "==> Vérification du contenu de l'image"
+inventaire="$travail/contenu.txt"
+bsdtar -tf "$image" > "$inventaire"
+attendus=(
+	"eschaton/boot/x86_64/vmlinuz-linux:1500000"
+	"eschaton/boot/x86_64/initramfs-linux.img:9000000"
+	"eschaton/x86_64/airootfs.sfs:110000000"
+	"EFI/BOOT/BOOTx64.EFI:65536"
+	"loader/entries/01-eschaton.conf:32"
+)
+manque=0
+for entree in "${attendus[@]}"; do
+	chemin="${entree%:*}"; plancher="${entree##*:}"
+	if ! grep -qxF "$chemin" "$inventaire"; then
+		echo "build-iso : absent de l'image — $chemin" >&2
+		manque=1
+		continue
+	fi
+	# `bsdtar -xO | wc -c` plutôt que la taille lue dans `bsdtar -tv` : le format
+	# de la colonne de date varie d'une version à l'autre, le compte d'octets non.
+	# Une extraction en échec vaut zéro octet : elle tombe alors sous le plancher
+	# et rend le message qui va avec, au lieu de faire sortir `set -e` sans un mot.
+	if ! taille="$(bsdtar -xOf "$image" "$chemin" | wc -c | tr -d ' ')"; then taille=0; fi
+	if ((taille < plancher)); then
+		echo "build-iso : $chemin ne pèse que $taille octets (plancher $plancher) —" >&2
+		echo "  fichier vide ou tronqué, l'image ne démarrerait pas." >&2
+		manque=1
+	else
+		echo "    ok : $chemin ($taille octets)"
+	fi
+done
+((manque == 0)) || { echo "build-iso : image incomplète, elle ne démarrerait pas." >&2; exit 1; }
+
+octets="$(stat -c %s "$image")"
+
+echo "==> Somme de contrôle"
+# Uniquement le nom de base dans le fichier : `sha256sum -c` doit fonctionner
+# depuis le répertoire où l'image est téléchargée, pas seulement depuis ici.
+(cd "$sortie" && sha256sum "$(basename "$image")" > "$(basename "$image").sha256")
+
+printf '\n==> Image : %s\n' "$image"
+printf '    taille : %s octets (%s)\n' "$octets" "$(numfmt --to=iec-i --suffix=B "$octets")"
+printf '    budget : %s octets (%s)\n' "$budget_octets" "$(numfmt --to=iec-i --suffix=B "$budget_octets")"
+cat "$sortie/$(basename "$image").sha256"
+
+if ((octets > budget_octets)); then
+	echo >&2
+	echo "build-iso : image de $octets octets — au-delà des 2 Gio par fichier que" >&2
+	echo "  GitHub Releases accepte (spec §3.4). Elle n'est PAS publiable en l'état." >&2
+	exit 1
+fi
+
+if ((octets < plancher_octets)); then
+	echo >&2
+	echo "build-iso : image de $octets octets, sous le plancher de $plancher_octets —" >&2
+	echo "  une image tronquée sort plus PETITE, pas plus grosse, et passerait le" >&2
+	echo "  contrôle de budget sans encombre. Elle n'est PAS publiable." >&2
+	exit 1
+fi
+
+printf '\n==> Marge restante : %s\n' "$(numfmt --to=iec-i --suffix=B $((budget_octets - octets)))"

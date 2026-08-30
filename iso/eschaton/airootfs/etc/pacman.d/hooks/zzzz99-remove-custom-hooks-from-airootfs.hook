@@ -1,0 +1,19 @@
+# remove from airootfs!
+# Repris tel quel de configs/releng d'archiso (GPL-3.0-or-later, ../../../../../PROVENANCE.md).
+# Contournement de https://bugs.archlinux.org/task/49347 : retire de l'image les
+# crochets pacman qui ne servent QU'À la construction. Sans lui, ils
+# s'exécuteraient pendant le `pacstrap` que l'installeur lance vers /mnt.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = *
+
+[Action]
+Description = Work around FS#49347 by removing custom pacman hooks that are only required during ISO build...
+When = PostTransaction
+Depends = sh
+Depends = coreutils
+Depends = grep
+Exec = /bin/sh -c "rm -- $(grep -Frl 'remove from airootfs' /etc/pacman.d/hooks/)"

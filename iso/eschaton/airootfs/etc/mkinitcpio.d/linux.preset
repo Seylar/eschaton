@@ -1,0 +1,11 @@
+# Preset mkinitcpio du paquet `linux` DANS L'ENVIRONNEMENT LIVE.
+# Un seul preset (`archiso`) : on ne génère ni l'image de secours ni l'UKI.
+# Ce fichier est dans le `backup=` du paquet `linux` — pacstrap dépose donc sa
+# version en `.pacnew` et laisse celle-ci en place.
+
+PRESETS=('archiso')
+
+ALL_kver='/boot/vmlinuz-linux'
+archiso_config='/etc/mkinitcpio.conf.d/archiso.conf'
+
+archiso_image="/boot/initramfs-linux.img"
