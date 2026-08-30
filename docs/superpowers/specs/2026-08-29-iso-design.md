@@ -44,7 +44,9 @@ Le variant T2 est **indispensable et non contournable** : la puce T2 *est* le co
 
 ### 3.3 Ce que l'ISO embarque
 
-L'environnement live porte : `eschaton-install` et ses dépendances, le dépôt `[eschaton]` préconfiguré, `iwd` (et **non** `wpa_supplicant`, régression 2.11 constatée par la veille T2), les outils de secours (`snapper`, `btrfs-progs`, `limine`), et — pour le variant T2 seulement — `linux-t2`, `apple-bce` et `apple-bcm-firmware`.
+L'environnement live porte : `eschaton-install` et ses dépendances, le dépôt `[eschaton]` préconfiguré, `iwd` (et **non** `wpa_supplicant`, régression 2.11 constatée par la veille T2), les outils de secours (`snapper`, `btrfs-progs`, `limine`), et — pour le variant T2 seulement — `linux-t2` et `apple-bcm-firmware`.
+
+> **Errata du 2026-08-30 (ADR 0002)** : cette liste comportait `apple-bce`. **Ce paquet n'existe pas** — l'index réel du dépôt `arch-mact2` publie 37 paquets, aucun de ce nom ; le pilote `apple-bce` est **compilé dans `linux-t2`**. L'inscrire aurait fait échouer le `pacstrap`. Constaté à la construction réelle du variant.
 
 **Point juridique à ne pas contourner en silence** : `apple-bcm-firmware` contient du firmware Apple extrait de macOS. L'embarquer dans un ISO **publiquement téléchargeable** est une zone grise. Tant que le variant T2 reste un artefact interne non publié, la question ne se pose pas ; elle se poserait dès la première publication. À trancher avant toute mise en ligne du variant, jamais après.
 
