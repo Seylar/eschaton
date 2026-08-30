@@ -3,11 +3,23 @@
 # Profil archiso d'Eschaton — dérivé de `releng` (archiso 89-1), voir ../PROVENANCE.md.
 # Spec : docs/superpowers/specs/2026-08-29-iso-design.md §3.
 
-iso_name="eschaton"
+# UN SEUL PROFIL POUR LES DEUX IMAGES (spec §3.1).
+# `iso/build-iso --variant t2` pose ESCHATON_ISO_VARIANT avant d'appeler
+# mkarchiso ; tout ce que le variant change ICI, c'est le NOM de l'image — le
+# reste du delta (paquets, dépôt de construction, nom du noyau) est appliqué par
+# build-iso à une copie de travail. Le nom compte : c'est lui qui rend le
+# variant reconnaissable, et donc filtrable par la CI qui ne doit jamais le
+# publier (ADR 0004 §4.5).
+if [[ "${ESCHATON_ISO_VARIANT:-nominal}" == t2 ]]; then
+  iso_name="eschaton-t2"
+  iso_application="Eschaton — variant T2 (Mac 2019), NON PUBLIABLE"
+else
+  iso_name="eschaton"
+  iso_application="Eschaton — média d'installation x86_64"
+fi
 # Étiquette de volume : [A-Z0-9_] et 32 caractères au plus (contrainte mkarchiso).
 iso_label="ESCHATON_$(date --date="@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y%m)"
 iso_publisher="Eschaton <https://github.com/Seylar/eschaton>"
-iso_application="Eschaton — média d'installation x86_64"
 # ESCHATON_ISO_VERSION permet à la CI d'estampiller le tag publié ; à défaut, la
 # date du jour (ou SOURCE_DATE_EPOCH, pour une construction reproductible).
 iso_version="${ESCHATON_ISO_VERSION:-$(date --date="@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y.%m.%d)}"

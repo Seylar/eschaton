@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
-# Construit l'ISO nominal d'Eschaton (spec §3, plan SP4b-1 Task 1).
+# Construit l'ISO d'Eschaton (spec §3, plan SP4b-1 Tasks 1 et 4).
+#
+#   iso/build-iso                 → ISO NOMINAL (x86_64 ordinaire) — le livrable
+#   iso/build-iso --variant t2    → VARIANT T2 (MacBook Pro 2019) — jamais publié
+#
+# LE VARIANT N'EST PAS UNE FOURCHE. Il n'existe qu'un seul profil archiso,
+# iso/eschaton/. Le variant est un DELTA appliqué à la copie de travail :
+# une liste de paquets (iso/variants/t2/packages.x86_64), un fragment de dépôt
+# de construction (arch-mact2.conf), et la substitution du nom du noyau dans le
+# preset mkinitcpio et les entrées d'amorçage. C'est la contrainte que la
+# spec §3.1 pose : « la divergence doit rester une liste de paquets ».
 #
 # À exécuter EN ROOT dans un conteneur Arch x86_64 jetable. `--privileged` n'est
 # pas nécessaire : seule la capacité de monter /proc, /sys et /dev dans le
@@ -29,6 +39,72 @@ racine="$(cd "$(dirname "$0")/.." && pwd)"
 profil_src="$racine/iso/eschaton"
 travail="${ESCHATON_ISO_WORK:-$racine/iso/work}"
 sortie="${ESCHATON_ISO_OUT:-$racine/iso/out}"
+
+# --- 0. Variant ---------------------------------------------------------------
+variante="${ESCHATON_ISO_VARIANT:-nominal}"
+# Réponse au point ouvert de l'ADR 0004 §6.1 (13″ iGPU seul vs 15″/16″ Radeon
+# dédiée). Tant qu'il n'est pas tranché, la valeur est `indetermine` : l'image
+# porte alors les DEUX chemins, dans deux entrées d'amorçage. La réponse de
+# l'auteur sera un paramètre, pas une reconstruction.
+gpu="${ESCHATON_T2_GPU:-indetermine}"
+
+while (($#)); do
+	case "$1" in
+		--variant)
+			variante="${2-}"
+			shift 2 || { echo "build-iso : --variant attend une valeur." >&2; exit 1; }
+			;;
+		--variant=*) variante="${1#*=}"; shift ;;
+		--gpu)
+			gpu="${2-}"
+			shift 2 || { echo "build-iso : --gpu attend une valeur." >&2; exit 1; }
+			;;
+		--gpu=*) gpu="${1#*=}"; shift ;;
+		*)
+			echo "build-iso : option inconnue « $1 »." >&2
+			echo "  usage : build-iso [--variant nominal|t2] [--gpu indetermine|igpu|amd]" >&2
+			exit 1
+			;;
+	esac
+done
+
+case "$variante" in
+	nominal|t2) ;;
+	*)
+		# Refuser plutôt que se rabattre sur le nominal : construire silencieusement
+		# une image qui n'est pas celle demandée est pire que ne rien construire.
+		echo "build-iso : variant inconnu « $variante » — attendu « nominal » ou « t2 »." >&2
+		exit 1
+		;;
+esac
+
+case "$gpu" in
+	indetermine|igpu|amd) ;;
+	*)
+		echo "build-iso : --gpu « $gpu » inconnu — attendu indetermine, igpu ou amd." >&2
+		exit 1
+		;;
+esac
+
+# --- LE REFUS DE PUBLICATION, ET IL EST EN PREMIER ----------------------------
+# Le variant T2 embarque `apple-bcm-firmware`, c'est-à-dire du firmware Apple
+# extrait de macOS. Le redistribuer dans une image publiquement téléchargeable
+# est une zone grise juridique (spec §3.3, ADR 0004 §4.5). La conclusion tenue
+# ici est simple : sur un runner de CI, cette image ne doit pas même EXISTER —
+# on ne peut pas publier par accident un fichier qui n'a jamais été produit.
+#
+# Ce contrôle est délibérément placé AVANT ceux de root et d'architecture. Deux
+# raisons : il refuse au plus tôt, et il reste ATTEIGNABLE depuis le poste de
+# développement (un Mac arm64, non root) — donc testable. Une garde qu'on ne
+# peut pas exercer est une garde dont on ne sait rien.
+if [[ "$variante" == t2 && ( -n "${GITHUB_ACTIONS:-}" || -n "${CI:-}" ) ]]; then
+	echo "build-iso : le variant T2 ne se construit PAS en intégration continue." >&2
+	echo "  Il embarque apple-bcm-firmware — du firmware Apple extrait de macOS —" >&2
+	echo "  et ne doit être ni publié en GitHub Release ni déposé en artefact" >&2
+	echo "  (spec §3.3, ADR 0004 §4.5). C'est un outil de dogfooding, construit" >&2
+	echo "  localement par l'auteur, sur la machine de l'auteur." >&2
+	exit 1
+fi
 # 2 Gio exactement — la limite par fichier de GitHub Releases (veille §2.6).
 budget_octets=$((2 * 1024 * 1024 * 1024))
 # Un plancher aussi, et pas seulement un plafond : une image tronquée (xorriso
@@ -68,6 +144,105 @@ mkdir -p "$profil" "$sortie"
 find "$sortie" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
 cp -a "$profil_src/." "$profil/"
 
+# --- 1 bis. Le delta du variant, appliqué à la COPIE de travail ----------------
+# Suffixe du nom de noyau : vide pour le nominal, « -t2 » pour le variant. Il
+# court jusqu'au contrôle d'inventaire, plus bas — c'est la seule variable qui
+# fasse la différence entre les deux images du côté amorçage.
+suffixe_noyau=""
+
+if [[ "$variante" == t2 ]]; then
+	variant_src="$racine/iso/variants/t2"
+	suffixe_noyau="-t2"
+	echo "==> Variant T2 : application du delta (ADR 0004 — toléré, jamais supporté)"
+
+	# a) Liste de paquets. Les lignes « -nom » retirent, les autres ajoutent.
+	liste="$profil/packages.x86_64"
+	ajouts=() retraits=()
+	while IFS= read -r ligne; do
+		[[ "$ligne" =~ ^[[:space:]]*(#|$) ]] && continue
+		if [[ "$ligne" == -* ]]; then retraits+=("${ligne#-}"); else ajouts+=("$ligne"); fi
+	done < "$variant_src/packages.x86_64"
+
+	for p in "${retraits[@]}"; do
+		# Retirer une ligne qui n'existe pas est un silence dangereux : si
+		# `linux` changeait de nom dans la liste nominale, le variant
+		# embarquerait deux noyaux sans que rien ne le dise.
+		grep -qx "$p" "$liste" || { echo "build-iso : le variant retire « $p », absent de la liste nominale." >&2; exit 1; }
+		grep -vx "$p" "$liste" > "$liste.tmp" && mv "$liste.tmp" "$liste"
+	done
+	{
+		printf '\n# --- variant T2 (iso/variants/t2/packages.x86_64) ---\n'
+		printf '%s\n' "${ajouts[@]}"
+	} >> "$liste"
+	echo "    paquets ajoutés : ${ajouts[*]}"
+	echo "    paquets retirés : ${retraits[*]}"
+
+	# b) Dépôt tiers — DANS LE pacman.conf DE CONSTRUCTION, ET LÀ SEULEMENT.
+	# $profil/pacman.conf est ce que mkarchiso consomme pour peupler l'image ;
+	# $profil/airootfs/etc/pacman.conf est ce qui PART dans l'image, puis dans le
+	# système installé. Confondre les deux ferait entrer un dépôt non signé dans
+	# la configuration par défaut d'Eschaton (ADR 0004 §4.2).
+	cat "$variant_src/arch-mact2.conf" >> "$profil/pacman.conf"
+
+	# c) Preset mkinitcpio. Le fichier doit porter le nom du PAQUET noyau, sans
+	# quoi pacstrap ne génère aucun initramfs — et l'image sort sans de quoi
+	# démarrer, silencieusement.
+	preset="$profil/airootfs/etc/mkinitcpio.d"
+	{
+		echo "# Variant T2 — dérivé de linux.preset par iso/build-iso, ne pas versionner."
+		sed -e 's|vmlinuz-linux|vmlinuz-linux-t2|' \
+			-e 's|initramfs-linux\.img|initramfs-linux-t2.img|' "$preset/linux.preset"
+	} > "$preset/linux-t2.preset"
+	# Le preset du paquet amont n'a plus de noyau à décrire : le laisser ferait
+	# échouer mkinitcpio sur un `/boot/vmlinuz-linux` qui n'existe pas.
+	rm -f "$preset/linux.preset"
+
+	# d) Entrées d'amorçage. Paramètres relevés par la veille §2.1 (recette Arch
+	# de t2linux) et §7.2 (retour Limine/Btrfs sur T2) :
+	#   intel_iommu=on iommu=pt   — la T2 exige l'IOMMU pour ses transferts DMA
+	#   pcie_ports=compat         — Thunderbolt/PCIe du châssis Apple
+	#   pm_async=off              — veille : évite des suspensions concurrentes
+	params_t2="intel_iommu=on iommu=pt pcie_ports=compat pm_async=off"
+	case "$gpu" in
+		# 13″ 2019 (MacBookPro15,2 / 15,4) : Iris Plus seule, aucune bascule à
+		# faire — rien à ajouter, et surtout pas apple_gmux qui n'a pas de dGPU
+		# à mettre en veille.
+		igpu) ;;
+		# 15″/16″ (MacBookPro15,1/15,3/16,1) : Radeon dédiée. On force l'iGPU dès
+		# l'amorçage — l'installation n'a aucun besoin de la carte dédiée, et
+		# c'est elle qui noircit l'écran sur certaines configurations.
+		amd) params_t2="$params_t2 apple_gmux.force_igd=y" ;;
+		# Point ouvert ADR 0004 §6.1 non tranché : on ne suppose rien. L'entrée
+		# `nomodeset` créée plus bas couvre le cas 15″/16″ récalcitrant.
+		indetermine) ;;
+	esac
+	entrees="$profil/efiboot/loader/entries"
+	for e in "$entrees"/*.conf; do
+		sed -i -e "s|vmlinuz-linux|vmlinuz-linux-t2|" \
+			-e "s|initramfs-linux\.img|initramfs-linux-t2.img|" \
+			-e "s|^\(options .*\)$|\1 $params_t2|" \
+			-e "s|^\(title .*\)$|\1 — Mac T2|" "$e"
+	done
+
+	# e) L'ÉCHAPPATOIRE À L'ÉCRAN NOIR, et la réponse au point ouvert §6.1.
+	# La Radeon Pro 5600M ne rend qu'un écran noir sans `nomodeset` (veille
+	# §1.3). Tant que la taille d'écran du Mac n'est pas connue, une entrée
+	# supplémentaire porte ce contournement : la même image sert le 13″ et le
+	# 16″, et si l'écran reste noir l'auteur choisit cette ligne dans le menu
+	# plutôt que de reconstruire une image.
+	{
+		echo "title    Eschaton — Mac T2, écran noir (nomodeset)"
+		echo "sort-key 03"
+		echo "linux    /%INSTALL_DIR%/boot/%ARCH%/vmlinuz-linux-t2"
+		echo "initrd   /%INSTALL_DIR%/boot/%ARCH%/initramfs-linux-t2.img"
+		echo "options  archisobasedir=%INSTALL_DIR% archisosearchuuid=%ARCHISO_UUID% console=tty0 console=ttyS0,115200 $params_t2 nomodeset"
+	} > "$entrees/03-eschaton-t2-nomodeset.conf"
+
+	# f) Le motd dit ce que la machine ne fera pas. Mieux vaut le lire dans le
+	# live que le découvrir après l'installation.
+	cat "$variant_src/motd" >> "$profil/airootfs/etc/motd"
+fi
+
 echo "==> Intégration d'eschaton-install dans l'environnement live"
 # Source unique de vérité : installer/. Le profil ne contient PAS de copie —
 # c'est ici, et seulement ici, que les deux se rencontrent.
@@ -93,9 +268,41 @@ else
 	echo "==> Trousseau Eschaton absent ($cle) — dépôt [eschaton] en SigLevel Optional (SP4a non livré)."
 fi
 
+# --- 2 bis. Le dépôt tiers n'a pas fui ----------------------------------------
+# L'invariant à tenir est « aucune CONFIGURATION pacman de l'image ne déclare
+# arch-mact2 », et non « le mot arch-mact2 n'apparaît nulle part » : le motd du
+# variant nomme le dépôt en toutes lettres pour prévenir l'utilisateur, et c'est
+# une bonne chose. Une garde qui confond les deux se fait désarmer au premier
+# faux positif — ce qui la rendrait pire qu'inutile.
+#
+# On cherche donc deux choses :
+#   - une section [arch-mact2], OÙ QUE CE SOIT sous airootfs ;
+#   - toute mention dans les fichiers que pacman lit vraiment.
+fuite_depot_tiers() {
+	local base="$1"
+	grep -rlE '^[[:space:]]*\[arch-mact2\]' "$base" 2>/dev/null || true
+	for c in "$base/etc/pacman.conf" "$base/etc/pacman.d"; do
+		[[ -e "$c" ]] && { grep -rl 'arch-mact2' "$c" 2>/dev/null || true; }
+	done
+}
+
+# Ce contrôle tourne pour les DEUX variants. Sur le nominal il ne devrait rien
+# avoir à dire — mais c'est justement là qu'une fuite passerait inaperçue.
+fuites="$(fuite_depot_tiers "$profil/airootfs" | sort -u)"
+if [[ -n "$fuites" ]]; then
+	echo "build-iso : le dépôt tiers arch-mact2 a fui dans la configuration pacman" >&2
+	echo "  de l'environnement live. Il ne doit JAMAIS entrer dans la configuration" >&2
+	echo "  par défaut : il n'est pas signé (ADR 0004 §4.2). Fichiers en cause :" >&2
+	printf '    %s\n' "$fuites" >&2
+	exit 1
+fi
+
 # --- 3. Construction ----------------------------------------------------------
 echo "==> mkarchiso"
 journal="$travail/mkarchiso.log"
+# profiledef.sh lit ESCHATON_ISO_VARIANT pour nommer l'image : c'est ce qui
+# rend le variant reconnaissable au premier coup d'œil, et filtrable par la CI.
+export ESCHATON_ISO_VARIANT="$variante"
 mkarchiso -v -w "$travail/mkarchiso" -o "$sortie" "$profil" 2>&1 | tee "$journal"
 
 # --- 4. Le piège du succès muet ----------------------------------------------
@@ -148,9 +355,13 @@ image="${images[0]}"
 echo "==> Vérification du contenu de l'image"
 inventaire="$travail/contenu.txt"
 bsdtar -tf "$image" > "$inventaire"
+# `$suffixe_noyau` est vide sur le nominal et « -t2 » sur le variant : sans lui,
+# le contrôle chercherait `vmlinuz-linux` dans une image qui n'embarque que
+# `vmlinuz-linux-t2` — il échouerait sur une image saine, ou (pire) passerait au
+# vert si quelqu'un le neutralisait pour faire taire l'échec.
 attendus=(
-	"eschaton/boot/x86_64/vmlinuz-linux:1500000"
-	"eschaton/boot/x86_64/initramfs-linux.img:9000000"
+	"eschaton/boot/x86_64/vmlinuz-linux$suffixe_noyau:1500000"
+	"eschaton/boot/x86_64/initramfs-linux$suffixe_noyau.img:9000000"
 	"eschaton/x86_64/airootfs.sfs:110000000"
 	"EFI/BOOT/BOOTx64.EFI:65536"
 	"loader/entries/01-eschaton.conf:32"
@@ -178,6 +389,34 @@ for entree in "${attendus[@]}"; do
 done
 ((manque == 0)) || { echo "build-iso : image incomplète, elle ne démarrerait pas." >&2; exit 1; }
 
+# Le dépôt tiers ne doit pas non plus se trouver dans le système QUE PACSTRAP A
+# CONSTRUIT. Le contrôle d'avant-construction regardait nos sources ; celui-ci
+# regarde le résultat, là où un `pacman.conf` déposé par un paquet, un `.pacnew`
+# ou une copie de mkarchiso pourrait le réintroduire sans passer par nous.
+#
+# On inspecte l'arborescence pacstrap et NON le squashfs : ce dernier est
+# compressé en zstd, un `grep` dedans ne trouverait rien même si la chaîne y
+# était — une garde qui ne peut pas échouer est pire que pas de garde. C'est
+# exactement le même contenu, avant compression.
+if [[ "$variante" == t2 ]]; then
+	echo "==> Le dépôt tiers n'est pas dans le système livré"
+	livre="$travail/mkarchiso/x86_64/airootfs"
+	if [[ ! -d "$livre" ]]; then
+		echo "build-iso : arborescence pacstrap introuvable ($livre) — la garde de" >&2
+		echo "  cloisonnement du dépôt tiers ne peut pas s'exercer. Image refusée." >&2
+		exit 1
+	fi
+	fuites="$(fuite_depot_tiers "$livre" | sort -u)"
+	if [[ -n "$fuites" ]]; then
+		echo "build-iso : arch-mact2 a fui dans la configuration pacman du système" >&2
+		echo "  livré. Ce dépôt n'est pas signé et ne doit jamais entrer dans la" >&2
+		echo "  configuration par défaut (ADR 0004 §4.2). Fichiers en cause :" >&2
+		printf '    %s\n' "$fuites" >&2
+		exit 1
+	fi
+	echo "    ok : aucune configuration pacman du système livré ne déclare arch-mact2"
+fi
+
 octets="$(stat -c %s "$image")"
 
 echo "==> Somme de contrôle"
@@ -185,10 +424,40 @@ echo "==> Somme de contrôle"
 # depuis le répertoire où l'image est téléchargée, pas seulement depuis ici.
 (cd "$sortie" && sha256sum "$(basename "$image")" > "$(basename "$image").sha256")
 
-printf '\n==> Image : %s\n' "$image"
+# --- L'INTERDICTION DE PUBLIER, ÉCRITE À CÔTÉ DE L'IMAGE ----------------------
+# Troisième marque, après le refus sous CI et le nom de fichier. Elles ne font
+# pas doublon : le refus sous CI empêche l'image d'exister sur un runner, le nom
+# la rend filtrable, et ce fichier la rend lisible par un humain qui tomberait
+# sur l'image six mois plus tard sans se souvenir de rien.
+if [[ "$variante" == t2 ]]; then
+	cat > "$sortie/NE-PAS-PUBLIER.txt" <<'FIN'
+Cette image est le VARIANT T2 d'Eschaton. Elle ne doit être publiée nulle part :
+ni en GitHub Release, ni en artefact de CI, ni sur un hébergement public.
+
+Motif : elle embarque `apple-bcm-firmware`, c'est-à-dire du firmware Broadcom
+extrait de macOS Big Sur et redistribué. C'est une zone grise juridique
+(spec SP4b-1 §3.3, ADR 0004 §4.5). `archiso-t2` l'assume en tant que projet
+communautaire ; Eschaton ne l'a pas tranché, et tant que ce n'est pas tranché la
+réponse est non.
+
+Elle est aussi bâtie sur `linux-t2`, issu du dépôt tiers `arch-mact2` : non
+signé, mainteneur unique. Le Mac T2 est une cible TOLÉRÉE, jamais supportée.
+
+Usage prévu : le dogfooding de l'auteur, sur sa propre machine, et rien d'autre.
+FIN
+	echo "==> $sortie/NE-PAS-PUBLIER.txt écrit"
+fi
+
+printf '\n==> Image : %s (variant %s)\n' "$image" "$variante"
 printf '    taille : %s octets (%s)\n' "$octets" "$(numfmt --to=iec-i --suffix=B "$octets")"
 printf '    budget : %s octets (%s)\n' "$budget_octets" "$(numfmt --to=iec-i --suffix=B "$budget_octets")"
 cat "$sortie/$(basename "$image").sha256"
+if [[ "$variante" == t2 ]]; then
+	printf '    ⚠️  NE PAS PUBLIER — firmware Apple redistribué (spec §3.3)\n'
+	printf '    GPU : %s' "$gpu"
+	[[ "$gpu" == indetermine ]] && printf ' (point ouvert ADR 0004 §6.1 — entrée « nomodeset » offerte au menu)'
+	printf '\n'
+fi
 
 if ((octets > budget_octets)); then
 	echo >&2

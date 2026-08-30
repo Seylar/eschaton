@@ -1,0 +1,81 @@
+# Variant T2 — le DELTA de paquets, et rien d'autre (spec §3.1, plan Task 4.1).
+#
+# Ce fichier n'est pas une liste de paquets : c'est la DIFFÉRENCE avec
+# ../../eschaton/packages.x86_64. `iso/build-iso --variant t2` applique ce
+# delta à une copie de travail de la liste nominale. Le profil archiso reste
+# unique — c'est la contrainte que la spec §3.1 pose noir sur blanc : « la
+# divergence doit rester une liste de paquets, jamais une fourche du profil ».
+#
+# Deux formes de ligne :
+#   nom-du-paquet    → ajouté
+#   -nom-du-paquet   → retiré de la liste nominale
+#
+# ⚠️ TOUT CE QUI EST AJOUTÉ ICI VIENT DU DÉPÔT TIERS `arch-mact2`, non signé
+# (SigLevel = Never), à mainteneur unique. Ce dépôt sert UNIQUEMENT à la
+# construction : voir arch-mact2.conf, et la garde de build-iso qui vérifie
+# qu'il n'a pas fui dans le pacman.conf de l'environnement live.
+
+# --- le noyau ------------------------------------------------------------------
+# LA raison d'être du variant. La puce T2 *est* le contrôleur NVMe : un noyau
+# amont ne voit aucun disque et l'installation s'arrête avant de partitionner
+# (veille §6.1). `linux-t2` porte les correctifs T2 et, surtout, le pilote
+# `apple-bce` qui expose clavier, trackpad, audio et webcam.
+linux-t2
+
+# `linux-t2` déclare `provides = linux` (constaté le 2026-08-30 dans l'index du
+# dépôt). Conséquence à ne pas rater : rien ne signalerait le doublon si on
+# gardait le paquet amont — l'image embarquerait DEUX noyaux, mkarchiso
+# copierait les deux vmlinuz, et l'entrée d'amorçage désignerait celui qui ne
+# voit pas le disque une fois sur deux.
+-linux
+
+# --- le Wi-Fi ------------------------------------------------------------------
+# `apple-bcm-firmware` 14.0, `arch=(any)` : le firmware Broadcom extrait de
+# macOS Big Sur, déjà empaqueté. Sans lui, aucun réseau — et le MacBook Pro 2019
+# n'a AUCUN port Ethernet (veille §5.2). Comme l'ISO installe *en ligne*
+# (spec §3.4), pas de firmware = pas d'installation du tout.
+#
+# ⚠️ C'est CE paquet qui interdit la publication du variant : il redistribue du
+# firmware propriétaire Apple. Zone grise juridique (spec §3.3, ADR 0004).
+apple-bcm-firmware
+
+# --- les ventilateurs ----------------------------------------------------------
+# Sans démon de contrôle, les ventilateurs d'un Mac T2 restent au régime que le
+# SMC impose par défaut. Une installation dure des dizaines de minutes, moteur
+# chaud : `t2fanrd` est ici pour la durée du live, pas par confort.
+t2fanrd
+
+# ==============================================================================
+# CE QUI N'EST **PAS** ICI, ET POURQUOI
+# ==============================================================================
+#
+# `apple-bce` — LE PAQUET N'EXISTE PAS. Le plan (Task 4.1) et la spec §3.3 le
+#   nomment ; l'index réel du dépôt, relevé le 2026-08-30 sur
+#   https://mirror.funami.tech/arch-mact2/os/x86_64/arch-mact2.db, publie
+#   37 paquets et aucun de ce nom. Le pilote `apple-bce` est compilé DANS
+#   `linux-t2` — c'est précisément ce qui distingue ce noyau de l'amont.
+#   L'écrire ici ferait échouer le pacstrap sur « target not found », après
+#   plusieurs minutes de construction. Corriger le plan, pas la liste.
+#
+# `mkinitcpio-archiso-t2` — CONFLIT DE FICHIERS. Le dépôt en publie une version
+#   73, fork des scripts d'initcpio d'archiso, qui livre les mêmes chemins que
+#   le `mkinitcpio-archiso` d'Arch (aligné sur archiso 89) SANS déclarer ni
+#   `conflicts` ni `provides`. Les deux ensemble : conflit de fichiers ; lui
+#   seul : seize versions de retard sur les crochets qui montent notre image.
+#   ⚠️ RÉSERVE HONNÊTE : c'est ce que `archiso-t2` utilise, et nous ne l'avons
+#   pas contredit sur vraie machine. Si le média démarre puis n'arrive pas à
+#   trouver son propre système de fichiers racine sur le Mac, c'est la première
+#   piste à remonter (Task 5).
+#
+# `linux-t2-headers` — n'a d'usage que pour compiler des modules DKMS. Il n'y
+#   en a aucun dans l'environnement live ; il en faudra sur le système installé
+#   si un module tiers arrive, et c'est `eschaton-t2` qui le portera.
+#
+# `apple-t2-audio-config`, `tiny-dfr` — audio et Touch Bar. Aucun des deux ne
+#   sert à INSTALLER. `tiny-dfr` traînerait en plus pango/librsvg/gdk-pixbuf2
+#   dans un environnement live qui n'a pas de serveur graphique. Ils
+#   appartiennent au système installé : c'est `packages/eschaton-t2/` qui les
+#   déclare en dépendances.
+#
+# `wpa_supplicant` — absent du nominal, et pour la même raison ici : régression
+#   2.11 sur le Wi-Fi Broadcom, constatée par la veille §5.1. `iwd` seul.

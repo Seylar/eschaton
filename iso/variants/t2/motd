@@ -1,0 +1,32 @@
+
+  ─────────────────────────────────────────────────────────────────────────
+  VARIANT T2 — MacBook Pro 2019.  Toléré, pas supporté (ADR 0004).
+
+  Noyau linux-t2, issu du dépôt tiers arch-mact2 : non signé, mainteneur
+  unique, suit l'amont avec du retard. Ce média est un outil de dogfooding,
+  il n'est ni publié ni annoncé comme supporté.
+
+  Avant d'installer, depuis macOS Recovery (Cmd+R au démarrage) :
+      Utilitaire de sécurité au démarrage
+        · Sécurité au démarrage  →  Aucune sécurité
+        · Démarrage externe      →  Autoriser
+      Ce réglage vit dans la T2 et survit à l'effacement du disque : le
+      faire AVANT d'effacer, sans quoi la clé ne démarrera plus.
+
+  Réseau : le Wi-Fi marche sans passer par macOS (firmware embarqué).
+      Pas de port Ethernet sur cette machine — iwctl, ou adaptateur USB-C.
+
+  CE QUI NE MARCHERA PAS, ou mal :
+      Touch ID       jamais — le capteur répond à la Secure Enclave, pas
+                     à l'OS. Ce n'est pas « pas encore ».
+      Micro interne  volume faible (caractéristique matérielle, pas un bug)
+      Veille         fragile ; régressions connues sur les noyaux récents
+      Touch Bar      fonctionne, mais ne se réveille pas après veille
+      GPU AMD        15″/16″ seulement : bascule hybride à gérer. Si l'écran
+                     reste noir, choisir l'entrée « nomodeset » au démarrage.
+      Trackpad       sans force-touch ni rejet de paume
+
+  Si le disque interne n'apparaît pas dans « lsblk », ne pas insister :
+  c'est que ce média n'est pas le bon — la T2 est le contrôleur NVMe.
+  ─────────────────────────────────────────────────────────────────────────
+
