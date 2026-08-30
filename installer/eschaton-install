@@ -186,4 +186,52 @@ if [[ "$verify_failed" != "0" ]]; then
   exit 1
 fi
 
+# 7. Vérification post-install — les actions polkit qui CONTRAIGNENT les
+# binaires privilégiés du socle.
+#
+# Deux façons de perdre la contrainte, et aucune ne se voit à l'œil nu :
+#
+#   a) l'action n'est pas livrée. `pkexec` ne refuse alors PAS : il retombe sur
+#      l'action générique `org.freedesktop.policykit.exec`, dont les
+#      `<defaults>` valent `auth_admin` sur les trois axes — `allow_any` et
+#      `allow_inactive` compris — là où les nôtres posent `no`. Une session
+#      distante ou inactive, à qui nos actions n'offrent aucun chemin
+#      d'authentification, en retrouve un. C'était le cas jusqu'au 2026-08-30 :
+#      les binaires venaient d'eschaton-base et les actions de greffons DMS que
+#      cet installeur ne pacstrape pas (revue de sécurité C1) ;
+#
+#   b) l'action est MASQUÉE. `/etc/polkit-1/actions/` prime sur
+#      `/usr/share/polkit-1/actions/` : un fichier de même nom déposé dans
+#      `/etc` remplace la politique livrée, silencieusement. Constaté sur
+#      polkit 127 (risque n°7 de la spec update graphique). Rien ne le
+#      signalait ; on le contrôle donc ici.
+#
+# On vérifie des FICHIERS, pas `pkaction` : celui-ci lit bien les actions sans
+# `polkitd`, mais il lirait celles de l'environnement live, pas celles de
+# /mnt. Le contrôle du système démarré est consigné dans tools/vm-dev.md §33.2.
+echo "==> Vérification des actions polkit du socle"
+polkit_failed=0
+for action in org.eschaton.update org.eschaton.rollback; do
+  livree="/mnt/usr/share/polkit-1/actions/$action.policy"
+  masque="/mnt/etc/polkit-1/actions/$action.policy"
+  verify_path "$livree" "l'action polkit $action" || polkit_failed=1
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "DRY: test ! -e $masque   # $action non masquée par /etc"
+  elif [[ -e "$masque" ]]; then
+    echo "eschaton-install : $action est MASQUÉE par $masque." >&2
+    echo "  /etc/polkit-1/actions prime sur /usr/share : la politique livrée" >&2
+    echo "  n'est pas celle qui s'applique. Retire ce fichier, ou assume-le" >&2
+    echo "  explicitement." >&2
+    polkit_failed=1
+  else
+    echo "    ok : $action n'est masquée par aucun fichier de /etc"
+  fi
+done
+if [[ "$polkit_failed" != "0" ]]; then
+  echo "eschaton-install : les binaires privilégiés du socle ne sont pas contraints." >&2
+  echo "Ne redémarre pas sans corriger : pkexec retomberait sur l'action générique," >&2
+  echo "qui autorise l'authentification depuis une session distante ou inactive." >&2
+  exit 1
+fi
+
 echo "==> Installation terminée. Redémarre (umount -R /mnt && reboot)."

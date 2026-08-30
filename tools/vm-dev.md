@@ -4522,3 +4522,178 @@ f778ff5dc9d2afff7360d34cb1b4e0bf18f67f3a46e95515ff436588d9f9460b  mot de passe s
 1da16ef90c990e8710b3f63bebae80301e66a0b31a6f7e432a9a1fa3eb719757  décision humaine
 9569850528a640ef77ff063c146b7e4291505e989723925790f43d95a05e1cf8  succès dégradé
 ```
+
+---
+
+## 33. Revue de sécurité de la vague update graphique (2026-08-30)
+
+VM `eschaton-dev`, versions de branche : `eschaton-base 0.1.0-20`,
+`eschaton-dms-plugin-update 0.1.0-13`, `eschaton-dms-plugin-rollback 0.1.0-3`,
+`polkit 127-3`. Mesures prises AVANT correction, sur le système tel qu'il était.
+
+### 33.1 C1 — le binaire privilégié était livré sans l'action qui le contraint
+
+Le constat d'emballage, d'abord. `eschaton-base` livre trois binaires, dont deux
+sont des cibles de `pkexec`, et **aucune** action polkit :
+
+```console
+$ pacman -Qo /usr/share/polkit-1/actions/org.eschaton.update.policy \
+             /usr/share/polkit-1/actions/org.eschaton.rollback.policy
+… org.eschaton.update.policy appartient à eschaton-dms-plugin-update 0.1.0-13
+… org.eschaton.rollback.policy appartient à eschaton-dms-plugin-rollback 0.1.0-3
+$ pacman -Ql eschaton-base | grep -c polkit
+0
+$ pacman -Ql eschaton-base | grep usr/bin
+eschaton-base /usr/bin/eschaton-rollback
+eschaton-base /usr/bin/eschaton-update
+eschaton-base /usr/bin/eschaton-update-helper
+```
+
+Or `installer/eschaton-install` ne pacstrape que `eschaton-base` et
+`eschaton-branding` : les deux binaires arrivaient donc seuls sur un système
+fraîchement installé.
+
+**Ce que fait `pkexec` sans action.** Il ne refuse pas. Action retirée puis
+appel réel :
+
+```console
+$ sudo mv /usr/share/polkit-1/actions/org.eschaton.update.policy /root/…mis-de-cote
+$ pkaction --action-id org.eschaton.update --verbose
+No action with action id org.eschaton.update
+$ pkexec /usr/bin/eschaton-update-helper --apply
+==== AUTHENTICATING FOR org.freedesktop.policykit.exec ====
+Authentication is needed to run `/usr/bin/eschaton-update-helper --apply' as the super user
+Authenticating as: seylar
+$ journalctl -u polkit -o cat --since @…
+Operator of unix-process:77566:742652 FAILED to authenticate to gain
+authorization for action org.freedesktop.policykit.exec …
+```
+
+Le repli est donc réel, et confirmé par le journal de `polkitd` : c'est bien
+`org.freedesktop.policykit.exec` qui est contrôlée.
+
+**Ce que ce repli coûte — et ce qu'il ne coûte pas.** La revue annonçait une
+autorisation *mémorisée* (`auth_admin_keep`) couvrant un `pkexec` ultérieur sur
+un autre programme. **C'est faux sur polkit 127-3.** L'action générique amont
+porte `auth_admin`, sans `_keep`, sur les trois axes :
+
+```console
+$ pkaction --action-id org.freedesktop.policykit.exec --verbose
+  implicit any:      auth_admin
+  implicit inactive: auth_admin
+  implicit active:   auth_admin
+```
+
+Relu dans le fichier livré, `/usr/share/polkit-1/actions/org.freedesktop.policykit.policy`,
+bloc `<defaults>` : `auth_admin` trois fois. L'invariant « une action privilégiée
+= une authentification » **tient donc** même sous le repli.
+
+Ce qui est réellement perdu est ailleurs, et c'est assez grave pour justifier le
+correctif :
+
+| | action Eschaton | repli générique |
+|---|---|---|
+| `allow_any` | `no` | `auth_admin` |
+| `allow_inactive` | `no` | `auth_admin` |
+| `allow_active` | `auth_admin` | `auth_admin` |
+| message de la modale | « Mettre à jour Eschaton » | « run a program as another user » |
+
+Nos actions ferment délibérément la session distante et la session inactive :
+elles n'ont **aucun** chemin d'authentification. Le repli leur en rend un. Et la
+modale cesse de nommer l'opération que l'utilisateur autorise.
+
+**Correction.** Les deux `.policy` sont livrés par `eschaton-base`, auprès des
+binaires qu'ils épinglent. `tests/actions-avec-binaires.bats` l'exige désormais
+pour toute action annotée `exec.path`, quel que soit le paquet ; la garde échoue
+sur l'arbre d'avant correction et nomme les deux cas.
+
+État de la VM après la mesure : fichier remis en place, `pacman -Qkk
+eschaton-dms-plugin-update` → « 16 fichiers au total, 0 fichier modifié ».
+
+### 33.2 I6 — l'état polkit attendu sur un système démarré
+
+`/etc/polkit-1/actions/` **prime** sur `/usr/share/polkit-1/actions/` : un
+fichier de même nom y masque la politique livrée, sans que rien ne le signale
+(risque n°7 de la spec). L'état attendu, à contrôler après toute installation ou
+mise à jour du socle :
+
+```console
+$ ls /etc/polkit-1/actions/
+                                    ← VIDE : aucune action livrée n'est masquée
+
+$ pkaction --action-id org.eschaton.update --verbose
+org.eschaton.update:
+  description:       Mettre à jour Eschaton
+  implicit any:      no
+  implicit inactive: no
+  implicit active:   auth_admin
+  annotation:        org.freedesktop.policykit.exec.path -> /usr/bin/eschaton-update-helper
+
+$ pkaction --action-id org.eschaton.rollback --verbose
+  implicit any:      no
+  implicit inactive: no
+  implicit active:   auth_admin
+  annotation:        org.freedesktop.policykit.exec.path -> /usr/bin/eschaton-rollback
+```
+
+Trois choses à lire, dans cet ordre : `no / no / auth_admin` (et **jamais**
+`_keep`), l'annotation qui épingle le bon programme, et le répertoire `/etc`
+vide. Un `implicit any: auth_admin` signale le repli du §33.1 ; une valeur
+`_keep` signale une politique masquée ou réécrite.
+
+`installer/eschaton-install` contrôle désormais les deux points — présence et
+absence de masquage — avant d'annoncer « Installation terminée », et refuse de
+conclure sinon.
+
+### 33.3 I7 — la charge résout ses outils par le PATH, et il ne faut pas la « durcir »
+
+Le commit `5f6cfa2` annonçait « la porte n'exécute plus rien par le PATH ». Vrai
+pour `eschaton-update-helper`, dont les deux commandes sont des constantes
+absolues. **Faux pour la charge** : `eschaton-update --transaction` résout une
+quinzaine d'outils par le `PATH` (`pacman`, `df`, `snapper`, `systemctl`,
+`pgrep`, `comm`…).
+
+Mesuré, la question est de savoir QUI contrôle ce `PATH`. Ce n'est pas
+l'appelant :
+
+```console
+$ sudo systemd-run --system --quiet --wait --pipe /usr/bin/env | grep ^PATH=
+PATH=/usr/local/sbin:/usr/local/bin:/usr/bin
+$ sudo env PATH=/tmp/pirate:/usr/bin systemd-run --system --quiet --wait --pipe \
+      /usr/bin/env | grep ^PATH=
+PATH=/usr/local/sbin:/usr/local/bin:/usr/bin      ← /tmp/pirate n'apparaît pas
+```
+
+L'unité reçoit le `PATH` de systemd, pas celui de qui l'a démarrée. Les deux
+répertoires prioritaires sont `root:root 755` : seul root y écrit.
+
+```console
+$ ls -ld /usr/local/bin /usr/local/sbin
+drwxr-xr-x 1 root root … /usr/local/bin
+drwxr-xr-x 1 root root … /usr/local/sbin
+```
+
+**Décision : on corrige l'affirmation, on ne durcit PAS la charge.** Deux
+raisons, la seconde étant décisive.
+
+1. Il n'y a rien à durcir *contre* : le `PATH` n'est pas contrôlable par un
+   appelant non privilégié, et quiconque écrit dans `/usr/local/bin` est déjà
+   root. Épingler des chemins absolus n'ajouterait aucune borne.
+2. Épingler le `PATH` de la charge **casserait le chemin de démarrage**.
+   `/usr/local/bin` n'est pas vide sur Eschaton :
+
+   ```console
+   $ ls -l /usr/local/bin
+   -rwxr-xr-x 1 root root 711 … mkinitcpio
+   ```
+
+   C'est l'enveloppe posée par `limine-mkinitcpio-hook`, que les hooks de pacman
+   appellent pendant la transaction — l'installeur documente déjà qu'elle est
+   porteuse (§6 d'`eschaton-install`). Forcer `PATH=/usr/bin` la masquerait, et
+   l'initramfs cesserait d'être régénéré par le chemin prévu. Un durcissement
+   qui casse le boot pour fermer une porte que personne ne peut ouvrir est un
+   mauvais échange.
+
+L'affirmation est donc corrigée là où elle a été faite (spec §7), et la portée
+exacte est : **la porte** n'exécute rien par le `PATH` ; **la charge**, si — dans
+un `PATH` que systemd fixe et que seul root peut peupler.
