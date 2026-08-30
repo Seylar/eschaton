@@ -3355,23 +3355,35 @@ docker run --rm --privileged --platform linux/amd64 \
     paquets retirés : linux
 ```
 
-| | Variant T2 | ISO nominal (§19.2, pour comparaison) |
-|---|---|---|
-| Image | `eschaton-t2-2026.08.30-x86_64.iso` | `eschaton-2026.08.29-x86_64.iso` |
-| Taille | **1 270 255 616 o (1,18 Gio)** | 1 257 252 864 o (1,17 Gio) |
-| SHA-256 | `62f10f3094806ada953d9cccf0f723ceca1e5c535b977a67022aa5522eb4cc42` | `c71bdeb…` |
-| `vmlinuz` | `vmlinuz-linux-t2`, 17 097 216 o | `vmlinuz-linux`, ≈ 15 Mio |
-| `initramfs` | `initramfs-linux-t2.img`, **218 866 918 o** | ≈ 90 Mio |
-| `airootfs.sfs` | 788 348 928 o | ≈ 1,1 Gio |
-| Paquets dans le live | **180** | 178 |
-| Noyau | `linux-t2 7.1.8.arch1-3` | `linux` amont |
-| Durée | ≈ 7 min, **non chronométrée précisément** | 4 min 55 s |
+**Les deux images ont été construites le même jour**, sur la même machine, à
+quelques minutes d'intervalle : la comparaison ci-dessous n'a donc rien à
+estimer. C'est aussi la preuve que **le chemin nominal est intact** — c'est lui
+qui se publie, et il ne devait pas bouger d'un octet de comportement.
 
-> **L'initramfs pèse 2,4 fois celui du nominal** (219 Mio contre ≈ 90). Ce n'est
-> pas expliqué ici, seulement constaté : `linux-t2` embarque davantage de
-> modules, et le crochet `archiso` les emporte largement. Sur une machine de
-> 16 Gio ce n'est pas un problème de démarrage, mais c'est un écart à surveiller
-> — et une raison de plus de mesurer le temps de démarrage réel en Task 5.
+| | ISO nominal | Variant T2 |
+|---|---|---|
+| Image | `eschaton-2026.08.30-x86_64.iso` | `eschaton-t2-2026.08.30-x86_64.iso` |
+| Taille | 1 257 261 056 o (1,17 Gio) | **1 270 255 616 o (1,18 Gio)** |
+| SHA-256 (T2) | — | `62f10f3094806ada953d9cccf0f723ceca1e5c535b977a67022aa5522eb4cc42` |
+| `vmlinuz` | `vmlinuz-linux`, 17 101 312 o | `vmlinuz-linux-t2`, 17 097 216 o |
+| `initramfs` | `initramfs-linux.img`, 218 764 347 o | `initramfs-linux-t2.img`, 218 866 918 o |
+| `airootfs.sfs` | 775 454 720 o | 788 348 928 o |
+| Paquets dans le live | 178 | **180** |
+| Noyau | `linux 7.1.11.arch1-1` | `linux-t2 7.1.8.arch1-3` |
+| `NE-PAS-PUBLIER.txt` | **absent** | **présent** |
+
+**Le variant coûte 13 Mio de plus que le nominal, et rien d'autre.** C'est le
+firmware Broadcom et `t2fanrd` ; le noyau T2 pèse le même poids que l'amont, à
+4 Kio près.
+
+> **Correction d'une erreur que j'ai faite en écrivant cette section.** J'avais
+> d'abord noté que l'initramfs du variant pesait « 2,4 fois celui du nominal »,
+> en comparant aux « ≈ 90 Mio » du §19 et des commentaires de `iso/build-iso`.
+> La construction nominale du même jour donne **218,7 Mio** : les deux
+> initramfs sont à 0,05 % l'un de l'autre, et il n'y a aucun écart T2 à
+> expliquer. **Ce sont les ordres de grandeur du §19 qui ont vieilli** (un mois
+> de croissance des modules noyau), pas le variant qui dérive. Les planchers du
+> contrôle d'inventaire, eux, restent valides : ils sont délibérément bas.
 
 ### 20.4 Ce que l'image contient réellement
 
@@ -3416,7 +3428,65 @@ Liste de paquets du live, extraite de `eschaton/pkglist.x86_64.txt` :
 `linux-t2 7.1.8.arch1-3`, `apple-bcm-firmware 14.0-1`, `t2fanrd r16.48baf96-1`,
 `iwd 3.12-1` — et **ni `linux`, ni `wpa_supplicant`**.
 
-### 20.5 Réserves de cette passe
+### 20.5 La garde d'épinglage, exercée contre un vrai pacman
+
+Les tests bats exercent le *script* ; ceci exerce le **branchement** — un vrai
+`pacman`, de vrais crochets alpm, un vrai dépôt Arch. La garde est posée dans un
+conteneur jetable exactement comme le paquet `eschaton-t2` la poserait
+(`/usr/lib/eschaton/t2-garde-noyau` + les trois `.hook`), puis :
+
+```console
+# pacman -S --noconfirm linux
+REFUS — cette machine est un Mac T2, son noyau est épinglé sur linux-t2.
+  Paquet(s) refusé(s) : linux
+  …
+error: command failed to execute correctly
+error: failed to commit transaction (failed to run transaction hooks)
+→ 1
+
+# pacman -S --noconfirm linux-lts
+REFUS — …                                                            → 1
+
+# pacman -S --noconfirm htop
+…                                                                    → 0
+# pacman -Q htop
+htop 3.5.3-1
+```
+
+**Et le refus ne laisse rien derrière lui** — c'est ce que « PreTransaction »
+doit garantir, et qu'il fallait constater plutôt que supposer :
+
+```console
+# pacman -Q linux
+error: package 'linux' was not found
+# ls -A /boot
+(vide)
+```
+
+La transaction est refusée **avant** toute écriture : ni paquet enregistré, ni
+noyau déposé dans `/boot`. Le troisième cas (`htop`) est le pendant nécessaire :
+une garde qui refuse tout n'est pas une garde, c'est une panne.
+
+> Le motif `Exec = /chemin/script argument` n'est pas une invention : c'est
+> exactement ce que font les crochets de `systemd` lui-même
+> (`Exec = /usr/share/libalpm/scripts/systemd-hook daemon-reload-system`).
+
+Le paquet, lui, se construit — `arch=(any)`, comme les autres méta-paquets du
+dépôt, et donc constructible par les **deux** jobs d'architecture de
+`repo/build-repo` :
+
+```console
+$ makepkg -fd --noconfirm         # -d comme repo/build-repo
+==> Finished making: eschaton-t2 0.1.0-1
+eschaton-t2-0.1.0-1-any.pkg.tar.zst   (8 245 octets)
+  usr/lib/eschaton/t2-garde-noyau
+  usr/share/libalpm/hooks/90-eschaton-t2-noyau.hook
+  usr/share/libalpm/hooks/91-eschaton-t2-retrait.hook
+  usr/share/libalpm/hooks/92-eschaton-t2-alignement.hook
+  usr/share/licenses/eschaton-t2/LICENSE
+```
+
+### 20.6 Réserves de cette passe
 
 - **Aucun démarrage.** L'image n'a jamais été amorcée, nulle part. Une machine
   T2 ne se simule pas : le disque *est* derrière la puce.
@@ -3442,10 +3512,17 @@ Liste de paquets du live, extraite de `eschaton/pkglist.x86_64.txt` :
 - **`--privileged` de nouveau.** Comme au §19, la construction locale emploie
   `--privileged` ; le jeu réduit `--cap-add SYS_ADMIN` n'est prouvé qu'en CI, et
   la CI ne construit pas ce variant — par conception.
-- **La garde d'alignement n'a tourné que sur des arborescences factices**
+- **La garde d'alignement (`92`) n'a tourné que sur des arborescences factices**
   (`ESCHATON_T2_RACINE` pointé sur un faux `/`), jamais sur un système installé.
+  Les deux refus durs (`90`, `91`), eux, sont prouvés contre un vrai pacman
+  (§20.5) — mais avec le noyau **amont**, pas avec `linux-t2`, qui n'est pas
+  installable dans un conteneur Arch sans y ajouter le dépôt tiers.
+- **Aucun `-Syu` n'a été joué sur un système portant `linux-t2`.** Le scénario
+  que la garde existe pour empêcher — une mise à jour qui tire le noyau amont
+  sur une machine T2 — n'a donc été reproduit qu'à moitié : le refus est prouvé,
+  la situation réelle qui le déclencherait ne l'est pas.
 
-### 20.6 L'interdiction de publier, exercée
+### 20.7 L'interdiction de publier, exercée
 
 Les trois verrous du §« Le variant T2 » de `iso/README.md` sont couverts par
 `tests/iso-variant-t2.bats`. Le premier est le seul qu'on puisse *exécuter*
@@ -3464,7 +3541,7 @@ $ echo $?
 loin, sur son propre refus de tourner hors root) : c'est le test
 « le chemin nominal reste inchangé sous CI ».
 
-### 20.7 Nettoyage
+### 20.8 Nettoyage
 
 L'image T2 et son `NE-PAS-PUBLIER.txt` sont restés hors du dépôt, dans un
 répertoire de travail temporaire. **Elle n'est ni versionnée, ni téléversée, ni
