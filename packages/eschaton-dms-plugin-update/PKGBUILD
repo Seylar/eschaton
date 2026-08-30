@@ -1,33 +1,37 @@
 pkgname=eschaton-dms-plugin-update
 pkgver=0.1.0
-pkgrel=13
+pkgrel=14
 pkgdesc="Plugin DMS Eschaton : disponibilité et installation des mises à jour"
 arch=(any)
 license=(MIT)
-# `polkit` porte la modale d'authentification de la porte `org.eschaton.update`,
-# comme pour le plugin rollback. Aucune règle `rules.d` n'est livrée : les
-# `<defaults>` de l'action suffisent et EXIGENT une authentification.
-# Justification complète dans l'en-tête d'org.eschaton.update.policy.
+# `polkit` porte la modale d'authentification de la porte `org.eschaton.update`.
+# L'ACTION elle-même, en revanche, n'est plus livrée ici : depuis le
+# 2026-08-30 (revue de sécurité C1) elle voyage avec le binaire qu'elle
+# épingle, dans `eschaton-base`. Un greffon d'interface ne doit pas être ce qui
+# décide si un binaire du socle est contraint ou non — l'installeur ne
+# pacstrape pas les greffons, et le binaire arrivait donc seul. Détail complet
+# dans le `package()` d'eschaton-base et dans
+# `tests/actions-avec-binaires.bats`.
 # `foot` a disparu des dépendances le 2026-08-30 : le panneau n'ouvre plus de
 # terminal, il suit le journal de l'unité de transaction. `systemctl`,
 # `journalctl` et `cat` viennent de `base`, déjà tiré par eschaton-base.
 #
-# `eschaton-dms-plugin-rollback` est requis pour l'ACTION polkit
-# `org.eschaton.rollback` qu'il livre : après un échec, le panneau propose le
-# retour à l'état d'avant la mise à jour, par cette action et ce binaire —
-# jamais par un chemin privilégié à lui. C'est le cœur de la spec §4 :
-# l'échec reste réversible sans ligne de commande.
+# `eschaton-dms-plugin-rollback` reste requis, mais plus pour la raison
+# d'origine : l'action `org.eschaton.rollback` et le binaire
+# `/usr/bin/eschaton-rollback` viennent tous deux d'`eschaton-base`, et la
+# porte de sortie de ce panneau se suffirait donc de lui. Ce qu'apporte le
+# greffon, c'est la SURFACE de restauration complète — la liste des snapshots,
+# où l'utilisateur choisit autre chose que le seul point de retour calculé par
+# la transaction. Le bouton « Revenir à l'état d'avant » est un raccourci vers
+# un cas ; le panneau de restauration reste le cas général de la spec §4.
 depends=(dms-shell pacman-contrib fakeroot polkit eschaton-base eschaton-dms-plugin-rollback)
-source=(plugin.json EschatonUpdateWidget.qml EschatonUpdateSettings.qml
-        org.eschaton.update.policy LICENSE)
-sha256sums=(SKIP SKIP SKIP SKIP SKIP)
+source=(plugin.json EschatonUpdateWidget.qml EschatonUpdateSettings.qml LICENSE)
+sha256sums=(SKIP SKIP SKIP SKIP)
 
 package() {
   local plugin_dir="$pkgdir/etc/xdg/quickshell/dms-plugins/eschatonUpdate"
   install -Dm644 plugin.json "$plugin_dir/plugin.json"
   install -Dm644 EschatonUpdateWidget.qml "$plugin_dir/EschatonUpdateWidget.qml"
   install -Dm644 EschatonUpdateSettings.qml "$plugin_dir/EschatonUpdateSettings.qml"
-  install -Dm644 org.eschaton.update.policy \
-    "$pkgdir/usr/share/polkit-1/actions/org.eschaton.update.policy"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

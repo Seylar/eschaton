@@ -39,7 +39,7 @@ setup() {
     "packages/eschaton-base/lib.sh"
     "packages/eschaton-dms-plugin-assistant/ToolExecutor.qml"
     "packages/eschaton-dms-plugin-update/EschatonUpdateWidget.qml"
-    "packages/eschaton-dms-plugin-update/org.eschaton.update.policy"
+    "packages/eschaton-base/org.eschaton.update.policy"
   )
 }
 

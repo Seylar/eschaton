@@ -12,7 +12,10 @@
 setup() {
   RACINE="$BATS_TEST_DIRNAME/.."
   PORTE="$RACINE/packages/eschaton-base/eschaton-update-helper"
-  POLICY="$RACINE/packages/eschaton-dms-plugin-update/org.eschaton.update.policy"
+  # L'action vit auprès du binaire qu'elle épingle depuis le 2026-08-30 (revue
+  # de sécurité C1) : voir tests/actions-avec-binaires.bats pour la garde qui
+  # interdit qu'ils se séparent de nouveau.
+  POLICY="$RACINE/packages/eschaton-base/org.eschaton.update.policy"
 }
 
 # Doublures de `systemd-run` et `systemctl` : toute exécution laisse une trace,
@@ -182,8 +185,11 @@ prepare_banc() {
   [ "$status" -eq 0 ]
   run grep -F 'eschaton-update-helper' "$RACINE/packages/eschaton-base/PKGBUILD"
   [ "$status" -eq 0 ]
+  # LE MÊME paquet, et c'est tout l'objet du correctif C1 : le binaire arrivait
+  # sur les machines sans l'action qui le contraint, parce qu'elle était livrée
+  # par un greffon que l'installeur ne pacstrape pas.
   run grep -F 'usr/share/polkit-1/actions/org.eschaton.update.policy' \
-    "$RACINE/packages/eschaton-dms-plugin-update/PKGBUILD"
+    "$RACINE/packages/eschaton-base/PKGBUILD"
   [ "$status" -eq 0 ]
   # Autant de sommes que de sources : un oubli ici casse silencieusement
   # makepkg.
