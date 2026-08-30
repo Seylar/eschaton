@@ -4819,18 +4819,50 @@ d'état — puis que l'interface les rende différemment et ouvre le retour arri
 sur le second. C'est une décision de conception du même ordre que celles du §4
 de la spec, pas un ajustement de revue. Signalé plutôt qu'improvisé.
 
-### 33.6 État final de la VM
+### 33.6 `eschaton-base -22` — le piège de sortie armé avant ce qu'il appelle
+
+Trouvé en relisant le correctif I5 ci-dessus, après les preuves graphiques.
+Depuis que `finaliser` appelle `liberer_verrou_orphelin`, l'ordre des
+définitions compte : `trap finaliser EXIT` était armé **six lignes avant** que
+la fonction existe. Un signal reçu dans cette fenêtre ferait entrer le filet de
+sortie dans un « command not found » ; sous `set -e`, l'erreur avorterait le
+piège **avant** l'écriture du verdict — précisément la panne que le filet existe
+pour empêcher (celle du §32.2 : l'état bloqué sur « en-cours », pour toujours).
+
+Les quatre lignes de pièges passent après la définition. Le diff hors
+commentaires ne contient rien d'autre que ce déplacement, et une garde compare
+désormais les deux numéros de ligne.
+
+Re-vérifié en VM sur **-22** :
+
+```console
+$ pkaction --action-id org.eschaton.update --verbose
+  implicit any: no   implicit inactive: no   implicit active: auth_admin
+  annotation: …exec.path -> /usr/bin/eschaton-update-helper
+$ sudo eschaton-update-helper --apply     # chaîne complète, sans interface
+resultat=succes   code=0
+/var/lib/pacman/db.lck → absent
+```
+
+**Portée honnête de cette re-vérification** : elle couvre la chaîne
+porte → unité → pré-vol → verdict → fichier d'état. Le parcours **graphique**
+du §33.4, lui, a été joué sur **-21**, dont -22 ne diffère que par cet ordre de
+définitions. Il n'a pas été rejoué.
+
+### 33.7 État final de la VM
 
 Banc démonté : paquet jetable désinstallé, dépôt local supprimé,
 `/etc/pacman.conf` restauré depuis la copie prise avant modification, racine de
-test `/tmp/rt` supprimée, captures et `ydotoold` retirés.
+test `/tmp/rt` supprimée, captures, `ydotoold` et archives de transfert retirés.
 
 ```console
 $ pacman -Q eschaton-base eschaton-dms-plugin-update eschaton-dms-plugin-rollback
-eschaton-base 0.1.0-21
+eschaton-base 0.1.0-22
 eschaton-dms-plugin-update 0.1.0-14
 eschaton-dms-plugin-rollback 0.1.0-4
 $ systemctl is-system-running                  → running
 $ dms ipc call plugins status eschatonUpdate   → loaded, aucune erreur QML
 $ grep -c banc-nominal /etc/pacman.conf        → 0
 ```
+
+La VM porte donc exactement les versions de la branche.
