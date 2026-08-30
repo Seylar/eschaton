@@ -4435,6 +4435,12 @@ $ checkupdates | wc -l                            → 0
 $ ls /etc/polkit-1/actions/                       → vide
 ```
 
+> **Écart assumé entre la VM et la branche** : la branche porte
+> `eschaton-base 0.1.0-18`, la VM `0.1.0-17`. La différence est **un bloc de
+> commentaire** ajouté après les mesures (pourquoi le succès dégradé sort 0),
+> et le bump que l'immutabilité du dépôt impose dès qu'un octet change. Aucune
+> ligne exécutable ne diffère : les preuves ci-dessus valent pour les deux.
+
 Empreintes des captures (invité = hôte) :
 
 ```text

@@ -230,6 +230,11 @@ echecs_apres=$(lister_unites_en_echec)
 unites_en_echec=$(unites_nouvellement_en_echec "$echecs_avant" "$echecs_apres" | tr '\n' ' ')
 unites_en_echec=${unites_en_echec% }
 if [[ -n $unites_en_echec ]]; then
+  # On sort 0 À DESSEIN : la transaction, elle, s'est déroulée jusqu'au bout, et
+  # les paquets SONT installés. Sortir non nul ferait croire à un `pacman` en
+  # échec et pousserait à relancer, alors que le problème est ailleurs. C'est
+  # l'ÉTAT qui porte la nuance — `succes-degrade`, avec les unités nommées — et
+  # c'est lui que l'interface lit. Elle ne dit jamais « à jour ».
   ecrire_etat succes-degrade 0
   echo "==> Les paquets sont installés, MAIS des services ne démarrent plus :" >&2
   echo "      $unites_en_echec" >&2
