@@ -96,12 +96,22 @@ part() { nom_partition "$DISK" "$1"; }
 PART_ESP="$(part 1)"; PART_ROOT="$(part 2)"
 valider_noms_partitions "$DISK" "$PART_ESP" "$PART_ROOT"
 
+# `blockdev --rereadpt` brut rendrait « BLKRRPART: Device or resource busy » —
+# exact, et parfaitement inutile à qui installe. On explique.
+relire_table() { # $1 = disque, $2 = moment, pour le message
+  run_cmd blockdev --rereadpt "$1" && return 0
+  echo "eschaton-install : le noyau refuse de relire la table de partitions de $1" >&2
+  echo "  ($2). C'est qu'une de ses partitions est OCCUPÉE : montée, prise par" >&2
+  echo "  LVM, membre d'un RAID — ou c'est le média depuis lequel vous avez" >&2
+  echo "  démarré. Rien n'a été écrit. Pour voir qui la retient :" >&2
+  echo "      lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS $1 ; findmnt --source $1" >&2
+  exit 1
+}
+
 # Garde AVANT la première écriture : si le noyau ne peut pas relire la table de
-# partitions, c'est que le disque est OCCUPÉ (une partition montée, un volume
-# LVM, un membre de RAID) — y compris la clé USB depuis laquelle on a démarré.
-# BLKRRPART rend alors EBUSY, `blockdev` un code non nul, et `set -e` arrête
-# tout ici : on refuse d'effacer un disque en service.
-run_cmd blockdev --rereadpt "$DISK"
+# partitions, c'est que le disque est OCCUPÉ — y compris la clé USB depuis
+# laquelle on a démarré. On refuse d'effacer un disque en service.
+relire_table "$DISK" "avant le partitionnement"
 
 run_cmd sgdisk --zap-all "$DISK"
 run_cmd sgdisk -n1:0:+4G -t1:ef00 -c1:ESP "$DISK"
@@ -122,7 +132,7 @@ run_cmd sgdisk -n2:0:0 -t2:8300 -c2:eschaton "$DISK"
 #  2. `udevadm settle` — vide la file d'événements udev.
 #  3. `attendre_bloc` — `settle` ne garantit pas que l'événement d'ajout de
 #     partition soit DÉJÀ dans la file au moment où on l'appelle.
-run_cmd blockdev --rereadpt "$DISK"
+relire_table "$DISK" "après le partitionnement"
 run_cmd udevadm settle
 run_cmd attendre_bloc "$PART_ESP"
 run_cmd attendre_bloc "$PART_ROOT"
