@@ -130,7 +130,8 @@ valider_disque() { # $1 = valeur de --disk ; imprime le chemin CANONIQUE du disq
   # d'erreur promettait pourtant « un disque ENTIER » sans que rien ne le
   # vérifie, et l'unique opération irréversible du dépôt (`sgdisk --zap-all`)
   # s'exécutait AVANT que les noms de partition dérivés ne soient confrontés au
-  # réel. Résultat mesuré, pour les trois cas :
+  # réel. Trois cas, relevés par la revue de sécurité et confirmés en relisant
+  # l'ordre des appels (le zap précédait `attendre_bloc`) :
   #   /dev/sda1                → le zap s'appliquait à la PARTITION, puis abandon
   #   /dev/disk/by-id/nvme-…   → la table du disque était effacée, puis abandon
   #                              (udev nomme la partition « -part1 », pas « 1 »)

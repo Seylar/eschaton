@@ -165,7 +165,9 @@ for entree in "${attendus[@]}"; do
 	fi
 	# `bsdtar -xO | wc -c` plutôt que la taille lue dans `bsdtar -tv` : le format
 	# de la colonne de date varie d'une version à l'autre, le compte d'octets non.
-	taille="$(bsdtar -xOf "$image" "$chemin" | wc -c | tr -d ' ')"
+	# Une extraction en échec vaut zéro octet : elle tombe alors sous le plancher
+	# et rend le message qui va avec, au lieu de faire sortir `set -e` sans un mot.
+	if ! taille="$(bsdtar -xOf "$image" "$chemin" | wc -c | tr -d ' ')"; then taille=0; fi
 	if ((taille < plancher)); then
 		echo "build-iso : $chemin ne pèse que $taille octets (plancher $plancher) —" >&2
 		echo "  fichier vide ou tronqué, l'image ne démarrerait pas." >&2
