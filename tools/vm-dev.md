@@ -4697,3 +4697,140 @@ raisons, la seconde étant décisive.
 L'affirmation est donc corrigée là où elle a été faite (spec §7), et la portée
 exacte est : **la porte** n'exécute rien par le `PATH` ; **la charge**, si — dans
 un `PATH` que systemd fixe et que seul root peut peupler.
+
+### 33.4 Le parcours graphique rejoué aux versions finales
+
+Les preuves du §31 dataient d'`eschaton-base -17` / `plugin-update -12`. Rejoué
+le 2026-08-30 sur **`eschaton-base 0.1.0-21`, `plugin-update 0.1.0-14`,
+`plugin-rollback 0.1.0-4`** — les versions de cette vague.
+
+**Banc.** Un paquet jetable `eschaton-preuve-nominal` dans un dépôt local
+`file:///tmp/banc-nominal/depot`, publié en 1.0 → 1.1 → 1.2 → 1.3 → 1.4. Les
+versions 1.3 et 1.4 portent un `post_upgrade` qui dort (40 s, puis 120 s) : sans
+cela une transaction dure ~5 s et aucune fenêtre n'est observable. Banc démonté
+à la fin (§33.6).
+
+**Pilotage.** Le curseur ne se déplace PAS avec `ydotool mousemove --absolute`
+sous Hyprland (mesuré : `hyprctl cursorpos` ne bouge pas). La forme qui marche
+est le dispatcher Lua d'Hyprland, puis `ydotool` pour le bouton :
+
+```bash
+hyprctl dispatch "hl.dsp.cursor.move({x=1199,y=23})"   # → ok
+ydotool click 0xC0
+```
+
+`dms screenshot` exige `WAYLAND_DISPLAY=wayland-1` (et non `wayland-0`) dans
+cette session. Captures rapatriées en base64, empreintes vérifiées des deux
+côtés.
+
+**1. Parcours nominal, de bout en bout.** Pastille (badge « 1 ») → panneau →
+clic « Installer » → `pgrep` montre exactement
+`/usr/bin/pkexec /usr/bin/eschaton-update-helper --apply` → **modale polkit**
+portant le message de NOTRE action (« Une autorisation est requise pour mettre à
+jour Eschaton »), et non celui de l'action générique → saisie du mot de passe →
+journal de l'unité affiché tel quel → « Mise à jour installée. »
+
+```console
+resultat=succes  code=0  noyau_a_recharger=non  snapshot_avant=158
+eschaton-preuve-nominal 1.1-1        checkupdates → vide
+/var/lib/pacman/db.lck → absent      is-failed → inactive
+```
+
+Aucun terminal ouvert à aucun moment.
+
+**2. I3 — le panneau rend un verdict qu'il n'a pas produit.** Transaction lancée
+HORS du panneau (`sudo eschaton-update-helper --apply`, exactement l'unité que
+l'assistant démarre), puis `systemctl --user restart dms.service`. Le shell
+neuf, à l'ouverture du panneau, affiche le journal complet de cette transaction
+(`upgrading eschaton-preuve-nominal…`, snapshots 161/162,
+`==> Mise à jour terminée.`) et « Mise à jour installée. » **Avant ce correctif,
+ce panneau était vide** : la sonde n'était armée que par un clic sur
+« Installer ».
+
+**3. I3 — le panneau ADOPTE une transaction en vol.** Même montage avec la
+version lente : transaction démarrée hors panneau, shell redémarré pendant
+qu'elle tourne. Le panneau du shell neuf affiche « Mise à jour en cours… », le
+journal **en direct**, et le bouton **« Annuler »** actif — « Actualiser » et
+« Mise à jour en cours » grisés. C'est exactement ce que `tool-catalog.json`
+promet au modèle, et qui n'existait pas.
+
+**4. I4 — une annulation est rendue comme une annulation.** Annulation de cette
+transaction en vol :
+
+```console
+$ sudo eschaton-update-helper --cancel
+resultat=annule   code=143
+/var/lib/pacman/db.lck → absent     is-failed → inactive
+```
+
+Panneau : « **Mise à jour annulée. Rien n'a été installé.** » — pas un échec, pas
+de toast rouge. Le journal montre le ménage :
+`==> Verrou pacman orphelin retiré (/var/lib/pacman/db.lck).` puis
+`==> Mise à jour annulée à la demande de l'utilisateur.`
+
+> **Réserve honnête sur I4.** La course elle-même n'a **pas** été rejouée. En
+> sondant `systemctl is-active` toutes les 300 ms pendant l'annulation, l'unité
+> passe d'`active` à `inactive` sans qu'un seul `deactivating` soit observé :
+> `pacman` était dans un `sleep`, donc trivial à tuer. La fenêtre existe (elle
+> s'ouvre dès que pacman met plus d'une seconde à se replier, ce qu'une vraie
+> transaction fait), mais elle n'a pas été reproduite ici. Ce qui est prouvé,
+> c'est le comportement nominal de l'annulation ; ce qui reste couvert par la
+> seule lecture du code et par `tests/porte-update.bats`, c'est le traitement de
+> `deactivating`.
+
+Empreintes des captures (invité = hôte) :
+
+```text
+297d780b1d90cf170e72147c682abbe1180702f9b4011d523093e77138bd03ef  barre, badge 1
+9f58c585df8cb495886c679cc8a6f2d26eb580b28dbed3dbebc854771c2edc20  panneau ouvert
+b005df391d05a0f8425ddeeec8db5add5666e3cf5ac01698466d52bcb5db4e15  modale polkit
+722e340a7ab213aa26b7a35912021bbc73daa871a8c8209acc0dcd8816ee7df4  verdict de succes
+7779040e7122bcc83fe8a0d0da07f29cb9fe1d04318b887e815efd5154b0373e  verdict adopte apres redemarrage du shell
+f33e53e33cb95fb7b1b402769fb603063e723817bd12c2d05a45c32a3d797edb  transaction en vol adoptee
+2b7e15a228d0560c3da366d1ba6deb331f62d6fcb3cf91351955934cb7843f7b  annulation
+```
+
+### 33.5 Un défaut TROUVÉ par cette vérification, et NON corrigé
+
+L'annulation du point 4 ci-dessus est arrivée **pendant le `post_upgrade`** du
+paquet, c'est-à-dire après que `pacman` a écrit ses fichiers. Résultat mesuré :
+
+```console
+$ pacman -Q eschaton-preuve-nominal
+eschaton-preuve-nominal 1.4-1        ← la version « annulée » EST installée
+```
+
+…alors que le panneau annonce « Mise à jour annulée. **Rien n'a été installé.** »
+C'est faux, et c'est exactement la famille de mensonge que cette vague combat.
+
+Deux conséquences, la seconde étant la plus grave :
+
+1. le message est inexact dès que l'annulation arrive après le point de
+   non-retour de `pacman` ;
+2. `restaurationUtile` n'inclut pas `annule`. L'utilisateur qui annule trop tard
+   se retrouve donc avec des paquets appliqués **et sans la porte de sortie**,
+   dans le seul cas où il vient d'exprimer qu'il ne voulait pas de cette mise à
+   jour.
+
+**Non corrigé volontairement.** Le correctif n'est pas cosmétique : il faut que
+la transaction distingue « annulé avant que pacman ne commence » de « annulé
+alors que pacman avait commencé » — deux résultats distincts dans le fichier
+d'état — puis que l'interface les rende différemment et ouvre le retour arrière
+sur le second. C'est une décision de conception du même ordre que celles du §4
+de la spec, pas un ajustement de revue. Signalé plutôt qu'improvisé.
+
+### 33.6 État final de la VM
+
+Banc démonté : paquet jetable désinstallé, dépôt local supprimé,
+`/etc/pacman.conf` restauré depuis la copie prise avant modification, racine de
+test `/tmp/rt` supprimée, captures et `ydotoold` retirés.
+
+```console
+$ pacman -Q eschaton-base eschaton-dms-plugin-update eschaton-dms-plugin-rollback
+eschaton-base 0.1.0-21
+eschaton-dms-plugin-update 0.1.0-14
+eschaton-dms-plugin-rollback 0.1.0-4
+$ systemctl is-system-running                  → running
+$ dms ipc call plugins status eschatonUpdate   → loaded, aucune erreur QML
+$ grep -c banc-nominal /etc/pacman.conf        → 0
+```

@@ -153,6 +153,8 @@ Le tableau ci-dessus était **exact sur ce qu'il mesurait**, et c'est précisém
 
 **Réserves honnêtes.**
 
+- **Une annulation tardive ment, et laisse l'utilisateur sans porte de sortie** — trouvé le 2026-08-30 en rejouant le parcours, **non corrigé**. Si l'annulation arrive après le point de non-retour de `pacman` (mesuré : pendant un `post_upgrade`), les paquets **sont** installés, mais le panneau annonce « Mise à jour annulée. Rien n'a été installé. » et `restaurationUtile` n'inclut pas `annule` — donc aucun retour arrière n'est proposé, dans le seul cas où l'utilisateur vient d'exprimer qu'il ne voulait pas de cette mise à jour. Le correctif demande de distinguer deux résultats d'annulation dans le fichier d'état et de les rendre différemment : une décision de conception, pas un ajustement. Détail et mesure : `vm-dev.md` §33.5.
+- La **course de l'annulation** (`deactivating` observé par la sonde) n'a pas été reproduite en VM : `pacman`, arrêté pendant un `sleep`, se replie en moins de 300 ms. Le comportement nominal de l'annulation est prouvé ; le traitement de `deactivating` ne l'est que par le code et par sa garde de test (`vm-dev.md` §33.4).
 - Le **conflit de fichiers** (archétype `linux-firmware`) n'a pas été fabriqué : il est détecté à l'extraction, donc *après* le sommaire. Il produira un `echec` visible avec le point de retour, pas un `decision-humaine`. Comportement attendu par construction, **non mesuré**.
 - La preuve du cas `dovecot` utilise un service fabriqué qui échoue *pendant* la transaction. Une casse qui ne se manifesterait qu'au redémarrage suivant **n'est pas couverte** par ce contrôle.
 - Le journal de la transaction est en anglais (`LC_ALL=C.UTF-8`), contrepartie assumée du déterminisme de la réponse (risque n°8).
