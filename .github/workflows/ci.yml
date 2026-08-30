@@ -18,19 +18,30 @@ concurrency:
 permissions:
   contents: read
 
-# TOUTES LES ACTIONS SONT ÉPINGLÉES PAR SHA (plan SP4b-1 Task 3.4).
-# Une étiquette (`@v7`) est une référence MOUVANTE : son mainteneur peut la
-# déplacer sur n'importe quel commit, et ce qui tourne ici avec accès au
-# `GITHUB_TOKEN` change alors sans qu'aucun fichier de ce dépôt ne bouge.
+# TOUT CE QUI S'EXÉCUTE ICI EST ÉPINGLÉ PAR EMPREINTE (plan SP4b-1 Task 3.4) :
+# les actions par SHA de commit, les IMAGES DE CONTENEUR par digest.
+# Une étiquette (`@v7`, `:base-devel`) est une référence MOUVANTE : son
+# mainteneur peut la déplacer sur n'importe quel commit ou n'importe quelle
+# image, et ce qui tourne ici avec accès au `GITHUB_TOKEN` change alors sans
+# qu'aucun fichier de ce dépôt ne bouge. L'argument ne vaut pas moins pour une
+# image que pour une action : les jobs de build tournent EN ROOT dedans.
 # La veille §4.4 range cette dette au rang de prérequis de sécurité dès que la
 # clé de signature approche la CI (SP4a). Le commentaire `# vN` garde la version
-# lisible ; c'est le SHA qui fait foi.
+# lisible ; c'est l'empreinte qui fait foi.
 # SHA relevés le 2026-08-29 via l'API GitHub (`/repos/<dépôt>/git/ref/tags/<tag>`).
+# Digests relevés le 2026-08-30 via l'API du registre Docker Hub
+# (`/v2/<dépôt>/manifests/<étiquette>`, en-tête `Docker-Content-Digest`).
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
+      # `persist-credentials: false` partout : aucun job de ce dépôt ne pousse
+      # ni ne parle à git après le checkout. Laisser le `GITHUB_TOKEN` inscrit
+      # dans .git/config ne servirait qu'à l'exposer aux outils qu'on lance.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       # curl et jq sont préinstallés sur ubuntu-latest ; on les demande quand même
       # pour que la dépendance de `tools/check-desktop-deps` soit lisible ici.
       - run: sudo apt-get update && sudo apt-get install -y shellcheck bats curl jq
@@ -78,7 +89,8 @@ jobs:
   build-x86_64:
     needs: lint
     runs-on: ubuntu-latest
-    container: archlinux:base-devel
+    # Index OCI multi-plateforme (linux/amd64) de `archlinux:base-devel`.
+    container: archlinux@sha256:68bfc3b0d277b08a99101dc9b94aaa03e5ae70cf1b4fb965c03b2b87b915760d # base-devel
     timeout-minutes: 60
     steps:
       # Avant le checkout : sans git dans le conteneur, actions/checkout se
@@ -89,6 +101,8 @@ jobs:
       - name: git dans le conteneur
         run: pacman -Syu --noconfirm --needed --disable-sandbox git
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: build-repo
         env:
           # Ne jamais republier des octets différents sous le même pkgrel : les
@@ -105,12 +119,17 @@ jobs:
   build-aarch64:
     needs: lint
     runs-on: ubuntu-24.04-arm
-    container: menci/archlinuxarm:base-devel
+    # Index OCI multi-plateforme (linux/arm64 entre autres) de
+    # `menci/archlinuxarm:base-devel` — image d'un TIERS, donc celle dont
+    # l'épinglage compte le plus.
+    container: menci/archlinuxarm@sha256:523f076753371360e54f72f23668ff21f0658da41464a1f63fe1fd9d73ae9166 # base-devel
     timeout-minutes: 60
     steps:
       - name: git dans le conteneur
         run: pacman -Syu --noconfirm --needed --disable-sandbox git
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: build-repo
         env:
           ESCHATON_REPO_SEED_URL: https://seylar.github.io/eschaton/aarch64
@@ -127,8 +146,9 @@ jobs:
   publish:
     needs: [build-x86_64, build-aarch64]
     # Publication depuis `main` uniquement (bascule post-fusion SP2).
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       pages: write
       id-token: write

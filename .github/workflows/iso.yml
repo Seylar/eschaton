@@ -32,16 +32,23 @@ concurrency:
 permissions:
   contents: read
 
-# TOUTES LES ACTIONS SONT ÉPINGLÉES PAR SHA (plan Task 3.4).
+# TOUT CE QUI S'EXÉCUTE ICI EST ÉPINGLÉ PAR EMPREINTE (plan Task 3.4) :
+# les actions par SHA de commit, les IMAGES DE CONTENEUR par digest.
 # Ce n'est plus une hygiène mais un prérequis de sécurité : la clé de signature
 # du dépôt approchera la CI au SP4a (veille §4.4), et une étiquette mouvante
-# (`@v7`) laisse le mainteneur de l'action réécrire ce qui tourne ici.
+# (`@v7`, `:base-devel`) laisse son mainteneur réécrire ce qui tourne ici.
+# L'argument valait pour les actions ; il vaut d'autant plus pour l'image du
+# job `construire`, qui tourne en root avec CAP_SYS_ADMIN.
 # SHA relevés le 2026-08-29 via l'API GitHub (`/git/ref/tags/<tag>`).
+# Digests relevés le 2026-08-30 via l'API du registre Docker Hub
+# (`/v2/<dépôt>/manifests/<étiquette>`, en-tête `Docker-Content-Digest`).
 jobs:
   construire:
     runs-on: ubuntu-latest
     container:
-      image: archlinux:base-devel
+      # Index OCI multi-plateforme (linux/amd64) de `archlinux:base-devel`.
+      # Le commentaire garde l'étiquette lisible ; c'est le digest qui fait foi.
+      image: archlinux@sha256:68bfc3b0d277b08a99101dc9b94aaa03e5ae70cf1b4fb965c03b2b87b915760d # base-devel
       # SANS CE `options`, LE JOB ÉCHOUE. `mkarchiso` n'a besoin ni de `losetup`
       # ni de périphériques loop (depuis archiso 89 il passe par `mtools`,
       # `mksquashfs` et `xorriso`), mais le `pacstrap` qu'il lance monte
@@ -61,7 +68,13 @@ jobs:
       - name: git dans le conteneur
         run: pacman -Syu --noconfirm --needed --disable-sandbox git
 
+      # `persist-credentials: false` : aucune étape de ce job ne parle à git
+      # après le checkout, donc laisser le `GITHUB_TOKEN` inscrit dans
+      # .git/config n'aurait qu'un effet — le rendre lisible à tout ce que
+      # `build-iso` fait tourner, `makepkg` et `pacman` compris.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       # `iso/build-iso` mesure l'image et ÉCHOUE au-delà de 2 Gio : au-delà,
       # GitHub Releases refuse le fichier et l'image n'est pas publiable
@@ -89,8 +102,16 @@ jobs:
   # sans limite de total (veille §2.6).
   publier:
     needs: construire
-    if: startsWith(github.ref, 'refs/tags/')
+    # L'ÉVÉNEMENT autant que la référence. `startsWith(github.ref, 'refs/tags/')`
+    # seul est satisfait par un `workflow_dispatch` lancé SUR UNE RÉF DE TAG :
+    # la publication en Release, qui demande `contents: write`, se déclenchait
+    # alors à la main, hors de tout push de tag. On veut exactement un cas :
+    # quelqu'un a poussé un tag `v*`.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    # Un job qui écrit dans les Releases ne doit pas pouvoir tourner
+    # indéfiniment : GitHub le tuerait au bout de 6 h par défaut.
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
