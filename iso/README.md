@@ -184,5 +184,20 @@ demain. Elles sont sans danger tant que l'ISO reste un livrable d'ingénierie
   `systemctl start sshd` ne permet donc pas d'entrer** : il faut déposer une clé
   publique dans `/root/.ssh/authorized_keys` avant de démarrer le service.
   La marche à suivre est dans `/etc/motd` du média.
+- **Le média s'identifie « Arch Linux ».** `eschaton-branding` n'est pas dans
+  `packages.x86_64` — mais l'y ajouter ne suffirait pas, et c'est le vrai sujet :
+  le paquet installe son `os-release` en `/usr/share/eschaton/os-release`, pas en
+  `/usr/lib/os-release`. C'est pour cette raison qu'`eschaton-install` fait
+  explicitement `rm -f /etc/os-release && cp /usr/share/eschaton/os-release
+  /etc/os-release` sur le système cible. Donner son identité au média demande de
+  trancher trois choses qui n'ont pas de réponse évidente : *où* la poser
+  (`airootfs/usr/lib/os-release` ? un vrai fichier `/etc/os-release`, sachant que
+  la copie de l'`airootfs` par mkarchiso écrirait **à travers** le lien
+  symbolique que livre `filesystem` — le piège même que documente l'installeur) ;
+  si le média doit porter le **même** `os-release` que le système installé ; et
+  que faire du `/usr/lib/motd.d/10-eschaton` du paquet, qui s'ajouterait au
+  `/etc/motd` du profil. S'y ajoute une conséquence de CI : l'ISO dépendrait
+  alors d'un paquet publié par `ci.yml`, ce que le commentaire de `iso.yml`
+  range déjà parmi les points « à réévaluer au SP4a ». À trancher, pas à bricoler.
 - **Rien n'est prouvé pour le variant T2** (Task 4 du plan) : il dépend d'arbitrages
   utilisateur non tranchés (ADR 0004 §6).
