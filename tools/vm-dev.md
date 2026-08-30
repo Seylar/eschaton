@@ -4811,7 +4811,14 @@ f33e53e33cb95fb7b1b402769fb603063e723817bd12c2d05a45c32a3d797edb  transaction en
 2b7e15a228d0560c3da366d1ba6deb331f62d6fcb3cf91351955934cb7843f7b  annulation
 ```
 
-### 33.5 Un défaut TROUVÉ par cette vérification, et NON corrigé
+### 33.5 Un défaut TROUVÉ par cette vérification, et NON corrigé (corrigé depuis : §34)
+
+> **Corrigé le 2026-08-30**, `eschaton-base 0.1.0-23` /
+> `eschaton-dms-plugin-update 0.1.0-15`. Le point de non-retour est mesuré et non
+> supposé, l'état distingue `annule` de `annule-trop-tard`, et le retour arrière
+> est offert dans le second cas. Mesure, correctif et parcours graphique : **§34**.
+> Le constat ci-dessous est conservé tel qu'il a été écrit, parce qu'il documente
+> la décision de conception qui a suivi.
 
 L'annulation du point 4 ci-dessus est arrivée **pendant le `post_upgrade`** du
 paquet, c'est-à-dire après que `pacman` a écrit ses fichiers. Résultat mesuré :
@@ -4887,3 +4894,241 @@ $ grep -c banc-nominal /etc/pacman.conf        → 0
 ```
 
 La VM porte donc exactement les versions de la branche.
+
+## 34. L'annulation tardive, mesurée puis corrigée (2026-08-30)
+
+Le défaut signalé et non corrigé au §33.5. Rappel de l'énoncé : une annulation
+arrivée **après le point de non-retour de pacman** laisse des paquets installés,
+mais l'état écrit était `annule` et le panneau annonçait « Rien n'a été
+installé ». `restaurationUtile` n'incluant pas `annule`, aucun retour arrière
+n'était proposé — dans le seul cas où l'utilisateur vient d'exprimer qu'il ne
+voulait pas de cette mise à jour.
+
+### 34.1 Où est le point de non-retour — mesuré, pas supposé
+
+C'est la question qui conditionne tout le reste, et il y avait deux façons de se
+tromper : rater une installation réelle, ou traiter comme tardive une annulation
+survenue pendant le **téléchargement** — la fenêtre la plus longue, donc la plus
+probable. Les deux bornes ont été mesurées.
+
+**Borne haute — un téléchargement complet n'engage rien.** `pacman -Sw` fait la
+totalité du travail préparatoire (téléchargement, intégrité, signatures) et
+s'arrête avant de commettre :
+
+```console
+$ L=/var/log/pacman.log; O=$(stat -c %s $L)
+$ pacman -Sw --noconfirm figlet
+téléchargement de figlet-2.2.5-6-aarch64…
+vérification de l’intégrité des paquets…
+analyse de l’intégrité des paquets…
+$ tail -c +$((O+1)) $L
+[2026-08-30T03:52:53+0200] [PACMAN] Running 'pacman -Sw --noconfirm figlet'
+$ tail -c +$((O+1)) $L | grep -c 'transaction started'
+0
+```
+
+**Borne basse — les crochets de pré-transaction n'engagent rien non plus.**
+Instrument : un crochet `PreTransaction` qui dort 90 s. Les crochets s'exécutent
+juste avant `transaction started`, donc une annulation pendant ce crochet est
+l'annulation la plus tardive possible qui n'ait encore rien écrit.
+
+```console
+[2026-08-30T03:55:47+0200] [PACMAN] Running 'pacman -Su'
+[2026-08-30T03:55:47+0200] [ALPM] running '00-banc-lent.hook'...
+                                    ← pas de « transaction started »
+$ pacman -Q eschaton-preuve-tardif  → 1.0-1   (inchangé)
+```
+
+**Au-delà — pacman le déclare lui-même.** Annulation pendant le `post_upgrade`
+du paquet, c'est-à-dire une fois les fichiers écrits :
+
+```console
+[2026-08-30T03:55:00+0200] [ALPM] running '05-snap-pac-pre.hook'...
+[2026-08-30T03:55:00+0200] [ALPM] running '10-limine-snapper-lock.hook'...
+[2026-08-30T03:55:00+0200] [ALPM] transaction started
+[2026-08-30T03:55:00+0200] [ALPM] upgraded eschaton-preuve-tardif (1.0-1 -> 1.1-1)
+[2026-08-30T03:55:00+0200] [ALPM-SCRIPTLET] banc : post_upgrade de la version 1.1
+$ pacman -Q eschaton-preuve-tardif  → 1.1-1   (installé)
+```
+
+La frontière est donc **une ligne du journal de pacman**, écrite par pacman
+lui-même au moment où il commence à modifier le système. C'est ce que lit
+`transaction_pacman_engagee` (lib.sh).
+
+Trois précisions qui ont orienté l'écriture du marqueur :
+
+- le préfixe `[ALPM]` est **porteur**. Les scriptlets des paquets écrivent dans
+  ce même journal, sous `[ALPM-SCRIPTLET]`, et y écrivent du **texte
+  arbitraire** : sans ancrage sur le préfixe, un paquet tiers pourrait se faire
+  passer pour pacman ;
+- les crochets portent eux aussi `[ALPM]` (`running '…hook'…`) et s'exécutent
+  **avant** le point de non-retour : le marqueur doit les exclure, sinon tout le
+  cas précoce y tombe ;
+- on ne se contente pas de `transaction started` : `upgraded`, `installed`,
+  `removed`, `reinstalled`, `downgraded` sont des faits accomplis, et ils
+  resteraient lisibles si une version future de pacman changeait sa ligne
+  d'ouverture.
+
+**Ce qui a été écarté, et pourquoi.** La comparaison des paquets avant/après
+(`pacman -Q`) était l'autre piste. Elle est strictement **moins sensible** : un
+paquet ne peut pas être installé sans que `transaction started` ait été écrit
+avant, et une annulation en pleine extraction du premier paquet laisserait des
+fichiers sur le disque sans que la base locale ait bougé — donc invisible à
+`pacman -Q`, visible dans le journal. Un seul signal bien compris, plus un repli
+explicite, plutôt que deux signaux à moitié fiables.
+
+**Repli en cas de doute.** Trois lectures peuvent échouer : l'offset relevé
+avant la transaction, la taille courante du journal, son contenu. Chacune
+échoue **fermé** — `pacman_a_commence` rend « engagé ». Se tromper en annonçant
+une installation coûte une inquiétude et un bouton ignoré ; se tromper dans
+l'autre sens coûte un mensonge sur l'état du système **et** la porte de sortie.
+
+### 34.2 Le défaut reproduit sur `eschaton-base 0.1.0-22`
+
+Banc : paquet jetable `eschaton-preuve-tardif` 1.0 → 1.1, dont le `post_upgrade`
+dort 90 s, dans un dépôt local `file:///tmp/banc-tardif/depot`. Transaction
+lancée par la **vraie porte** (`eschaton-update-helper --apply`), annulée
+pendant le `post_upgrade` par `--cancel`.
+
+```console
+$ cat /run/eschaton-update/etat
+resultat=annule          ← le panneau en tire « Rien n'a été installé »
+code=143
+snapshot_avant=171
+$ pacman -Q eschaton-preuve-tardif
+eschaton-preuve-tardif 1.1-1     ← la version « annulée » EST installée
+```
+
+Le défaut du §33.5, reproduit à l'identique, sur les versions de la branche.
+
+### 34.3 Après correctif — `eschaton-base 0.1.0-23`, `plugin-update 0.1.0-15`
+
+Paquets **construits par `makepkg` dans la VM** puis installés par `pacman -U` :
+la mesure porte sur ce que le paquet livre, pas sur des fichiers déposés à la
+main (leçon du §7.1 de la spec).
+
+**Cas tardif.** Même banc, même porte, même instant d'annulation :
+
+```console
+$ cat /run/eschaton-update/etat
+resultat=annule-trop-tard
+code=143
+snapshot_avant=176
+$ pacman -Q eschaton-preuve-tardif
+eschaton-preuve-tardif 1.1-1
+$ journalctl -u eschaton-update.service | tail -4
+==> Verrou pacman orphelin retiré (/var/lib/pacman/db.lck).
+==> Annulation reçue, mais pacman avait déjà commencé à installer.
+    Des paquets ONT été modifiés malgré la demande d'arrêt ; la sortie
+    de pacman ci-dessus dit lesquels.
+    Point de retour disponible : snapshot 176.
+```
+
+**Cas précoce — non régressé.** Crochet lent, annulation avant
+`transaction started` :
+
+```console
+$ cat /run/eschaton-update/etat
+resultat=annule
+snapshot_avant=179
+$ pacman -Q eschaton-preuve-tardif
+eschaton-preuve-tardif 1.0-1     ← inchangé
+```
+
+### 34.4 Le parcours graphique
+
+Pilotage §33.4 (dispatcher Lua d'Hyprland pour le curseur, `ydotool` pour le
+bouton, `wtype` pour le clavier, `dms screenshot` en `WAYLAND_DISPLAY=wayland-1`).
+Empreintes vérifiées invité = hôte.
+
+**1. Cas précoce — le panneau dit vrai, et n'offre rien d'inutile.** Verdict
+`annule` rendu par la réconciliation au démarrage du shell :
+
+```text
+« Mise à jour annulée. Rien n'a été installé. »
+[ Actualiser ]  [ Installer ]              ← pas de retour arrière
+```
+
+Le point mérite d'être noté : `snapshot_avant` valait 179, donc `snapshotAvant > 0`
+était vrai. Ce n'est pas l'absence de point de retour qui retire le bouton,
+c'est le fait qu'`annule` figure dans `resultatsSansRetourArriere` — la
+distinction voulue.
+
+**2. Cas tardif, de bout en bout depuis le panneau.** Clic « Installer » →
+`pgrep` montre `/usr/bin/pkexec /usr/bin/eschaton-update-helper --apply` →
+**modale polkit** portant le message de notre action → mot de passe → journal en
+direct. À l'instant de l'annulation, le panneau affiche déjà
+`upgrading eschaton-preuve-tardif...` puis `banc : post_upgrade de la version 1.1` :
+on est **après** le point de non-retour, et `pacman -Q` rend bien `1.1-1`.
+
+Clic sur **« Annuler »** → seconde modale polkit → mot de passe. Verdict obtenu :
+
+```text
+« Annulation trop tardive : des paquets avaient déjà été installés. »
+
+  L'arrêt est arrivé après que pacman avait commencé à écrire : des paquets ont
+  été installés malgré votre demande d'annulation. Le journal ci-dessus dit
+  lesquels. Le retour arrière ci-dessous ramène le système à son état d'avant.
+
+  Un point de retour existe : l'état d'avant cette mise à jour (snapshot 181).
+
+[ Actualiser ]  [ Installer ]  [ Revenir à l'état d'avant ]
+```
+
+Les trois boutons sont **entièrement dans le cadre** (plafond DMS de 479 px) :
+`annule-trop-tard` fait partie de `resultatEstUnEchec`, donc la boîte du journal
+se rétracte à 150 px, et c'est précisément ce qui garantit que la porte de
+sortie reste atteignable.
+
+**3. Le bouton de retour arrière est VIVANT, pas seulement dessiné.** Un clic —
+un seul — le fait passer à « **Confirmer le retour au snapshot 181** » avec son
+avertissement, et `pgrep eschaton-rollback` ne rend rien : la garde à deux clics
+tient. La restauration elle-même n'a **pas** été confirmée (elle imposerait un
+redémarrage de la VM) ; ce qui est prouvé ici, c'est que le bouton est offert,
+actif et armé sur le bon snapshot. Le chemin de restauration complet, lui, est
+prouvé au §9 et au §33.4.
+
+Empreintes des captures (invité = hôte) :
+
+```text
+4c05478e911486587c779fea6cae191227ba3a0383fda82f0659330b6e12641d  cas precoce, aucun retour arriere
+f809243f9dc290f3b56110e3ffb1d44eae19680faf158cf79f80f2d673abdbad  modale polkit de la mise a jour
+859115730d969c577d686eac3fd8ef51f5563f189910561e28095f1d8921a65b  transaction en vol, point de non-retour deja franchi
+15dc9218d759165c01e7c06f90f4b6b7a95c7b497d9c2958d2c84cc4e0778b73  verdict annule-trop-tard, retour arriere offert
+03ebec2838aa6b2e169858fd3b1de042ea7522f866f68ed8811366e0df2cafd4  retour arriere arme, en attente de confirmation
+```
+
+### 34.5 Ce qui n'est PAS couvert
+
+- **La course de l'annulation** (`deactivating` observé par la sonde) n'a
+  toujours pas été reproduite : la réserve du §33.4 reste entière.
+- **La restauration réelle** depuis ce bouton n'a pas été confirmée (voir
+  ci-dessus).
+- **Un journal de pacman illisible ou tourné en pleine transaction** n'a pas été
+  fabriqué : le repli fermé est prouvé par lecture du code et par
+  `tests/porte-update.bats`, pas par une mesure. La mutation correspondante
+  (`|| return 0` → `|| return 1`) fait bien rougir le test.
+- **Le mode terminal** d'`eschaton-update` (`sudo pacman -Syu`) n'écrit aucun
+  fichier d'état et n'est pas concerné par ce correctif.
+
+### 34.6 État final de la VM
+
+Banc démonté : paquet jetable désinstallé, dépôt local supprimé,
+`/etc/pacman.conf` restauré depuis la copie prise avant modification, crochet
+lent retiré, `ydotoold` arrêté, captures et archives de transfert supprimées.
+
+```console
+$ pacman -Q eschaton-base eschaton-dms-plugin-update eschaton-dms-plugin-rollback
+eschaton-base 0.1.0-23
+eschaton-dms-plugin-update 0.1.0-15
+eschaton-dms-plugin-rollback 0.1.0-4
+$ pacman -Q eschaton-preuve-tardif        → paquet non trouvé
+$ grep -c banc-tardif /etc/pacman.conf    → 0
+$ ls /etc/pacman.d/hooks/                 → 90-mkinitcpio-install.hook (préexistant)
+$ systemctl is-system-running             → running
+$ systemctl is-active banc-ydotoold       → inactive
+```
+
+`/run/eschaton-update/etat` porte encore le `annule-trop-tard` de la dernière
+mesure. C'est l'état réel du dernier événement de cette VM, et il est laissé tel
+quel : `/run` est vidé au redémarrage.
