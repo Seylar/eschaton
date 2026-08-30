@@ -174,14 +174,6 @@ lister_unites_en_echec() {
     | awk '{print $1}'
 }
 
-# Une annulation n'est pas un échec. `systemctl stop` envoie SIGTERM à tout le
-# groupe de contrôle : pacman le traite lui-même et sort, puis ce piège
-# s'exécute — bash diffère les pièges jusqu'à la fin de la commande en avant-plan.
-annulee=false
-on_term() { annulee=true; }
-trap on_term TERM INT
-trap finaliser EXIT
-
 # Un `pacman` tué en pleine récupération de paquets laisse son verrou derrière
 # lui. On ne le retire que lorsque plus aucun pacman ne tourne — sinon on
 # volerait le verrou d'une transaction légitime lancée ailleurs.
@@ -196,6 +188,22 @@ liberer_verrou_orphelin() {
     echo "==> Verrou pacman laissé en place : un autre pacman tourne." >&2
   fi
 }
+
+# Les pièges viennent APRÈS `liberer_verrou_orphelin`, et l'ordre compte depuis
+# que le filet de sortie l'appelle : armer `trap finaliser EXIT` avant que la
+# fonction existe laisse une fenêtre — courte, mais réelle — où un signal
+# ferait entrer `finaliser` dans un « command not found ». Sous `set -e`, cette
+# erreur AVORTERAIT le piège avant l'écriture du verdict, c'est-à-dire
+# exactement la panne que le filet existe pour empêcher. Une définition avant
+# son usage, y compris quand l'usage est un piège.
+#
+# Une annulation n'est pas un échec. `systemctl stop` envoie SIGTERM à tout le
+# groupe de contrôle : pacman le traite lui-même et sort, puis ce piège
+# s'exécute — bash diffère les pièges jusqu'à la fin de la commande en avant-plan.
+annulee=false
+on_term() { annulee=true; }
+trap on_term TERM INT
+trap finaliser EXIT
 
 {
   printf 'resultat=en-cours\n'

@@ -662,6 +662,21 @@ FIN
     echo "le filet de sortie ne capture plus le code en premier : « $premiere »"
     return 1
   }
+
+  # Et le piège est armé APRÈS la définition de ce qu'il appelle. Armer
+  # `trap finaliser EXIT` avant que `liberer_verrou_orphelin` existe laisse une
+  # fenêtre où un signal ferait entrer le filet dans un « command not found » :
+  # sous `set -e`, cette erreur avorterait le piège AVANT l'écriture du verdict,
+  # c'est-à-dire exactement la panne que le filet existe pour empêcher.
+  ligne_fonction=$(grep -n '^liberer_verrou_orphelin() {' "$MAJ" | head -1 | cut -d: -f1)
+  ligne_piege=$(grep -n '^trap finaliser EXIT' "$MAJ" | head -1 | cut -d: -f1)
+  [ -n "$ligne_fonction" ] && [ -n "$ligne_piege" ]
+  [ "$ligne_fonction" -lt "$ligne_piege" ] || {
+    echo "le piège de sortie (ligne $ligne_piege) est armé avant la définition de"
+    echo "liberer_verrou_orphelin (ligne $ligne_fonction) : un signal reçu entre les"
+    echo "deux ferait perdre le verdict."
+    return 1
+  }
 }
 
 @test "le panneau adopte une transaction qu'il n'a pas lancée" {
