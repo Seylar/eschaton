@@ -12,17 +12,45 @@ usage() {
 }
 
 DRY_RUN=0; DISK=""; HOSTNAME_="eschaton"; USERNAME=""
+disk_vu=0; hote_vu=0; user_vu=0
 while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --dry-run) DRY_RUN=1 ;;
+  # `--option=valeur` est acceptée au même titre que `--option valeur` : la
+  # première forme est courante et se faisait rejeter en « option inconnue »,
+  # un message qui accuse l'option alors que seule sa FORME posait problème.
+  opt="$1"; val=""; colle=0
+  if [[ "$opt" == --*=* ]]; then val="${opt#*=}"; opt="${opt%%=*}"; colle=1; fi
+  case "$opt" in
+    --dry-run)
+      ((colle == 0)) || { echo "eschaton-install : --dry-run n'attend pas de valeur." >&2; usage; exit 1; }
+      DRY_RUN=1 ;;
     # `$# -ge 2` avant de consommer $2 : sans ce test, `--disk` en DERNIER token
     # fait échouer le script sur « $2: unbound variable » sous `set -u` — un
     # message de bash, pas de nous, qui n'apprend rien à celui qui installe.
-    --disk)     [[ $# -ge 2 ]] || { echo "eschaton-install : --disk attend un argument." >&2; usage; exit 1; }; DISK="$2"; shift ;;
-    --hostname) [[ $# -ge 2 ]] || { echo "eschaton-install : --hostname attend un argument." >&2; usage; exit 1; }; HOSTNAME_="$2"; shift ;;
-    --user)     [[ $# -ge 2 ]] || { echo "eschaton-install : --user attend un argument." >&2; usage; exit 1; }; USERNAME="$2"; shift ;;
+    --disk|--hostname|--user)
+      if ((colle == 0)); then
+        [[ $# -ge 2 ]] || { echo "eschaton-install : $opt attend un argument." >&2; usage; exit 1; }
+        val="$2"; shift
+      fi
+      [[ -n "$val" ]] || { echo "eschaton-install : $opt attend un argument." >&2; usage; exit 1; }
+      # Une option de valeur RÉPÉTÉE est refusée. `--disk /dev/sda --disk
+      # /dev/sdb` retenait silencieusement la dernière : sur la seule opération
+      # irréversible du dépôt, deviner laquelle des deux cibles est la bonne
+      # n'est pas un service à rendre.
+      case "$opt" in
+        --disk)
+          ((disk_vu == 0)) || { echo "eschaton-install : --disk indiqué plusieurs fois (« $DISK » puis « $val »)." >&2
+                                echo "  Le disque désigné est EFFACÉ : on refuse de choisir à votre place." >&2; exit 1; }
+          disk_vu=1; DISK="$val" ;;
+        --hostname)
+          ((hote_vu == 0)) || { echo "eschaton-install : --hostname indiqué plusieurs fois (« $HOSTNAME_ » puis « $val »)." >&2; exit 1; }
+          hote_vu=1; HOSTNAME_="$val" ;;
+        --user)
+          ((user_vu == 0)) || { echo "eschaton-install : --user indiqué plusieurs fois (« $USERNAME » puis « $val »)." >&2; exit 1; }
+          user_vu=1; USERNAME="$val" ;;
+      esac ;;
     *) echo "option inconnue : $1" >&2; usage; exit 1 ;;
-  esac; shift
+  esac
+  shift
 done
 export DRY_RUN
 [[ -n "$DISK" && -n "$USERNAME" ]] || { usage; exit 1; }
@@ -33,11 +61,13 @@ export DRY_RUN
 # cible est la seule erreur de cet installeur qui ne se rattrape pas.
 valider_utilisateur "$USERNAME"
 valider_hote "$HOSTNAME_"
-if [[ "$DRY_RUN" == "0" && ! -b "$DISK" ]]; then
-  echo "eschaton-install : « $DISK » n'est pas un périphérique bloc." >&2
-  echo "  Attendu un disque ENTIER (/dev/sda, /dev/nvme0n1, /dev/vda), pas une" >&2
-  echo "  partition ni un fichier. Pour lister les candidats : lsblk -dno NAME,SIZE,MODEL" >&2
-  exit 1
+# `valider_disque` remplace l'ancien `[[ -b "$DISK" ]]`, qui ne vérifiait RIEN
+# de ce que son message promettait, et rend le chemin canonique : c'est lui,
+# et non le lien /dev/disk/by-id/… fourni, dont les partitions se dérivent.
+# La répétition à blanc n'a pas de disque sous la main : elle s'en dispense,
+# comme avant, mais la dérivation des noms ci-dessous, elle, est vérifiée.
+if [[ "$DRY_RUN" == "0" ]]; then
+  DISK="$(valider_disque "$DISK")"
 fi
 
 # Précondition spec §4.2 : boot UEFI uniquement
@@ -57,7 +87,22 @@ fi
 # au-delà de LIMIT_USAGE_PERCENT (85 % par défaut) de l'ESP, et chaque snapshot
 # amarré au menu y stocke son kernel et son initramfs. Trop petit = filet de
 # sécurité qui s'arrête en silence.
-part() { [[ "$DISK" == *[0-9] ]] && echo "${DISK}p$1" || echo "${DISK}$1"; }
+part() { nom_partition "$DISK" "$1"; }
+# TOUTE la validation dérivée précède le premier appel destructeur : les noms
+# des partitions se déduisent du nom du disque, et cette déduction n'était
+# confrontée au réel qu'APRÈS `sgdisk --zap-all` — l'installeur détruisait
+# d'abord et abandonnait ensuite. Rien d'irréversible ne doit précéder une
+# validation complète.
+PART_ESP="$(part 1)"; PART_ROOT="$(part 2)"
+valider_noms_partitions "$DISK" "$PART_ESP" "$PART_ROOT"
+
+# Garde AVANT la première écriture : si le noyau ne peut pas relire la table de
+# partitions, c'est que le disque est OCCUPÉ (une partition montée, un volume
+# LVM, un membre de RAID) — y compris la clé USB depuis laquelle on a démarré.
+# BLKRRPART rend alors EBUSY, `blockdev` un code non nul, et `set -e` arrête
+# tout ici : on refuse d'effacer un disque en service.
+run_cmd blockdev --rereadpt "$DISK"
+
 run_cmd sgdisk --zap-all "$DISK"
 run_cmd sgdisk -n1:0:+4G -t1:ef00 -c1:ESP "$DISK"
 run_cmd sgdisk -n2:0:0 -t2:8300 -c2:eschaton "$DISK"
@@ -66,28 +111,37 @@ run_cmd sgdisk -n2:0:0 -t2:8300 -c2:eschaton "$DISK"
 # rend la main avant que /dev/<disque>1 n'existe : sans attente, le `mkfs.vfat`
 # ci-dessous échoue par intermittence, et d'autant plus rarement que la machine
 # est rapide — donc jamais en VM et parfois sur du vrai matériel.
-# `udevadm settle` d'abord (il vide la file d'événements udev), puis une attente
-# explicite du nœud : `settle` ne garantit pas que l'événement d'ajout de
-# partition soit DÉJÀ dans la file au moment où on l'appelle.
+#
+# Trois gardes, et il en faut trois :
+#  1. `blockdev --rereadpt` — la seule DÉTECTION réelle. `sgdisk` peut rendre 0
+#     en avertissant que le noyau n'a pas relu la table ; les anciens nœuds
+#     /dev/sdX1 survivent alors au partitionnement, l'attente ci-dessous les
+#     prend pour les nouveaux et `mkfs.vfat` formate l'ANCIENNE géométrie.
+#     BLKRRPART rend EBUSY dans ce cas : c'est le `partprobe` que prescrivait le
+#     plan Task 2.3, avec util-linux (déjà tiré par `base`) au lieu de parted.
+#  2. `udevadm settle` — vide la file d'événements udev.
+#  3. `attendre_bloc` — `settle` ne garantit pas que l'événement d'ajout de
+#     partition soit DÉJÀ dans la file au moment où on l'appelle.
+run_cmd blockdev --rereadpt "$DISK"
 run_cmd udevadm settle
-run_cmd attendre_bloc "$(part 1)"
-run_cmd attendre_bloc "$(part 2)"
+run_cmd attendre_bloc "$PART_ESP"
+run_cmd attendre_bloc "$PART_ROOT"
 
-run_cmd mkfs.vfat -F32 -n ESP "$(part 1)"
-run_cmd mkfs.btrfs -f -L eschaton "$(part 2)"
+run_cmd mkfs.vfat -F32 -n ESP "$PART_ESP"
+run_cmd mkfs.btrfs -f -L eschaton "$PART_ROOT"
 
 # 2. Subvolumes
-run_cmd mount "$(part 2)" /mnt
+run_cmd mount "$PART_ROOT" /mnt
 for sv in @ @home @log @pkg @snapshots; do run_cmd btrfs subvolume create "/mnt/$sv"; done
 run_cmd umount /mnt
 opts="compress=zstd:1,noatime"
-run_cmd mount -o "subvol=@,$opts" "$(part 2)" /mnt
+run_cmd mount -o "subvol=@,$opts" "$PART_ROOT" /mnt
 run_cmd mkdir -p /mnt/home /mnt/var/log /mnt/var/cache/pacman/pkg /mnt/.snapshots /mnt/boot
-run_cmd mount -o "subvol=@home,$opts" "$(part 2)" /mnt/home
-run_cmd mount -o "subvol=@log,$opts" "$(part 2)" /mnt/var/log
-run_cmd mount -o "subvol=@pkg,$opts" "$(part 2)" /mnt/var/cache/pacman/pkg
-run_cmd mount -o "subvol=@snapshots,$opts" "$(part 2)" /mnt/.snapshots
-run_cmd mount "$(part 1)" /mnt/boot
+run_cmd mount -o "subvol=@home,$opts" "$PART_ROOT" /mnt/home
+run_cmd mount -o "subvol=@log,$opts" "$PART_ROOT" /mnt/var/log
+run_cmd mount -o "subvol=@pkg,$opts" "$PART_ROOT" /mnt/var/cache/pacman/pkg
+run_cmd mount -o "subvol=@snapshots,$opts" "$PART_ROOT" /mnt/.snapshots
+run_cmd mount "$PART_ESP" /mnt/boot
 
 # 3. Dépôt [eschaton] dans le live env, puis pacstrap
 # Idempotent : sur l'ISO Eschaton le dépôt est DÉJÀ déclaré (le profil archiso
