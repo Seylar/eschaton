@@ -5,6 +5,20 @@
 
 **Goal :** mettre le système à jour depuis l'interface, **sans terminal et sans auto-approbation**, avec authentification graphique, progression visible et échec réversible — puis débloquer le tag `v0.3.0`.
 
+> **État au 2026-08-30 : les six tâches sont exécutées.** Le spike de la Task 1
+> a **démenti** le §3.1 de la spec — `pkexec` ne tue pas sa cible quand le fil
+> appelant meurt, parce qu'il efface lui-même le réglage en changeant
+> d'identité. L'architecture ne change pas ; ses raisons, si (annulation
+> impossible sans second chemin privilégié, sortie couplée au panneau). Les
+> corrections sont remontées dans la spec au titre de l'ADR 0002, et la spec
+> porte désormais son **§7 — vérification exécutée**, point par point, avec ses
+> réserves. Preuves : [`tools/vm-dev.md` §27 à §31](../../../tools/vm-dev.md).
+>
+> Quatre défauts trouvés par le terrain, hors périmètre initial du plan, sont
+> corrigés en chemin : `--print` aveugle à l'interactivité, « rien à faire »
+> pris pour un succès alors qu'une décision attendait, verrou pacman orphelin
+> après une annulation, et trois défauts d'affichage du panneau.
+
 ---
 
 ### Task 1 : Spike — prouver les deux hypothèses non vérifiées (BLOQUANT)
