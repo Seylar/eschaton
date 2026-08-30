@@ -248,6 +248,52 @@ paquets_t2() { grep -vE '^[[:space:]]*(#|$)' "$VARIANT/packages.x86_64"; }
   ! grep -qE 'build-iso.*--variant|ESCHATON_ISO_VARIANT' "$wf"
 }
 
+# Extrait le corps `run:` d'une étape nommée du workflow, désindenté, pour
+# l'EXÉCUTER. Vérifier par `grep` qu'une garde existe ne dit rien de ce qu'elle
+# fait ; c'est précisément l'erreur que ce dépôt a déjà payée avec le contrôle
+# d'inventaire qui ne pesait pas les fichiers.
+etape_du_workflow() {
+  local nom="$1" wf="$RACINE/.github/workflows/iso.yml"
+  # Le corps d'un bloc `run: |` est exactement ce qui est indenté de dix
+  # espaces : on s'arrête à la première ligne qui ne l'est pas, sans quoi on
+  # emporte l'en-tête de l'étape suivante — et `bash` tente d'exécuter « - ».
+  awk -v nom="$nom" '
+    index($0, "- name: " nom) && $0 ~ (nom "$") { etape = 1; next }
+    etape && /run: \|/ { corps = 1; next }
+    corps {
+      if ($0 ~ /^          /) { sub(/^          /, ""); print; next }
+      if ($0 ~ /^[[:space:]]*$/) { print ""; next }
+      exit
+    }
+  ' "$wf"
+}
+
+@test "l'étape de CI qui refuse les artefacts T2 refuse VRAIMENT" {
+  script="$(etape_du_workflow 'Refuser tout artefact T2')"
+  [ -n "$script" ]
+
+  cd "$BATS_TEST_TMPDIR"
+
+  # a) Un artefact nominal seul : la publication est autorisée.
+  mkdir -p iso-out
+  : > iso-out/eschaton-2026.08.30-x86_64.iso
+  : > iso-out/eschaton-2026.08.30-x86_64.iso.sha256
+  run bash -c "$script"
+  [ "$status" -eq 0 ]
+
+  # b) L'image T2 s'y glisse : refus.
+  : > iso-out/eschaton-t2-2026.08.30-x86_64.iso
+  run bash -c "$script"
+  [ "$status" -ne 0 ]
+
+  # c) Même renommée, le marqueur déposé à côté suffit à la faire refuser —
+  # c'est tout l'intérêt d'avoir DEUX marques plutôt qu'une.
+  rm iso-out/eschaton-t2-2026.08.30-x86_64.iso
+  : > iso-out/NE-PAS-PUBLIER.txt
+  run bash -c "$script"
+  [ "$status" -ne 0 ]
+}
+
 @test "le job de publication ne ramasse pas une image T2 par joker" {
   # `gh release create … iso-out/*.iso` publie ce qu'il trouve. Le jour où
   # quelqu'un ferait construire les deux images dans le même job, le joker
