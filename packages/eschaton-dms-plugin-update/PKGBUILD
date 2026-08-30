@@ -1,6 +1,6 @@
 pkgname=eschaton-dms-plugin-update
 pkgver=0.1.0
-pkgrel=14
+pkgrel=15
 pkgdesc="Plugin DMS Eschaton : disponibilité et installation des mises à jour"
 arch=(any)
 license=(MIT)
@@ -24,7 +24,15 @@ license=(MIT)
 # où l'utilisateur choisit autre chose que le seul point de retour calculé par
 # la transaction. Le bouton « Revenir à l'état d'avant » est un raccourci vers
 # un cas ; le panneau de restauration reste le cas général de la spec §4.
-depends=(dms-shell pacman-contrib fakeroot polkit eschaton-base eschaton-dms-plugin-rollback)
+# La borne de version sur `eschaton-base` n'est pas une précaution de style :
+# `annule` n'a le sens que ce panneau lui donne — « rien n'a été installé » —
+# qu'à partir de `0.1.0-23`. Avant lui, la transaction écrivait aussi `annule`
+# pour une annulation arrivée APRÈS le point de non-retour de pacman, où des
+# paquets étaient bel et bien installés (vm-dev.md §33.5). Les deux paquets se
+# mettant à jour séparément, sans cette borne un panneau neuf posé sur un socle
+# ancien rejouerait exactement le mensonge que ce correctif supprime.
+depends=(dms-shell pacman-contrib fakeroot polkit 'eschaton-base>=0.1.0-23'
+         eschaton-dms-plugin-rollback)
 source=(plugin.json EschatonUpdateWidget.qml EschatonUpdateSettings.qml LICENSE)
 sha256sums=(SKIP SKIP SKIP SKIP)
 

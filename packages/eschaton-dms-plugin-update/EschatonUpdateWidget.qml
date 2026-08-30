@@ -26,7 +26,14 @@ PluginComponent {
     // "" (rien en cours) · "authentification" · "en-cours" · "termine"
     property string phase: ""
     // "" · succes · succes-degrade · succes-non-verifie · echec · echec-prevol
-    // · decision-humaine · annule · interrompu · verdict-inconnu
+    // · decision-humaine · annule · annule-trop-tard · interrompu
+    // · verdict-inconnu
+    //
+    // Cette liste est celle que le panneau CONNAÎT, pas celle des valeurs
+    // possibles : `eschaton-base` et ce greffon se mettent à jour séparément,
+    // donc un socle plus récent peut écrire un mot inconnu d'ici. Tout ce qui
+    // suit doit rester juste dans ce cas-là aussi — voir
+    // `resultatsSansRetourArriere`.
     property string resultat: ""
     property int codeResultat: 0
     property bool noyauARecharger: false
@@ -86,7 +93,16 @@ PluginComponent {
             // prétend pas avoir vérifié ce qu'on n'a pas vérifié.
             return "Mise à jour installée, mais le contrôle des services n'a pas pu être fait.";
         case "annule":
+            // Cette affirmation est MÉRITÉE, pas supposée : la transaction a lu
+            // le journal de pacman avant d'écrire ce mot-là plutôt que l'autre.
             return "Mise à jour annulée. Rien n'a été installé.";
+        case "annule-trop-tard":
+            // L'annulation est arrivée après le point de non-retour de pacman.
+            // Mesuré le 2026-08-30 : le paquet « annulé » ÉTAIT installé, et le
+            // panneau annonçait pourtant « Rien n'a été installé ». C'est la
+            // famille de mensonge que ce projet combat — une affirmation fausse
+            // sur l'état du système, doublée d'une porte de sortie non offerte.
+            return "Annulation trop tardive : des paquets avaient déjà été installés.";
         case "decision-humaine":
             return "Cette mise à jour demande une décision humaine. Rien n'a été modifié.";
         case "echec-prevol":
@@ -101,7 +117,14 @@ PluginComponent {
             // continuer sur un état inconnu (fail-closed, cf. eschaton-update).
             return "Le pré-vol a rendu un verdict inattendu. Rien n'a été modifié.";
         default:
-            return "";
+            // FAIL-CLOSED. Rendre "" ici laissait le panneau MUET sur un état
+            // qu'il ne connaît pas — et un panneau muet se lit comme un panneau
+            // rassurant. On ne prétend pas savoir ; on dit qu'on ne sait pas, et
+            // le retour arrière reste offert (voir resultatsSansRetourArriere).
+            return resultat
+                ? "Résultat inattendu (« " + resultat + " ») : ce panneau ne sait pas"
+                  + " dire dans quel état la mise à jour a laissé le système."
+                : "";
         }
     }
 
@@ -109,20 +132,48 @@ PluginComponent {
         resultat === "echec" || resultat === "echec-prevol"
         || resultat === "decision-humaine" || resultat === "interrompu"
         || resultat === "succes-degrade" || resultat === "verdict-inconnu"
+        // Une annulation tardive n'est pas un échec de la mise à jour — elle a
+        // partiellement réussi. C'est un échec du VŒU de l'utilisateur, qui
+        // avait demandé l'arrêt et se retrouve avec des paquets installés. Elle
+        // mérite donc la couleur d'attention ; et surtout, elle rétracte la
+        // boîte du journal à 150 px, ce qui est ce qui garantit que le bouton de
+        // retour arrière reste dans le cadre plafonné à 479 px par DMS (§31.4).
+        || resultat === "annule-trop-tard"
 
-    // La restauration n'est proposée que lorsqu'elle a un sens : quelque chose
-    // a été modifié, et un point de retour existe. Après un échec de pré-vol,
-    // rien n'a bougé — proposer un rollback y serait du bruit alarmiste.
+    // Les résultats qui n'appellent PAS de retour arrière, et eux seuls.
     //
-    // `succes-non-verifie` y a été ajouté le 2026-08-30 (revue de sécurité M4).
-    // C'est l'état « installé mais NON vérifié » : les paquets sont en place et
-    // le contrôle des services n'a pas pu être fait. C'est exactement la
-    // situation où l'utilisateur peut avoir besoin de revenir en arrière —
-    // l'omettre lui retirait la porte de sortie au moment où l'incertitude est
-    // la plus grande.
+    //   succes           le système est dans l'état voulu ;
+    //   echec-prevol     la transaction ne s'est pas résolue, rien n'a bougé ;
+    //   decision-humaine on s'est arrêté avant d'agir ;
+    //   verdict-inconnu  idem, fail-closed du pré-vol ;
+    //   annule           annulation AVANT le point de non-retour de pacman.
+    //                    Cette dernière ligne n'est vraie que depuis
+    //                    `eschaton-base 0.1.0-23` : avant lui, `annule` était
+    //                    aussi écrit pour les annulations tardives, où des
+    //                    paquets ÉTAIENT installés. D'où la borne de version
+    //                    dans le PKGBUILD de ce greffon.
+    //
+    // Proposer un rollback dans ces cas serait du bruit alarmiste.
+    readonly property var resultatsSansRetourArriere:
+        ["succes", "echec-prevol", "decision-humaine", "verdict-inconnu", "annule"]
+
+    // FAIL-CLOSED, et c'est un renversement délibéré du 2026-08-30. C'était une
+    // liste d'AUTORISATION : tout résultat absent de la liste perdait sa porte
+    // de sortie en silence. Deux conséquences mesurées :
+    //
+    //   - `annule` y manquait, donc l'utilisateur qui annulait trop tard se
+    //     retrouvait avec des paquets appliqués ET sans issue, dans le seul cas
+    //     où il venait d'exprimer qu'il n'en voulait pas (§33.5) ;
+    //   - ce greffon et `eschaton-base` se mettent à jour SÉPARÉMENT. Un socle
+    //     plus récent écrivant un résultat inconnu d'ici produisait le même
+    //     effacement silencieux — le prochain défaut de cette famille était déjà
+    //     armé.
+    //
+    // Liste d'exclusion, donc : se tromper en proposant le retour arrière coûte
+    // un bouton ignoré ; se tromper en le retirant coûte la seule issue.
     readonly property bool restaurationUtile:
-        (resultat === "echec" || resultat === "succes-degrade"
-         || resultat === "interrompu" || resultat === "succes-non-verifie")
+        resultat !== ""
+        && resultatsSansRetourArriere.indexOf(resultat) === -1
         && snapshotAvant > 0
 
     // ————————————————————————— actions —————————————————————————
@@ -314,6 +365,11 @@ PluginComponent {
             ToastService.showInfo("Eschaton est à jour", root.resumeResultat);
         } else if (nouveauResultat === "annule") {
             ToastService.showInfo("Mise à jour annulée", "Rien n'a été installé.");
+        } else if (nouveauResultat === "annule-trop-tard") {
+            // Sans cette branche, l'annulation tardive tombait dans le `else`
+            // et s'annonçait « La mise à jour a échoué » — faux dans l'autre
+            // sens : elle n'a pas échoué, elle a été partiellement appliquée.
+            ToastService.showError("Annulation trop tardive", root.resumeResultat);
         } else if (nouveauResultat === "succes-degrade") {
             // Le code de retour disait « succès ». On ne le répète pas.
             ToastService.showError("Mise à jour installée, système dégradé", root.resumeResultat);
@@ -704,6 +760,8 @@ PluginComponent {
                                 + " ne démarre(nt) plus. Le code de retour de pacman disait « succès » — pas nous.";
                         if (root.resultat === "decision-humaine")
                             return "pacman a posé une question à laquelle Eschaton refuse de répondre à votre place. La question exacte est dans le journal ci-dessus, ainsi que, le cas échéant, la nouvelle Arch qui la documente. Rien n'a été modifié.";
+                        if (root.resultat === "annule-trop-tard")
+                            return "L'arrêt est arrivé après que pacman avait commencé à écrire : des paquets ont été installés malgré votre demande d'annulation. Le journal ci-dessus dit lesquels. Le retour arrière ci-dessous ramène le système à son état d'avant.";
                         return "Rien n'a été approuvé à votre place. La sortie exacte de pacman est ci-dessus, telle quelle.";
                     }
                     // `unitesEnEchec` vient de `systemctl list-units` : une

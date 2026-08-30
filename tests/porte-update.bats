@@ -592,8 +592,14 @@ FIN
   # jour, et on ne prétend pas avoir vérifié les services.
   [[ "$bloc" == *"succes-non-verifie"* ]]
   # Interrompu avant : annulation si elle a été demandée, sinon « interrompu ».
-  [[ "$bloc" == *"ecrire_etat annule"* ]]
+  # L'annulation passe par `conclure_annulation`, seul endroit qui décide entre
+  # ses deux issues — le filet de sortie ne refait pas ce choix dans son coin
+  # (voir « une annulation tardive est un résultat distinct »).
+  [[ "$bloc" == *"conclure_annulation"* ]]
   [[ "$bloc" == *"ecrire_etat interrompu"* ]]
+  bloc_annulation=$(awk '/^conclure_annulation\(\)/,/^}/' "$MAJ")
+  [[ "$bloc_annulation" == *"ecrire_etat annule "* ]]
+  [[ "$bloc_annulation" == *"ecrire_etat annule-trop-tard"* ]]
   # Et le `sleep` du contrôle ne peut plus tuer le script à lui seul.
   run grep -F 'sleep 3 || true' "$MAJ"
   [ "$status" -eq 0 ]
@@ -619,16 +625,16 @@ FIN
   run grep -F 'confirmRestauration' "$WIDGET"
   [ "$status" -eq 0 ]
 
-  # Elle n'est proposée que quand elle a un sens : après un pré-vol qui n'a
-  # rien modifié, proposer un rollback serait du bruit alarmiste.
+  # Elle n'est proposée que quand elle a un sens : il faut un point de retour,
+  # et il faut que quelque chose ait bougé. Depuis le 2026-08-30 le choix se
+  # lit dans `resultatsSansRetourArriere` — c'est le test « un résultat que le
+  # panneau ne connaît pas… » qui en vérifie le contenu, cas par cas. Ici on ne
+  # garde que la condition qui ne dépend pas de cette liste.
   bloc=$(awk '/readonly property bool restaurationUtile/,/snapshotAvant > 0/' "$WIDGET")
-  [[ "$bloc" == *'"echec"'* ]]
-  [[ "$bloc" == *'"succes-degrade"'* ]]
-  [[ "$bloc" != *'"echec-prevol"'* ]] || {
-    echo "le rollback est proposé alors que rien n'a été modifié"
+  [[ "$bloc" == *"snapshotAvant > 0"* ]] || {
+    echo "le retour arrière est proposé sans point de retour : $bloc"
     return 1
   }
-  [[ "$bloc" == *"snapshotAvant > 0"* ]]
 
   # Un succès dégradé n'est jamais annoncé comme un succès.
   run grep -F 'Mise à jour installée, système dégradé' "$WIDGET"
@@ -767,14 +773,19 @@ FIN
   # vérifié » : les paquets sont en place, le contrôle des services n'a pas pu
   # être fait. C'est exactement la situation où revenir en arrière peut servir ;
   # l'omettre retirait la porte de sortie au moment de plus grande incertitude.
-  bloc=$(awk '/readonly property bool restaurationUtile/,/snapshotAvant > 0/' "$WIDGET")
-  [[ "$bloc" == *'"succes-non-verifie"'* ]] || {
-    echo "le retour en arrière n'est pas proposé après un succès non vérifié : $bloc"
+  #
+  # Depuis le renversement du 2026-08-30, la garantie s'exprime à l'envers : le
+  # succès non vérifié doit être ABSENT de la liste des résultats sans retour
+  # arrière. L'invariant est le même ; c'est sa représentation qui a changé.
+  liste=$(awk '/readonly property var resultatsSansRetourArriere/,/\]$/' "$WIDGET")
+  [ -n "$liste" ]
+  [[ "$liste" != *'"succes-non-verifie"'* ]] || {
+    echo "le retour en arrière n'est pas proposé après un succès non vérifié : $liste"
     return 1
   }
   # …et toujours pas après un pré-vol qui n'a rien modifié.
-  [[ "$bloc" != *'"echec-prevol"'* ]] || {
-    echo "le rollback est proposé alors que rien n'a été modifié : $bloc"
+  [[ "$liste" == *'"echec-prevol"'* ]] || {
+    echo "le rollback est proposé alors que rien n'a été modifié : $liste"
     return 1
   }
 }
@@ -821,4 +832,279 @@ FIN
   [ "$status" -ne 0 ]
   [[ "$output" == *"doit être lancé comme root"* ]]
   [ ! -s "$BANC/appels.txt" ]
+}
+
+# ═══════════ Annulation tardive : ce qui est installé malgré l'arrêt ═════════
+#
+# Mesuré le 2026-08-30 en VM (vm-dev.md §34) : une annulation arrivée pendant le
+# `post_upgrade` d'un paquet laisse ce paquet RÉELLEMENT installé
+# (`pacman -Q` → 1.1-1), alors que l'état écrit était `annule` et que le panneau
+# annonçait « Rien n'a été installé ». Le point de non-retour se lit dans le
+# journal de pacman lui-même ; les extraits ci-dessous sont ceux qui ont été
+# mesurés, ni réécrits ni abrégés.
+
+# Annulation pendant un crochet `PreTransaction` : pacman a téléchargé, vérifié
+# les signatures, affiché son sommaire — et n'a RIEN écrit.
+journal_precoce() {
+  cat <<'EOF'
+[2026-08-30T03:55:46+0200] [PACMAN] Running 'pacman -Syu'
+[2026-08-30T03:55:46+0200] [PACMAN] synchronizing package lists
+[2026-08-30T03:55:46+0200] [PACMAN] starting full system upgrade
+[2026-08-30T03:55:47+0200] [PACMAN] Running 'pacman -Su'
+[2026-08-30T03:55:47+0200] [PACMAN] starting full system upgrade
+[2026-08-30T03:55:47+0200] [ALPM] running '00-banc-lent.hook'...
+EOF
+}
+
+# Annulation pendant le `post_upgrade` : les fichiers et la base locale sont
+# écrits. C'est le défaut du §33.5.
+journal_tardif() {
+  cat <<'EOF'
+[2026-08-30T03:54:58+0200] [PACMAN] Running 'pacman -Syu'
+[2026-08-30T03:55:00+0200] [PACMAN] Running 'pacman -Su'
+[2026-08-30T03:55:00+0200] [ALPM] running '05-snap-pac-pre.hook'...
+[2026-08-30T03:55:00+0200] [ALPM-SCRIPTLET] ==> root: 172
+[2026-08-30T03:55:00+0200] [ALPM] running '10-limine-snapper-lock.hook'...
+[2026-08-30T03:55:00+0200] [ALPM] transaction started
+[2026-08-30T03:55:00+0200] [ALPM] upgraded eschaton-preuve-tardif (1.0-1 -> 1.1-1)
+[2026-08-30T03:55:00+0200] [ALPM-SCRIPTLET] banc : post_upgrade de la version 1.1
+EOF
+}
+
+@test "le point de non-retour de pacman se lit dans son journal, et rien avant" {
+  source "$RACINE/packages/eschaton-base/lib.sh"
+
+  # AVANT : rien n'a été écrit, et la fonction doit le dire.
+  run transaction_pacman_engagee "$(journal_precoce)"
+  [ "$status" -eq 1 ] || {
+    echo "une annulation d'avant le point de non-retour est prise pour tardive"
+    return 1
+  }
+
+  # APRÈS : `transaction started` et `upgraded` sont là, et le paquet EST
+  # installé. C'est le cas que le panneau annonçait comme « rien n'a été
+  # installé ».
+  run transaction_pacman_engagee "$(journal_tardif)"
+  [ "$status" -eq 0 ] || {
+    echo "une annulation d'après le point de non-retour passe pour précoce —"
+    echo "c'est le mensonge du §33.5"
+    return 1
+  }
+
+  # Un téléchargement COMPLET — intégrité et signatures vérifiées — n'engage
+  # rien : mesuré, un `pacman -Sw` intégral n'écrit que sa ligne « Running ».
+  # C'est ce qui interdit de traiter comme tardive une annulation pendant le
+  # téléchargement, qui est la fenêtre la plus longue et la plus probable.
+  run transaction_pacman_engagee \
+    "[2026-08-30T03:52:53+0200] [PACMAN] Running 'pacman -Sw --noconfirm figlet'"
+  [ "$status" -eq 1 ]
+
+  # Journal vide : rien n'y prouve un engagement.
+  run transaction_pacman_engagee ""
+  [ "$status" -eq 1 ]
+
+  # Un scriptlet de paquet écrit du texte ARBITRAIRE dans ce journal, sous son
+  # propre préfixe. Il ne doit pas pouvoir se faire passer pour une écriture de
+  # pacman : le marqueur est ancré sur le préfixe `[ALPM]`, que le scriptlet
+  # n'obtient jamais.
+  run transaction_pacman_engagee \
+    "[2026-08-30T03:55:00+0200] [ALPM-SCRIPTLET] upgraded rien, transaction started"
+  [ "$status" -eq 1 ] || {
+    echo "un scriptlet de paquet peut se faire passer pour une transaction engagée"
+    return 1
+  }
+
+  # Les crochets de pré-transaction portent bien le préfixe `[ALPM]`, et ils
+  # s'exécutent AVANT le point de non-retour : les compter y ferait entrer tout
+  # le cas précoce.
+  run transaction_pacman_engagee \
+    "[2026-08-30T03:55:00+0200] [ALPM] running '05-snap-pac-pre.hook'..."
+  [ "$status" -eq 1 ] || {
+    echo "un crochet de pré-transaction est compté comme une modification"
+    return 1
+  }
+
+  # Les autres écritures de pacman comptent autant qu'une installation : un
+  # retrait aussi modifie le système.
+  for verbe in 'installed foo (1-1)' 'removed foo (1-1)' \
+               'reinstalled foo (1-1)' 'downgraded foo (2-1 -> 1-1)'; do
+    run transaction_pacman_engagee "[2026-08-30T03:55:00+0200] [ALPM] $verbe"
+    [ "$status" -eq 0 ] || {
+      echo "« $verbe » n'est pas compté comme une modification du système"
+      return 1
+    }
+  done
+}
+
+@test "une annulation tardive est un résultat distinct, et le doute retombe dessus" {
+  MAJ="$RACINE/packages/eschaton-base/eschaton-update"
+
+  # La distinction vit dans le fichier d'état ; le panneau ne la devine pas.
+  run grep -F 'ecrire_etat annule-trop-tard' "$MAJ"
+  [ "$status" -eq 0 ] || {
+    echo "la transaction n'écrit jamais d'annulation tardive : le panneau devrait"
+    echo "deviner ce qui a été installé"
+    return 1
+  }
+
+  # L'offset du journal de pacman est relevé AVANT le pré-vol : après coup, il
+  # ne bornerait plus ce que CETTE transaction a écrit.
+  ligne_offset=$(grep -n -F 'journal_pacman_offset=$(' "$MAJ" | head -1 | cut -d: -f1)
+  ligne_prevol=$(grep -n -F -- 'pacman -Syu "$@" < /dev/null' "$MAJ" | head -1 | cut -d: -f1)
+  [ -n "$ligne_offset" ] && [ -n "$ligne_prevol" ]
+  [ "$ligne_offset" -lt "$ligne_prevol" ] || {
+    echo "l'offset du journal est relevé après le pré-vol (offset $ligne_offset,"
+    echo "pré-vol $ligne_prevol) : il ne borne plus cette transaction"
+    return 1
+  }
+
+  # FAIL-CLOSED. Tout ce qui empêche de LIRE la preuve compte comme un
+  # engagement : offset inconnu, journal illisible, journal tourné sous nos
+  # pieds. Se tromper en annonçant une installation coûte une inquiétude ; se
+  # tromper dans l'autre sens coûte un mensonge et la porte de sortie.
+  bloc=$(awk '/^pacman_a_commence\(\)/,/^}/' "$MAJ")
+  [ -n "$bloc" ] || {
+    echo "pacman_a_commence() est introuvable — test à réécrire"
+    return 1
+  }
+  [ "$(printf '%s\n' "$bloc" | grep -c -- '|| return 0')" -ge 3 ] || {
+    echo "la détection n'échoue pas fermé sur ses trois lectures (offset, taille,"
+    echo "contenu) : un journal illisible passerait pour « rien n'a été"
+    echo "installé » : $bloc"
+    return 1
+  }
+
+  # La question est posée à UN seul endroit, et les trois chemins d'annulation
+  # y passent : celui du pré-vol, celui de la transaction, et le filet de
+  # sortie. Un filet qui écrirait `annule` dans son coin ferait retomber sur le
+  # message rassurant toute annulation tuée avant son verdict.
+  bloc=$(awk '/^finaliser\(\)/,/^}/' "$MAJ")
+  [[ "$bloc" == *"conclure_annulation"* ]] || {
+    echo "le filet de sortie ne passe pas par le point de décision unique : $bloc"
+    return 1
+  }
+  [[ "$bloc" != *"ecrire_etat annule"* ]] || {
+    echo "le filet de sortie décide seul de l'issue d'une annulation : $bloc"
+    return 1
+  }
+  # Et ce point de décision unique LIT avant de choisir, au lieu de supposer.
+  bloc=$(awk '/^conclure_annulation\(\)/,/^}/' "$MAJ")
+  [[ "$bloc" == *"pacman_a_commence"* ]] || {
+    echo "l'issue de l'annulation est choisie sans lire le journal de pacman : $bloc"
+    return 1
+  }
+  [[ "$bloc" == *"ecrire_etat annule-trop-tard"* ]] || {
+    echo "le point de décision n'écrit jamais d'annulation tardive : $bloc"
+    return 1
+  }
+  # Le nombre de chemins d'annulation est borné : trois appels, pas un de plus.
+  # Un quatrième chemin qui écrirait l'état lui-même rouvrirait la brèche.
+  appels=$(grep -c -E '^[[:space:]]*conclure_annulation ' "$MAJ")
+  [ "$appels" -eq 3 ] || {
+    echo "il y a $appels chemins d'annulation au lieu des 3 attendus (pré-vol,"
+    echo "transaction, filet de sortie) : le nouveau passe-t-il par le point de"
+    echo "décision unique ?"
+    return 1
+  }
+}
+
+@test "le panneau ne dit jamais « rien n'a été installé » quand quelque chose l'a été" {
+  WIDGET="$RACINE/packages/eschaton-dms-plugin-update/EschatonUpdateWidget.qml"
+
+  # Le message rassurant n'est produit QUE par l'état qui l'autorise. On examine
+  # chacune de ses occurrences : elle doit être portée par « annule », jamais
+  # par un défaut ni par un `else`. Les commentaires sont écartés — ils citent
+  # ce message pour raconter le défaut, et une citation n'est pas un affichage.
+  rassurant=$(grep -n "Rien n'a été installé" "$WIDGET" \
+    | grep -v -E '^[0-9]+:[[:space:]]*//' || true)
+  [ -n "$rassurant" ]
+  while IFS= read -r ligne; do
+    n=${ligne%%:*}
+    debut=$((n > 3 ? n - 3 : 1))
+    contexte=$(sed -n "${debut},${n}p" "$WIDGET")
+    [[ "$contexte" == *'"annule"'* ]] || {
+      echo "« Rien n'a été installé » est produit hors de l'état « annule » :"
+      echo "$ligne"
+      return 1
+    }
+  done <<< "$rassurant"
+
+  # L'annulation tardive a son propre résumé, et il dit ce qui s'est passé.
+  bloc=$(awk '/readonly property string resumeResultat/,/^    \}/' "$WIDGET")
+  [[ "$bloc" == *'case "annule-trop-tard":'* ]] || {
+    echo "le panneau ne connaît pas l'annulation tardive : $bloc"
+    return 1
+  }
+
+  # Et le retour arrière y est proposé : c'est là qu'il sert le plus.
+  bloc=$(awk '/readonly property bool restaurationUtile/,/snapshotAvant > 0/' "$WIDGET")
+  [[ "$bloc" != *'"annule-trop-tard"'* ]] || {
+    echo "l'annulation tardive figure parmi les résultats SANS retour arrière"
+    return 1
+  }
+
+  # Le toast non plus ne ment pas : « Rien n'a été installé » lui était passé en
+  # dur, sans passer par le résumé.
+  bloc=$(awk '/function terminer\(/,/^    \}/' "$WIDGET")
+  [[ "$bloc" == *"annule-trop-tard"* ]] || {
+    echo "la notification ne distingue pas l'annulation tardive : $bloc"
+    return 1
+  }
+}
+
+@test "un résultat que le panneau ne connaît pas laisse la porte de sortie ouverte" {
+  WIDGET="$RACINE/packages/eschaton-dms-plugin-update/EschatonUpdateWidget.qml"
+
+  # FAIL-CLOSED, motif déjà appliqué côté installeur. `eschaton-base` et
+  # `eschaton-dms-plugin-update` sont deux paquets qui se mettent à jour
+  # séparément : un socle plus récent peut écrire un résultat que ce panneau ne
+  # connaît pas encore. Une liste d'AUTORISATION lui retirerait alors le retour
+  # arrière en silence ; une liste d'EXCLUSION le lui laisse.
+  bloc=$(awk '/readonly property bool restaurationUtile/,/snapshotAvant > 0/' "$WIDGET")
+  [[ "$bloc" == *"=== -1"* ]] || {
+    echo "le retour arrière est encore décidé par une liste d'autorisation : un"
+    echo "résultat inconnu du panneau perdrait sa porte de sortie : $bloc"
+    return 1
+  }
+
+  # La liste d'exclusion ne contient QUE des résultats qui n'appellent pas de
+  # retour arrière.
+  liste=$(awk '/readonly property var resultatsSansRetourArriere/,/\]$/' "$WIDGET")
+  [ -n "$liste" ] || {
+    echo "resultatsSansRetourArriere est introuvable — test à réécrire"
+    return 1
+  }
+  for r in succes echec-prevol decision-humaine verdict-inconnu annule; do
+    [[ "$liste" == *"\"$r\""* ]] || {
+      echo "« $r » n'appelle pas de retour arrière mais n'en est pas exclu : $liste"
+      return 1
+    }
+  done
+  for r in echec succes-degrade succes-non-verifie interrompu annule-trop-tard; do
+    [[ "$liste" != *"\"$r\""* ]] || {
+      echo "« $r » a modifié le système et se voit pourtant refuser le retour"
+      echo "arrière : $liste"
+      return 1
+    }
+  done
+
+  # Un résultat inconnu ne rend pas non plus un résumé vide : un panneau muet se
+  # lit comme un panneau rassurant. Il dit qu'il ne sait pas, et il NOMME le
+  # mot qu'il n'a pas su interpréter — sans quoi personne ne peut diagnostiquer.
+  #
+  # Les commentaires sont retirés avant l'examen. Sans cela, le mot « resultat »
+  # présent dans un commentaire voisin suffisait à satisfaire l'assertion :
+  # remplacer la condition par `false` la laissait au vert, ce qu'une passe de
+  # mutation a effectivement montré.
+  bloc=$(awk '/readonly property string resumeResultat/,/^    \}/' "$WIDGET")
+  defaut=$(printf '%s\n' "$bloc" | awk '/default:/,0' | grep -v -E '^[[:space:]]*//')
+  [[ "$defaut" == *"return resultat"* ]] || {
+    echo "le résumé d'un résultat inconnu n'est plus conditionné à ce résultat :"
+    echo "$defaut"
+    return 1
+  }
+  [[ "$defaut" == *'+ resultat +'* ]] || {
+    echo "le résultat inconnu n'est pas nommé dans le résumé : $defaut"
+    return 1
+  }
 }

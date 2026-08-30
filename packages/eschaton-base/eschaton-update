@@ -152,7 +152,9 @@ finaliser() {
       ;;
     *)
       if "$annulee"; then
-        ecrire_etat annule "$code"
+        # Deux issues possibles, et les confondre était le défaut du §33.5 :
+        # `conclure_annulation` va LIRE ce que pacman a écrit avant de choisir.
+        conclure_annulation "$code"
       else
         ecrire_etat interrompu "$code"
       fi
@@ -186,6 +188,60 @@ liberer_verrou_orphelin() {
     echo "==> Verrou pacman orphelin retiré ($VERROU_PACMAN)."
   elif [[ -e $VERROU_PACMAN ]]; then
     echo "==> Verrou pacman laissé en place : un autre pacman tourne." >&2
+  fi
+}
+
+# ═════════════ Une annulation a DEUX issues, et il faut les mesurer ══════════
+#
+# Jusqu'au 2026-08-30, toute annulation écrivait `annule` et le panneau
+# annonçait « Rien n'a été installé ». Mesuré en VM (§34) : une annulation
+# arrivée pendant le `post_upgrade` d'un paquet laisse ce paquet installé. Le
+# message était donc faux, et — plus grave — `restaurationUtile` n'incluant pas
+# `annule`, aucun retour arrière n'était proposé, dans le seul cas où
+# l'utilisateur vient d'exprimer qu'il ne voulait pas de cette mise à jour.
+#
+# La frontière est celle que pacman publie dans son propre journal (voir
+# `transaction_pacman_engagee` dans lib.sh). On relève ici l'offset de ce
+# journal AVANT de rien faire : ce qui s'y ajoute ensuite est le fait de CETTE
+# transaction, et d'aucune autre. Un horodatage ne suffirait pas — il n'a que la
+# seconde pour résolution, et une transaction précédente de la même seconde
+# serait indiscernable.
+readonly JOURNAL_PACMAN=/var/log/pacman.log
+# Vide = « on n'a pas su relever le point de départ ». C'est le pire cas, et il
+# est traité comme tel ci-dessous.
+journal_pacman_offset=$(stat -c %s "$JOURNAL_PACMAN" 2>/dev/null || true)
+
+# FAIL-CLOSED sur les trois lectures. Un offset qu'on n'a pas su relever, un
+# journal devenu illisible, un journal tourné sous nos pieds : dans chacun de
+# ces cas on ne peut pas PROUVER que rien n'a été installé, donc on ne le dit
+# pas. Se tromper en annonçant une installation coûte une inquiétude et un
+# bouton ignoré ; se tromper dans l'autre sens coûte un mensonge sur l'état du
+# système ET la porte de sortie. Même motif que le `*)` du verdict de pré-vol.
+pacman_a_commence() {
+  local taille ajout
+  [[ -n $journal_pacman_offset ]] || return 0
+  taille=$(stat -c %s "$JOURNAL_PACMAN" 2>/dev/null) || return 0
+  ((taille >= journal_pacman_offset)) || return 0
+  ajout=$(tail -c "+$((journal_pacman_offset + 1))" "$JOURNAL_PACMAN" 2>/dev/null) || return 0
+  transaction_pacman_engagee "$ajout"
+}
+
+# Le seul endroit où l'on décide ce qu'une annulation a laissé derrière elle.
+# Les deux chemins d'annulation — celui du pré-vol, celui de la transaction — et
+# le filet de sortie passent tous par ici : la question ne se pose qu'une fois,
+# et sa réponse ne peut pas diverger d'un chemin à l'autre.
+conclure_annulation() { # $1=code de sortie à consigner
+  if pacman_a_commence; then
+    ecrire_etat annule-trop-tard "$1"
+    echo "==> Annulation reçue, mais pacman avait déjà commencé à installer." >&2
+    echo "    Des paquets ONT été modifiés malgré la demande d'arrêt ; la sortie" >&2
+    echo "    de pacman ci-dessus dit lesquels." >&2
+    if ((snapshot_avant > 0)); then
+      echo "    Point de retour disponible : snapshot $snapshot_avant." >&2
+    fi
+  else
+    ecrire_etat annule "$1"
+    echo "==> Mise à jour annulée. Rien n'a été installé."
   fi
 }
 
@@ -224,8 +280,10 @@ chmod 644 "$prevol"
 cat "$prevol"
 
 if "$annulee"; then
-  ecrire_etat annule 0
-  echo "==> Mise à jour annulée avant toute modification."
+  # Le pré-vol ne peut rien installer — il refuse tout au sommaire. On le
+  # VÉRIFIE quand même plutôt que de l'affirmer : c'est gratuit, et un `pacman`
+  # lancé ailleurs pendant cette fenêtre serait sinon attribué à personne.
+  conclure_annulation 0
   exit 0
 fi
 
@@ -285,8 +343,9 @@ printf 'y\n' | LC_ALL="$LOCALE_TRANSACTION" pacman -Su "$@" || rc=$?
 if "$annulee"; then
   # pacman a été tué en vol : c'est ici, et seulement ici, que le verrou reste.
   liberer_verrou_orphelin
-  ecrire_etat annule "$rc"
-  echo "==> Mise à jour annulée à la demande de l'utilisateur."
+  # Et c'est ici que la question se pose vraiment : pacman a-t-il eu le temps
+  # d'écrire ? Le fichier d'état porte la réponse ; le panneau ne la devine pas.
+  conclure_annulation "$rc"
   exit 0
 fi
 if ((rc != 0)); then

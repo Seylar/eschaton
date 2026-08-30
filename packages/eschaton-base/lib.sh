@@ -148,6 +148,44 @@ verdict_prevol() { # $1=fichier de sortie du pré-vol $2=code de retour de pacma
   fi
 }
 
+# ————————— Le point de non-retour de pacman —————————
+#
+# Le supposer était exactement la faute. Mesuré le 2026-08-30 en VM
+# (`vm-dev.md` §34) : une annulation arrivée pendant le `post_upgrade` d'un
+# paquet laisse ce paquet RÉELLEMENT installé — `pacman -Q` rend `1.1-1` — alors
+# que l'état écrit disait `annule` et que le panneau annonçait « Rien n'a été
+# installé ».
+#
+# La frontière n'est pas dans notre code : elle est dans celui de pacman, et
+# pacman la publie. `alpm` écrit « transaction started » dans
+# `/var/log/pacman.log` au moment où il commence à modifier le système, puis une
+# ligne par paquet écrit. Tout ce qui précède — synchronisation des bases,
+# téléchargement, vérification des signatures, sommaire, crochets de
+# pré-transaction — n'écrit rien de cela. Mesuré aux DEUX bornes, et c'est le
+# fait qui rend la distinction utilisable :
+#
+#   - un `pacman -Sw` INTÉGRAL (téléchargement, intégrité, signatures) ne
+#     produit que sa ligne « Running 'pacman …' ». Une annulation pendant le
+#     téléchargement — la fenêtre la plus longue et la plus probable — n'est
+#     donc jamais prise pour tardive ;
+#   - une annulation pendant un crochet `PreTransaction` s'arrête sur
+#     « running '00-….hook'… », sans « transaction started », et le paquet reste
+#     à son ancienne version.
+#
+# Le préfixe `[ALPM]` est porteur, et l'ancrage dessus n'est pas cosmétique :
+# les scriptlets des paquets écrivent dans ce MÊME journal du texte arbitraire,
+# mais sous `[ALPM-SCRIPTLET]`. Sans l'ancre, un paquet tiers pourrait se faire
+# passer pour pacman — ou masquer une écriture réelle sous du bruit.
+#
+# On ne se contente pas de « transaction started » : les verbes par paquet sont
+# des faits accomplis, et ils resteraient lisibles si une version future de
+# pacman changeait sa ligne d'ouverture. Un retrait compte autant qu'une
+# installation : lui aussi modifie le système.
+transaction_pacman_engagee() { # $1=ce que le journal de pacman a gagné ; rc=0 si pacman a écrit
+  printf '%s\n' "$1" | grep -qE \
+    '^\[[^]]*\] \[ALPM\] (transaction started|(installed|upgraded|reinstalled|downgraded|removed) )'
+}
+
 # Un verrou pacman sans processus pacman est un verrou orphelin.
 #
 # Mesuré le 2026-08-30 : un `pacman` tué par SIGTERM pendant « Retrieving
