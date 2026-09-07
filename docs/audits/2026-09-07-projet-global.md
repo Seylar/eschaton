@@ -37,7 +37,7 @@ ni une revue exhaustive de chaque ligne de chaque dépendance amont.
 `pkgrel` : desktop-config 10 → 11 ; assistant 10 → 11 ; update 15 → 16.
 Les outils/tests/documents ne sont pas des octets de paquet livré.
 
-## Re-revue ciblée T2
+## Re-revue ciblée T2 — constat initial
 
 État inspecté : `origin/iso-t2=8b982ab`, plus les modifications préexistantes
 dans `.claude/worktrees/agent-a186b0e417ae099d8`. Le rapport sépare les commits
@@ -69,9 +69,21 @@ Deux réserves de code encore visibles dans ce worktree :
 Aucun fichier de ce worktree n'a été modifié par cette reprise. Le vrai
 MacBook et son choix de GPU restent indispensables à la preuve de démarrage.
 
+## Reprise T2 après délégation du pilotage
+
+Les réserves de code ci-dessus sont désormais corrigées dans la branche
+`codex/t2-reprise-2026-09-07` (`0b23a23`). Le travail interrompu y est conservé,
+les erreurs de lecture ne deviennent plus un succès, le marqueur vide est
+refusé et `eschaton-t2` passe à `0.1.0-2`. Les 94 tests ciblés et les 206 tests
+de cette branche passent localement. Le worktree original reste intact.
+La jonction avec les corrections générales n'a pas de conflit de code ; les
+preuves §36 et §37 sont conservées. Les **214 tests réunis passent**, ainsi que
+le shellcheck complet, visudo et la compilation Python. La construction de la nouvelle ISO et le
+démarrage matériel restent non exécutés.
+
 ## Priorités suivantes
 
-1. Finir et revoir la vague T2 ci-dessus avant toute tentative d'installation.
+1. Valider la CI de la reprise T2 réunie aux corrections générales avant toute tentative d'installation.
 2. Faire revoir la [proposition SP4c](../superpowers/specs/2026-09-07-premiere-session-design.md),
    issue de la [veille datée](../veille/2026-09-07-premiere-session.md). Le point
    délicat est autant l'adoption des anciens trousseaux et `.pacnew` que le greeter.
@@ -103,7 +115,9 @@ Corrections enregistrées dans `31a90c2`. Après un premier refus automatique,
 Seylar a explicitement autorisé la publication, puis confié la reprise du
 pilotage à Codex. La [PR #6](https://github.com/Seylar/eschaton/pull/6) est
 ouverte en brouillon ; la [CI distante](https://github.com/Seylar/eschaton/actions/runs/34132966375)
-est en cours. Les résultats locaux sont détaillés au §37 du journal.
+est verte sur les deux architectures. Le passage suivant a rencontré des HTTP
+504 pendant le téléchargement de GraalVM côté x86_64 ; voir §37.9. Les résultats
+locaux sont détaillés au §37 du journal.
 Cette délégation remplace la réservation des revues/fusions à Claude dans
 l’ancien document de passation ; elle ne constitue pas une preuve des essais
 matériels ni une décision technique sur les arbitrages encore ouverts.

@@ -59,6 +59,7 @@ jobs:
             packages/eschaton-base/eschaton-update \
             packages/eschaton-base/eschaton-update-helper \
             packages/eschaton-base/eschaton-rollback \
+            packages/eschaton-t2/t2-garde-noyau \
             packages/eschaton-desktop-config/eschaton-session \
             packages/eschaton-desktop-config/eschaton-dms-provision \
             packages/eschaton-desktop-config/eschaton-assistant-shadowing

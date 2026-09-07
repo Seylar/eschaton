@@ -104,7 +104,11 @@ FIN
   # le contrôle n'aurait pas attrapé l'initramfs amputé qui l'a motivé.
   build="$BATS_TEST_DIRNAME/../iso/build-iso"
   # Chaque attendu porte « chemin:plancher », et le plancher est réellement comparé.
-  grep -qE '"eschaton/boot/x86_64/initramfs-linux.img:[0-9]+"' "$build"
+  # Le nom du noyau porte `$suffixe_noyau` depuis le variant T2 (vide sur le
+  # nominal, « -t2 » sur le variant) : c'est la MÊME liste d'attendus pour les
+  # deux images, et c'est voulu — un contrôle d'inventaire propre à chaque
+  # variant serait un contrôle qu'on oublierait de mettre à jour.
+  grep -qE '"eschaton/boot/x86_64/initramfs-linux\$\{?suffixe_noyau\}?\.img:[0-9]+"' "$build"
   grep -qE '"eschaton/x86_64/airootfs.sfs:[0-9]+"' "$build"
   grep -q 'taille < plancher' "$build"
   # …et l'image entière a un plancher, pas seulement un plafond : une image

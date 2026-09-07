@@ -1,0 +1,57 @@
+pkgname=eschaton-t2
+pkgver=0.1.0
+pkgrel=2
+pkgdesc="Adaptations Mac T2 : garde d'épinglage du noyau et matériel Apple (toléré, non supporté)"
+
+# `any` : ce paquet ne contient que des fichiers texte et un script shell, et
+# `repo/build-repo` construit TOUS les PKGBUILD dans les DEUX jobs
+# d'architecture — un `arch=(x86_64)` ferait échouer le job aarch64.
+# Ce point n'est plus un écart à ratifier : l'ADR 0004 §4.1 a été corrigé en ce
+# sens le 2026-08-30, et la doctrine `any` du projet n'a donc aucune exception.
+arch=(any)
+license=(MIT)
+
+# AUCUN paquet du socle ne dépend de celui-ci : ni `eschaton-base`, ni
+# `eschaton-desktop`. Le T2 est toléré et cloisonné (ADR 0004 §4.1), jamais une
+# cible par défaut — une installation ordinaire ne le voit même pas passer.
+# Il est posé sur DEUX chemins, et deux seulement :
+#   - `eschaton-install --variant t2`, qui le pacstrape avec le système. La
+#     garde d'épinglage doit exister AVANT le premier démarrage : ce démarrage
+#     est précisément le moment où un noyau mal choisi laisse une machine sans
+#     disque et sans clavier ;
+#   - `pacman -S eschaton-t2` à la main, sur une machine déjà installée.
+# `linux-t2`, `t2fanrd` et `apple-t2-audio-config` viennent du dépôt tiers
+# `arch-mact2`. Ce dépôt n'est PAS dans la configuration livrée par Eschaton : il
+# est déclaré sur la machine T2 elle-même, avec sa politique propre, et le
+# compromis y est affiché (ADR 0004 §4.2). Sur le chemin `--variant t2`, c'est
+# `eschaton-install` qui l'écrit ; à la main, c'est à l'utilisateur.
+depends=(
+  eschaton-base
+  # Le noyau épinglé, et la raison d'être de tout le reste.
+  linux-t2
+  # Wi-Fi/Bluetooth Broadcom : firmware extrait de macOS, déjà empaqueté.
+  apple-bcm-firmware
+  # Haut-parleurs : configuration ALSA UCM du pilote t2bce.
+  apple-t2-audio-config
+  # Ventilateurs : sans ce démon, le SMC les laisse à son régime par défaut.
+  t2fanrd
+)
+optdepends=(
+  'linux-t2-headers: pour compiler un module DKMS contre le noyau T2'
+  "tiny-dfr: Touch Bar (fragile — ne se réveille pas après veille sur 6.12.31+/7.0.5)"
+)
+
+source=(t2-garde-noyau
+        90-eschaton-t2-noyau.hook
+        91-eschaton-t2-retrait.hook
+        92-eschaton-t2-alignement.hook
+        LICENSE)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP)
+
+package() {
+  install -Dm755 t2-garde-noyau "$pkgdir/usr/lib/eschaton/t2-garde-noyau"
+  for h in 90-eschaton-t2-noyau 91-eschaton-t2-retrait 92-eschaton-t2-alignement; do
+    install -Dm644 "$h.hook" "$pkgdir/usr/share/libalpm/hooks/$h.hook"
+  done
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

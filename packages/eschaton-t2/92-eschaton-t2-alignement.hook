@@ -1,0 +1,23 @@
+# Constat d'alignement après chaque transaction touchant le noyau T2.
+#
+# Ce crochet-ci est délibérément SANS `AbortOnFail` : à PostTransaction, la
+# transaction est déjà écrite et l'avorter ne défait rien. Son rôle est de
+# parler PENDANT que l'utilisateur regarde encore l'écran — et surtout avant
+# qu'il ne redémarre — plutôt que de le laisser découvrir au démarrage suivant
+# une machine sans clavier.
+#
+# Ce qu'il regarde : l'arborescence réelle (/usr/lib/modules, /boot), pas la
+# base de pacman. C'est elle que le prochain démarrage lira.
+
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = linux-t2
+Target = linux-t2-headers
+
+[Action]
+Description = Eschaton T2 : vérification de l'alignement du noyau et d'apple-bce...
+When = PostTransaction
+Exec = /usr/lib/eschaton/t2-garde-noyau verifier-alignement

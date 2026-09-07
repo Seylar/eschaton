@@ -9,10 +9,13 @@ source "$(dirname "$0")/lib.sh"
 
 usage() {
   echo "usage: eschaton-install [--dry-run] --disk /dev/X --user NOM [--hostname H]" >&2
+  echo "                       [--variant nominal|t2]" >&2
+  echo "  --variant : chemin d'installation. Par défaut, celui que dit le" >&2
+  echo "              marqueur du média ; à défaut de marqueur, « nominal »." >&2
 }
 
-DRY_RUN=0; DISK=""; HOSTNAME_="eschaton"; USERNAME=""
-disk_vu=0; hote_vu=0; user_vu=0
+DRY_RUN=0; DISK=""; HOSTNAME_="eschaton"; USERNAME=""; VARIANT_DEMANDE=""
+disk_vu=0; hote_vu=0; user_vu=0; variant_vu=0
 while [[ $# -gt 0 ]]; do
   # `--option=valeur` est acceptée au même titre que `--option valeur` : la
   # première forme est courante et se faisait rejeter en « option inconnue »,
@@ -26,7 +29,7 @@ while [[ $# -gt 0 ]]; do
     # `$# -ge 2` avant de consommer $2 : sans ce test, `--disk` en DERNIER token
     # fait échouer le script sur « $2: unbound variable » sous `set -u` — un
     # message de bash, pas de nous, qui n'apprend rien à celui qui installe.
-    --disk|--hostname|--user)
+    --disk|--hostname|--user|--variant)
       if ((colle == 0)); then
         [[ $# -ge 2 ]] || { echo "eschaton-install : $opt attend un argument." >&2; usage; exit 1; }
         val="$2"; shift
@@ -47,6 +50,11 @@ while [[ $# -gt 0 ]]; do
         --user)
           ((user_vu == 0)) || { echo "eschaton-install : --user indiqué plusieurs fois (« $USERNAME » puis « $val »)." >&2; exit 1; }
           user_vu=1; USERNAME="$val" ;;
+        # Même règle que --disk : le variant décide quel NOYAU est posé sur la
+        # cible. Deux valeurs contradictoires ne se départagent pas en silence.
+        --variant)
+          ((variant_vu == 0)) || { echo "eschaton-install : --variant indiqué plusieurs fois (« $VARIANT_DEMANDE » puis « $val »)." >&2; exit 1; }
+          variant_vu=1; VARIANT_DEMANDE="$val" ;;
       esac ;;
     *) echo "option inconnue : $1" >&2; usage; exit 1 ;;
   esac
@@ -54,6 +62,24 @@ while [[ $# -gt 0 ]]; do
 done
 export DRY_RUN
 [[ -n "$DISK" && -n "$USERNAME" ]] || { usage; exit 1; }
+
+# Le chemin d'installation se décide ICI, avant toute validation et bien avant
+# le premier geste destructeur : il décide du NOYAU posé sur la cible, et se
+# tromper de noyau sur un Mac T2 donne un système qui ne démarre pas — pas une
+# panne à corriger après coup, une machine sans disque et sans clavier.
+# La règle est dans installer/lib.sh : --variant explicite, sinon le marqueur du
+# média, sinon nominal. Jamais de détection matérielle.
+VARIANTE="$(resoudre_variante "$VARIANT_DEMANDE")"
+if [[ "$VARIANTE" == "t2" ]]; then
+  # Affiché AVANT le premier geste destructeur : l'ADR 0004 §4.2 exige que le
+  # compromis du dépôt non signé soit montré, et le montrer trop tard ne serait
+  # pas le montrer.
+  afficher_compromis_t2
+  if ((variant_vu == 0)); then
+    echo "eschaton-install : chemin T2 retenu d'après le marqueur du média" >&2
+    echo "  ($ESCHATON_MARQUEUR_VARIANT). Pour l'ignorer : --variant nominal." >&2
+  fi
+fi
 
 # Validation AVANT toute écriture : ces trois valeurs finissent dans des
 # commandes privilégiées et dans des fichiers de configuration du système cible.
@@ -95,10 +121,16 @@ if [[ "$DRY_RUN" == "0" && ! -d /sys/firmware/efi ]]; then
 fi
 
 arch="$(detect_arch)"
-kernels="$(kernel_pkgs_for "$arch")"
+kernels="$(kernel_pkgs_for "$arch" "$VARIANTE")"
 keyrings="$(keyring_pkgs_for "$arch")"
+paquets_eschaton="$(paquets_eschaton_for "$VARIANTE")"
+# Hors répétition à blanc, les microcodes CANDIDATS cèdent la place à celui du
+# processeur réellement présent. La liste passe par un filtre au lieu d'être
+# réécrite en dur (« linux $(microcode_for_cpu) ») : cette réécriture ignorait
+# `kernel_pkgs_for` et aurait donc reposé `linux` sur une machine T2 — le noyau
+# qui ne voit pas son disque, choisi une ligne après en avoir choisi un autre.
 if [[ "$arch" == "x86_64" && "$DRY_RUN" == "0" ]]; then
-  kernels="linux $(microcode_for_cpu)"
+  kernels="$(restreindre_microcode "$kernels")"
 fi
 
 # 1. Partitionnement (spec §4.3) — ESP 4 Gio + btrfs sur le reste
@@ -178,8 +210,27 @@ run_cmd bash -c 'grep -q "^\[eschaton\]" /etc/pacman.conf || printf "\n[eschaton
 # puisque la variable `arch` de ce script n'est pas exportée.
 # shellcheck disable=SC2016  # non-expansion voulue : voir ci-dessus
 run_cmd bash -c 'echo "Server = https://seylar.github.io/eschaton/\$arch" > /etc/pacman.d/eschaton-mirror'
+
+# 3 bis. Chemin T2 : le dépôt tiers dans le pacman.conf DE L'ENVIRONNEMENT LIVE.
+# `pacstrap` lit la configuration de l'hôte pour résoudre ses cibles : sans
+# cette déclaration, `linux-t2` n'est nulle part et la commande échoue sur
+# « target not found » — sur un disque déjà effacé. Le média T2 ne l'embarque
+# volontairement pas (le cloisonnement de build-iso porte sur l'IMAGE), donc
+# c'est ici, et à l'exécution, qu'il entre.
+# Ce fichier-ci vit en RAM sur un média jetable ; celui de la cible, écrit à
+# l'étape 4, est celui qui compte et il est affiché à l'utilisateur.
+if [[ "$VARIANTE" == "t2" ]]; then
+  echo "==> Chemin T2 : déclaration du dépôt $DEPOT_T2_NOM dans l'environnement live"
+  ecrire_depot_t2 "/etc/pacman.d/$DEPOT_T2_NOM.conf"
+  run_cmd bash -c 'grep -q "arch-mact2.conf" /etc/pacman.conf || printf "\nInclude = /etc/pacman.d/arch-mact2.conf\n" >> /etc/pacman.conf'
+  # Le dépôt n'est pas signé : sa base de données doit être rapatriée avant que
+  # pacstrap ne cherche `linux-t2`. `-Sy` seul suffit ici — on ne met pas à jour
+  # un média live, on lui apprend un dépôt de plus.
+  run_cmd pacman -Sy --noconfirm
+fi
+
 # shellcheck disable=SC2086
-run_cmd pacstrap -K /mnt base $kernels $keyrings eschaton-base eschaton-branding
+run_cmd pacstrap -K /mnt base $kernels $keyrings $paquets_eschaton
 run_cmd bash -c 'genfstab -U /mnt >> /mnt/etc/fstab'
 
 # 4. Configuration dans le chroot (spec §4.2 étape 5 + provisioning autorisé)
@@ -207,6 +258,17 @@ write_file /mnt/etc/hostname "$HOSTNAME_"
 chroot_cmd 'rm -f /etc/os-release && cp /usr/share/eschaton/os-release /etc/os-release'
 # Provisioning autorisé (spec §3) : activer le dépôt [eschaton] sur le système cible
 chroot_cmd 'grep -q "eschaton.conf" /etc/pacman.conf || printf "\nInclude = /etc/pacman.d/eschaton.conf\n" >> /etc/pacman.conf'
+# …et, sur une machine T2 UNIQUEMENT, le dépôt tiers qui porte son noyau. Sans
+# lui, le système installé démarre une fois puis n'a plus aucune source pour
+# `linux-t2` : le premier `eschaton-update` proposerait de mettre à jour tout
+# sauf le noyau, et la garde du paquet eschaton-t2 refuserait tout retour au
+# noyau amont — un système figé, sans que rien ne l'explique.
+# Il n'est PAS livré par eschaton-base : ce fragment n'existe que sur la
+# machine concernée, jamais dans la configuration par défaut (ADR 0004 §4.2).
+if [[ "$VARIANTE" == "t2" ]]; then
+  ecrire_depot_t2 "/mnt/etc/pacman.d/$DEPOT_T2_NOM.conf"
+  chroot_cmd 'grep -q "arch-mact2.conf" /etc/pacman.conf || printf "\nInclude = /etc/pacman.d/arch-mact2.conf\n" >> /etc/pacman.conf'
+fi
 chroot_cmd 'sed -i "s/^SNAPPER_CONFIGS=.*/SNAPPER_CONFIGS=\"root\"/" /etc/conf.d/snapper'
 # Appel direct, sans `bash -c` : le nom d'utilisateur n'est plus interpolé dans
 # une chaîne de commande, il est passé comme argument.
@@ -228,6 +290,25 @@ if [[ "$arch" == "aarch64" ]]; then
   efi=BOOTAA64.EFI; kernel_file="Image";                initramfs_file="initramfs-linux.img"
 else
   efi=BOOTX64.EFI;  kernel_file="vmlinuz-$kernel_name"; initramfs_file="initramfs-$kernel_name.img"
+fi
+
+# Paramètres d'amorçage. Le chemin nominal n'en ajoute AUCUN — cette variable est
+# vide et la ligne `cmdline` ci-dessous est mot pour mot celle d'avant.
+params_noyau=""
+if [[ "$VARIANTE" == "t2" ]]; then
+  # Les mêmes quatre paramètres que `iso/build-iso` pose sur les entrées
+  # d'amorçage du média T2 (veille §2.1, recette Arch de t2linux) : l'IOMMU pour
+  # les transferts DMA de la puce T2, le mode compatible pour le PCIe du
+  # châssis Apple, et la veille asynchrone désactivée. Les poser sur le média
+  # et pas sur le système installé serait tenir la moitié du chemin.
+  #
+  # RÉSERVE : ni ces paramètres ni leur absence n'ont été éprouvés sur une vraie
+  # machine T2 — voir iso/README.md. Ce qui N'EST PAS repris ici, faute de
+  # réponse : `apple_gmux.force_igd=y` (15″/16″) et `nomodeset` (écran noir sur
+  # Radeon Pro 5600M), qui dépendent du point ouvert ADR 0004 §6.1. Le média,
+  # lui, offre ces variantes au menu : c'est là que l'auteur découvrira
+  # laquelle sa machine réclame, et il faudra alors la reporter ici.
+  params_noyau=" intel_iommu=on iommu=pt pcie_ports=compat pm_async=off"
 fi
 chroot_cmd "mkdir -p /boot/EFI/BOOT && cp /usr/share/limine/$efi /boot/EFI/BOOT/$efi"
 # STRUCTURE IMBRIQUÉE — exigée par limine-snapper-sync, donc par le filet de
@@ -271,7 +352,7 @@ default_entry: Eschaton/$kernel_name
         protocol: linux
         path: boot():/$kernel_file
         module_path: boot():/$initramfs_file
-        cmdline: root=LABEL=eschaton rootflags=subvol=@ rw quiet
+        cmdline: root=LABEL=eschaton rootflags=subvol=@ rw quiet$params_noyau
 
     //Snapshots
 EOF"
@@ -352,4 +433,38 @@ if [[ "$polkit_failed" != "0" ]]; then
   exit 1
 fi
 
+# 8. Chemin T2 : constater que ce qui va démarrer est bien le noyau T2.
+# Même esprit que la vérification de /boot ci-dessus : on ne dit pas « terminé »
+# sur un système dont le premier démarrage échouerait. Ici, le contrôle porte sur
+# ce qui est PROPRE au chemin T2 — le noyau amont absent, le dépôt configuré, et
+# la garde installée plutôt que promise pour plus tard.
+if [[ "$VARIANTE" == "t2" ]]; then
+  echo "==> Vérification du chemin T2"
+  t2_failed=0
+  verify_path "/mnt/etc/pacman.d/$DEPOT_T2_NOM.conf" "le dépôt $DEPOT_T2_NOM sur la cible" || t2_failed=1
+  verify_path "/mnt/usr/lib/eschaton/t2-garde-noyau" "la garde d'épinglage du noyau (eschaton-t2)" || t2_failed=1
+  # Le noyau amont ne doit pas être là. S'il y est, c'est que la liste de
+  # paquets a été composée sur le mauvais chemin — et le système démarrerait
+  # sur un noyau qui ne voit pas son propre disque.
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "DRY: test ! -e /mnt/boot/vmlinuz-linux   # aucun noyau amont sur une machine T2"
+  elif [[ -e /mnt/boot/vmlinuz-linux ]]; then
+    echo "eschaton-install : /mnt/boot/vmlinuz-linux est présent sur une installation T2." >&2
+    echo "  Ce noyau ne voit pas le disque de cette machine (la puce T2 en est le" >&2
+    echo "  contrôleur) et n'a pas apple-bce : ni clavier ni trackpad au démarrage." >&2
+    t2_failed=1
+  else
+    echo "    ok : aucun noyau amont dans /boot"
+  fi
+  if [[ "$t2_failed" != "0" ]]; then
+    echo "eschaton-install : l'installation T2 est INCOMPLÈTE — ne redémarre pas." >&2
+    exit 1
+  fi
+fi
+
 echo "==> Installation terminée. Redémarre (umount -R /mnt && reboot)."
+if [[ "$VARIANTE" == "t2" ]]; then
+  echo "    Chemin T2 : noyau $kernel_name, dépôt $DEPOT_T2_NOM déclaré sur la cible,"
+  echo "    garde d'épinglage eschaton-t2 installée. Les contrôles au premier"
+  echo "    démarrage restent à effectuer (iso/README.md, ADR 0004 §4.4)."
+fi

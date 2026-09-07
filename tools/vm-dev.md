@@ -5478,6 +5478,326 @@ et se reconstruit en cinq minutes de toute façon.
 > Le compte `seylar` de cette VM a le mot de passe `eschaton`, comme les deux
 > autres (§8.2, §10.8). VM jetable, à ne pas exposer.
 
+---
+
+## 36. Le variant T2 — construction réelle (SP4b-1, Task 4)
+
+Déroulé le **2026-08-30**, même Mac Apple Silicon, conteneur x86_64 **émulé**.
+
+**Ce que cette section prouve, et ce qu'elle ne prouve pas.** Elle prouve que
+l'image existe, qu'elle contient le bon noyau, et que le dépôt tiers n'en sort
+pas. Elle **ne prouve rien sur le démarrage** : aucune machine T2 n'a été
+approchée, et il n'existe pas de VM capable de simuler une puce T2. Tout le §4
+du DoD de la spec reste ouvert — c'est la Task 5, et elle appartient à l'auteur.
+
+### 36.1 Une affirmation du brief, vérifiée et corrigée
+
+| Affirmation | Réalité constatée le 2026-08-30 |
+|---|---|
+| « `apple-bce` est un paquet » (plan Task 4.1, spec §3.3) | **Faux.** L'index de `https://mirror.funami.tech/arch-mact2/os/x86_64/arch-mact2.db` publie **37 paquets**, aucun de ce nom. Le pilote est compilé *dans* `linux-t2`. L'inscrire aurait fait échouer le `pacstrap` sur « target not found ». |
+
+> **Rétractation du 2026-09-07 (ADR 0002).** Cette section en annonçait *trois*
+> et en démentait deux à tort. Elle affirmait que le document s'arrêtait à
+> « §19, pas §35 » et que `origin/main` portait « 80 tests, pas 146 » ; elle
+> allait jusqu'à inventer une explication au second écart (« les 146 comptent
+> vraisemblablement des tests non versionnés »). **Mesuré sur `origin/main` le
+> 2026-09-07 : 146 tests et 35 sections.** Le brief avait raison sur les deux
+> points ; la vérification, elle, avait porté sur une base vieille de deux
+> commits — la branche a été ouverte depuis `c1a4d88`, avant que `main`
+> n'absorbe les vagues Assistant et Update graphique.
+>
+> C'est le mode de défaillance que l'ADR 0002 vise, retourné : non pas une
+> spécification écrite sans veille, mais une **veille menée sur un état périmé
+> puis opposée à une source exacte**, avec une explication fabriquée pour
+> combler l'écart. Vérifier une affirmation, c'est d'abord vérifier *contre
+> quoi* on la vérifie. Seule la ligne `apple-bce` ci-dessus tient — et `main`
+> l'a déjà absorbée dans l'[ADR 0004](../docs/decisions/0004-perimetre-materiel-mac-t2.md) §1.
+
+Deux constats de dépôt, non prévus par la veille, ont aussi orienté la liste :
+
+- **`linux-t2` déclare `provides = linux`** et *ne déclare pas* `conflicts`. Deux
+  conséquences : rien ne signale le doublon si l'on garde le paquet amont — d'où
+  le retrait explicite de `linux` — et un crochet alpm déclenché sur la cible
+  `linux` peut se voir présenter `linux-t2`. La garde tranche donc sur le **nom
+  exact**, jamais sur ce que le paquet fournit.
+- **`mkinitcpio-archiso-t2` (version 73)** livre les mêmes chemins que le
+  `mkinitcpio-archiso` d'Arch **sans déclarer ni `conflicts` ni `provides`** :
+  les deux ensemble donnent un conflit de fichiers. Il est écarté — voir la
+  réserve au §36.5.
+
+### 36.2 Le faux positif qui a arrêté la première construction
+
+La toute première tentative s'est arrêtée **avant `mkarchiso`**, sur ma propre
+garde de cloisonnement :
+
+```
+build-iso : le dépôt tiers arch-mact2 a fui dans airootfs/ …
+/tmp/iso-work/profil/airootfs/etc/motd:38:  Noyau linux-t2, issu du dépôt tiers arch-mact2 : non signé…
+```
+
+La garde cherchait la chaîne `arch-mact2` dans tout `airootfs/`. Or le motd du
+variant **nomme le dépôt exprès**, pour prévenir l'utilisateur. L'invariant à
+tenir n'est pas « le mot n'apparaît nulle part » mais « aucune **configuration
+pacman** de l'image ne déclare ce dépôt ». Une garde qui confond les deux se
+fait désarmer au premier faux positif — ce qui la rendrait pire qu'inutile.
+
+Elle cherche désormais une section `[arch-mact2]` où que ce soit sous
+`airootfs/`, **plus** toute mention dans les fichiers que pacman lit vraiment
+(`etc/pacman.conf`, `etc/pacman.d/`). Le motd passe ; une vraie fuite non.
+
+### 36.3 Construction
+
+```bash
+docker run --rm --privileged --platform linux/amd64 \
+  -e ESCHATON_ISO_WORK=/tmp/iso-work -e ESCHATON_ISO_OUT=/out \
+  -v "$PWD":/eschaton -v /chemin/sortie:/out \
+  -w /eschaton archlinux:base-devel iso/build-iso --variant t2
+```
+
+```
+==> Variant T2 : application du delta (ADR 0004 — toléré, jamais supporté)
+    paquets ajoutés : linux-t2 apple-bcm-firmware t2fanrd
+    paquets retirés : linux
+```
+
+**Les deux images ont été construites le même jour**, sur la même machine, à
+quelques minutes d'intervalle : la comparaison ci-dessous n'a donc rien à
+estimer. C'est aussi la preuve que **le chemin nominal est intact** — c'est lui
+qui se publie, et il ne devait pas bouger d'un octet de comportement.
+
+| | ISO nominal | Variant T2 |
+|---|---|---|
+| Image | `eschaton-2026.08.30-x86_64.iso` | `eschaton-t2-2026.08.30-x86_64.iso` |
+| Taille | 1 257 261 056 o (1,17 Gio) | **1 270 255 616 o (1,18 Gio)** |
+| SHA-256 (T2) | — | `62f10f3094806ada953d9cccf0f723ceca1e5c535b977a67022aa5522eb4cc42` |
+| `vmlinuz` | `vmlinuz-linux`, 17 101 312 o | `vmlinuz-linux-t2`, 17 097 216 o |
+| `initramfs` | `initramfs-linux.img`, 218 764 347 o | `initramfs-linux-t2.img`, 218 866 918 o |
+| `airootfs.sfs` | 775 454 720 o | 788 348 928 o |
+| Paquets dans le live | 178 | **180** |
+| Noyau | `linux 7.1.11.arch1-1` | `linux-t2 7.1.8.arch1-3` |
+| `NE-PAS-PUBLIER.txt` | **absent** | **présent** |
+
+**Le variant coûte 13 Mio de plus que le nominal, et rien d'autre.** C'est le
+firmware Broadcom et `t2fanrd` ; le noyau T2 pèse le même poids que l'amont, à
+4 Kio près.
+
+> **Correction d'une erreur que j'ai faite en écrivant cette section.** J'avais
+> d'abord noté que l'initramfs du variant pesait « 2,4 fois celui du nominal »,
+> en comparant aux « ≈ 90 Mio » du §35 et des commentaires de `iso/build-iso`.
+> La construction nominale du même jour donne **218,7 Mio** : les deux
+> initramfs sont à 0,05 % l'un de l'autre, et il n'y a aucun écart T2 à
+> expliquer. **Ce sont les ordres de grandeur du §35 qui ont vieilli** (un mois
+> de croissance des modules noyau), pas le variant qui dérive. Les planchers du
+> contrôle d'inventaire, eux, restent valides : ils sont délibérément bas.
+
+### 36.4 Ce que l'image contient réellement
+
+Le journal de construction n'est pas une preuve du contenu : on relit donc
+l'image produite.
+
+```console
+$ bsdtar -tf eschaton-t2-…iso | grep -E 'vmlinuz|initramfs'
+eschaton/boot/x86_64/initramfs-linux-t2.img
+eschaton/boot/x86_64/vmlinuz-linux-t2
+```
+
+**Le noyau amont a bien disparu de l'image** — il n'y a qu'un seul vmlinuz.
+De même, `/etc/mkinitcpio.d/` du système livré ne contient que `linux-t2.preset`.
+
+Les trois entrées d'amorçage, extraites de l'image :
+
+```
+01  Eschaton — installation (x86_64, UEFI) — Mac T2
+    vmlinuz-linux-t2 … console=ttyS0,115200 intel_iommu=on iommu=pt pcie_ports=compat pm_async=off
+02  Eschaton — installation (sans console série) — Mac T2
+    (idem, sans console série)
+03  Eschaton — Mac T2, écran noir (nomodeset)
+    (idem 01, plus nomodeset)
+```
+
+**Le cloisonnement du dépôt tiers, vérifié sur l'artefact** — c'est-à-dire en
+extrayant le squashfs et en lisant le `pacman.conf` que la machine installée
+recevrait :
+
+```console
+$ unsquashfs … airootfs.sfs etc/pacman.conf etc/pacman.d
+$ grep -rn 'arch-mact2' root/etc/pacman.conf root/etc/pacman.d/
+(aucune occurrence)
+```
+
+Le `[eschaton]` y est, en `SigLevel = Optional TrustAll` comme sur le nominal ;
+`arch-mact2` n'y est pas. C'est l'ADR 0004 §4.2 tenu, constaté sur le produit et
+non sur l'intention.
+
+Liste de paquets du live, extraite de `eschaton/pkglist.x86_64.txt` :
+`linux-t2 7.1.8.arch1-3`, `apple-bcm-firmware 14.0-1`, `t2fanrd r16.48baf96-1`,
+`iwd 3.12-1` — et **ni `linux`, ni `wpa_supplicant`**.
+
+### 36.5 La garde d'épinglage, exercée contre un vrai pacman
+
+Les tests bats exercent le *script* ; ceci exerce le **branchement** — un vrai
+`pacman`, de vrais crochets alpm, un vrai dépôt Arch. La garde est posée dans un
+conteneur jetable exactement comme le paquet `eschaton-t2` la poserait
+(`/usr/lib/eschaton/t2-garde-noyau` + les trois `.hook`), puis :
+
+```console
+# pacman -S --noconfirm linux
+REFUS — cette machine est un Mac T2, son noyau est épinglé sur linux-t2.
+  Paquet(s) refusé(s) : linux
+  …
+error: command failed to execute correctly
+error: failed to commit transaction (failed to run transaction hooks)
+→ 1
+
+# pacman -S --noconfirm linux-lts
+REFUS — …                                                            → 1
+
+# pacman -S --noconfirm htop
+…                                                                    → 0
+# pacman -Q htop
+htop 3.5.3-1
+```
+
+**Et le refus ne laisse rien derrière lui** — c'est ce que « PreTransaction »
+doit garantir, et qu'il fallait constater plutôt que supposer :
+
+```console
+# pacman -Q linux
+error: package 'linux' was not found
+# ls -A /boot
+(vide)
+```
+
+La transaction est refusée **avant** toute écriture : ni paquet enregistré, ni
+noyau déposé dans `/boot`. Le troisième cas (`htop`) est le pendant nécessaire :
+une garde qui refuse tout n'est pas une garde, c'est une panne.
+
+> Le motif `Exec = /chemin/script argument` n'est pas une invention : c'est
+> exactement ce que font les crochets de `systemd` lui-même
+> (`Exec = /usr/share/libalpm/scripts/systemd-hook daemon-reload-system`).
+
+Le paquet, lui, se construit — `arch=(any)`, comme les autres méta-paquets du
+dépôt, et donc constructible par les **deux** jobs d'architecture de
+`repo/build-repo` :
+
+```console
+$ makepkg -fd --noconfirm         # -d comme repo/build-repo
+==> Finished making: eschaton-t2 0.1.0-1
+eschaton-t2-0.1.0-1-any.pkg.tar.zst   (8 245 octets)
+  usr/lib/eschaton/t2-garde-noyau
+  usr/share/libalpm/hooks/90-eschaton-t2-noyau.hook
+  usr/share/libalpm/hooks/91-eschaton-t2-retrait.hook
+  usr/share/libalpm/hooks/92-eschaton-t2-alignement.hook
+  usr/share/licenses/eschaton-t2/LICENSE
+```
+
+### 36.6 Réserves de cette passe
+
+- **Aucun démarrage.** L'image n'a jamais été amorcée, nulle part. Une machine
+  T2 ne se simule pas : le disque *est* derrière la puce.
+- **`mkinitcpio-archiso-t2` écarté sans contre-épreuve.** C'est ce
+  qu'`archiso-t2` utilise, et nous lui préférons le `mkinitcpio-archiso` d'Arch
+  pour éviter un conflit de fichiers et seize versions de retard. Si le média
+  démarre puis **n'arrive pas à trouver son propre système de fichiers racine**
+  sur le Mac, c'est la première piste à remonter.
+- **Le retard de `linux-t2` est mesuré, et il est réel.** Les deux
+  constructions du jour donnent la comparaison directe, sur la même machine et
+  à la même date :
+
+  | | Paquet | Version tirée le 2026-08-30 |
+  |---|---|---|
+  | ISO nominal | `extra/linux` | **7.1.11**.arch1-1 |
+  | Variant T2 | `arch-mact2/linux-t2` | **7.1.8**.arch1-3 |
+
+  **Trois versions correctives de retard**, constatées et non déduites. C'est
+  exactement le risque R2 de la veille (§2.2), et c'est la première fois qu'on
+  lui met un chiffre — la veille elle-même le disait « qualitativement avéré,
+  pas chiffré » (§10.3). Un instantané n'est pas une tendance : à re-mesurer,
+  mais l'ordre de grandeur est là.
+- **`--privileged` de nouveau.** Comme au §35, la construction locale emploie
+  `--privileged` ; le jeu réduit `--cap-add SYS_ADMIN` n'est prouvé qu'en CI, et
+  la CI ne construit pas ce variant — par conception.
+- **La garde d'alignement (`92`) n'a tourné que sur des arborescences factices**
+  (`ESCHATON_T2_RACINE` pointé sur un faux `/`), jamais sur un système installé.
+  Les deux refus durs (`90`, `91`), eux, sont prouvés contre un vrai pacman
+  (§36.5) — mais avec le noyau **amont**, pas avec `linux-t2`, qui n'est pas
+  installable dans un conteneur Arch sans y ajouter le dépôt tiers.
+- **Aucun `-Syu` n'a été joué sur un système portant `linux-t2`.** Le scénario
+  que la garde existe pour empêcher — une mise à jour qui tire le noyau amont
+  sur une machine T2 — n'a donc été reproduit qu'à moitié : le refus est prouvé,
+  la situation réelle qui le déclencherait ne l'est pas.
+
+### 36.7 L'interdiction de publier, exercée
+
+Les trois verrous du §« Le variant T2 » de `iso/README.md` sont couverts par
+`tests/iso-variant-t2.bats`. Le premier est le seul qu'on puisse *exécuter*
+depuis ce Mac, et c'est pour cela qu'il est placé avant les contrôles de root et
+d'architecture :
+
+```console
+$ GITHUB_ACTIONS=true iso/build-iso --variant t2
+build-iso : le variant T2 ne se construit PAS en intégration continue.
+  Il embarque apple-bcm-firmware — du firmware Apple extrait de macOS — …
+$ echo $?
+1
+```
+
+…et le chemin nominal, lui, franchit ce contrôle sans le voir (il s'arrête plus
+loin, sur son propre refus de tourner hors root) : c'est le test
+« le chemin nominal reste inchangé sous CI ».
+
+### 36.8 Nettoyage
+
+L'image T2 et son `NE-PAS-PUBLIER.txt` sont restés hors du dépôt, dans un
+répertoire de travail temporaire. **Elle n'est ni versionnée, ni téléversée, ni
+publiée** — c'est tout l'objet de la Task 4.3.
+
+### 36.9 Reprise des corrections interrompues — 2026-09-07
+
+Après délégation du pilotage par Seylar, reprise sur
+`codex/t2-reprise-2026-09-07`, depuis `8b982ab`, dans `.worktrees/t2-reprise`.
+Les neuf fichiers modifiés du worktree original ont été copiés par patch ;
+aucun fichier de `.claude/worktrees/agent-a186b0e417ae099d8` n'a été réécrit.
+
+Le travail repris corrige C-2 : variant explicite ou marqueur du média,
+`linux-t2` et firmware demandés pendant pacstrap, dépôt tiers déclaré dans le
+live puis sur la cible, garde installée avant le premier démarrage. Le chemin
+nominal est couvert séparément. I-3 propose `pacman -Rn` pour conserver le
+noyau dépendant ; I-4 et la concordance hook/script sont documentés.
+
+Corrections ajoutées à la reprise :
+
+- marqueur absent distingué d'un fichier vide, inaccessible, non régulier,
+  lien pendant ou erreur de lecture ; propagation du refus avant toute commande
+  disque. Les espaces autour de la valeur sont tolérés, une deuxième valeur
+  ou des caractères insérés dans le nom ne le sont pas ;
+- contrôle du dépôt tiers : le code 1 de grep est distingué du code 2 ; les
+  erreurs remontent aux deux points de contrôle, avant et après mkarchiso ;
+- `eschaton-t2` passe de `0.1.0-1` à `0.1.0-2` ;
+- réserves corrigées : une liste de noms de noyaux ne garantit pas que tout
+  noyau alternatif résulte d'une demande délibérée ; un dry-run ne prouve pas
+  une installation effective.
+
+Commandes et résultats locaux, macOS, utilisateur non root :
+
+```text
+shellcheck installer/lib.sh installer/eschaton-install iso/build-iso packages/eschaton-t2/t2-garde-noyau
+# code 0, aucune sortie
+bats tests/installer.bats tests/iso-variant-t2.bats tests/iso-depot-garde.bats
+1..94
+# 94 « ok », code 0
+bats tests/
+1..206
+# 206 « ok », code 0
+```
+
+Les nouveaux tests exercent de vraies permissions refusées, un parent
+inaccessible et des erreurs I/O simulées, ainsi que le programme d'installation
+en dry-run. Aucun partitionnement, aucune nouvelle ISO, aucun démarrage T2,
+aucune installation via pacstrap réelle et aucun rollback matériel n'ont été
+exécutés. La construction T2 reste interdite en CI ; les builds de paquets
+seront vérifiés par la CI ordinaire. Les preuves de construction et de pacman
+aux §36.3–36.5 concernent la version antérieure, pas ce nouveau contenu.
 
 ## 37. Reprise Codex : audit et corrections (2026-09-07)
 
@@ -5673,3 +5993,68 @@ Première exécution CI : [34132966375](https://github.com/Seylar/eschaton/actio
 sur `cbc98f15e30aa22241cec928e07ce5d56e923170`, en cours au moment de cette
 entrée. Aucun tag ni aucune fusion. Le pilotage et les revues sont désormais
 assumés par Codex ; les réserves de validation du §37 restent applicables.
+
+
+### 37.9 Résultats distants et jonction avec T2
+
+[Première CI #34132966375](https://github.com/Seylar/eschaton/actions/runs/34132966375),
+sur `cbc98f1` : **success**, lint et builds x86_64/aarch64 verts. Les trois
+paquets modifiés ont été construits sur les deux architectures ; namcap émet
+les avertissements attendus d'un conteneur sans dépendances graphiques
+installées. Ce n'est toujours pas une validation du rendu sous DMS 1.6.
+
+[CI de la tête documentaire `2af131b`](https://github.com/Seylar/eschaton/actions/runs/34133131678) :
+le build x86_64 a échoué pendant le téléchargement de GraalVM après plusieurs
+HTTP 504 ; le lint est vert. Extrait réel :
+
+```text
+curl: (22) The requested URL returned error: 504
+==> ERROR: Failure while downloading https://github.com/graalvm/graalvm-ce-builds/releases/download/graal-25.1.3/graalvm-community-jdk-25i1-25.0.3_linux-x64_bin.tar.gz
+```
+
+Jonction locale de la vague générale avec la reprise T2 `0b23a23` : aucun
+conflit de code. Le conflit d'ajout en fin de journal est résolu en conservant
+les preuves §36 puis §37, sans renumérotation ni suppression des résultats.
+
+
+Validation de la jonction : un premier passage a échoué sur une assertion qui
+exigeait `linux-mainline` dans un commentaire supprimé. Ce test documentaire
+est remplacé par l'exécution de transactions simulées : noyau tiers seul,
+puis noyau tiers accompagné de `linux` (refus attendu). Ce changement n'élargit
+pas le périmètre de la garde.
+
+
+Passage final après remplacement de l'assertion documentaire :
+
+```text
+bats tests/
+1..214
+# 214 « ok », code 0
+# shellcheck complet du workflow : code 0
+packages/eschaton-base/10-wheel.sudoers: parsed OK
+# python3 -m py_compile tools/vm-serial : code 0
+# git diff --check : code 0
+```
+
+Le build ARM de la tête `2af131b` a fini vert. Le job x86_64 victime du 504 a
+été relancé seul avec `gh run rerun 34133131678 --failed`. Aucun assouplissement
+de version épinglée, de somme de contrôle ou de validation n'est appliqué.
+
+
+### 37.10 Livraison des deux vagues
+
+La reprise T2 réunie est publiée dans la [PR #7](https://github.com/Seylar/eschaton/pull/7),
+empilée sur la [PR #6](https://github.com/Seylar/eschaton/pull/6), toutes deux en
+brouillon. Les comptes rendus CI définitifs sont joints à leurs descriptions ;
+aucune fusion dans `main`, aucun tag et aucune publication ISO ne sont réalisés.
+
+Un `git fetch origin` confirme que `main=1d87d83` a reçu la passation #5 :
+seul `docs/RESTE-A-FAIRE.md` change depuis `3d8feb6`, et nos branches contiennent
+déjà `32c9e70`. Aucun changement de code supplémentaire à réconcilier.
+
+Vérification finale du worktree T2 d'origine : SHA-256 de `git diff --binary`
+identique au patch capturé avant la reprise :
+
+```text
+21b37603c7b26aea102d0879d5adedc8eb61a6cb4e33da835abced83a4c6787f
+```
