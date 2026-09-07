@@ -6232,8 +6232,10 @@ au redémarrage. Une réponse interrompue est signalée et la conversation peut
 ### 40.2 Preuves obtenues dans `eschaton-stabilisation`
 
 - L’appel direct `qs ipc -p /usr/share/quickshell/dms --any-display call ...`
-  répond en **48 ms** pour la lecture de `barConfigs`. Le wrapper `dms ipc`
-  prenait environ cinq secondes. Ce chiffre ne mesure pas la fluidité graphique.
+  répond en **48 ms** pour la lecture de `barConfigs`. Contre-mesure explicite
+  après redémarrage : **51 ms** pour `dms ipc`, **30 ms** pour `qs ipc`. Le délai
+  de cinq secondes observé auparavant n’est pas reproduit et ne permet pas
+  d’attribuer la lenteur aux raccourcis. Aucun gain global de fluidité n’est prouvé.
 - Source réelle inspectée : `/usr/share/quickshell/dms/DMSShellIPC.qml`, setter
   objet désactivé ; `Common/SettingsData.qml`, `updateBarConfig` lignes 2479+.
 - Nouvelle capacité chargée avec le plugin réel : `eschatonDesktop inspect`
