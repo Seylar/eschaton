@@ -1,9 +1,9 @@
 # Eschaton — ce qu'il reste à faire
 
 - **Date** : 2026-09-07
-- **Destinataire** : Codex (exécution). Les gates de revue, les rulings, les tags et les fusions restent à Claude.
+- **Pilotage** : Codex reprend le projet à la demande explicite de Seylar le 2026-09-07 (« full autorité, c’est toi qui reprend le sujet »). Les anciennes réservations de revue/fusion à Claude sont remplacées par cette délégation ; les preuves techniques et les décisions de produit non encore tranchées restent à documenter.
 - **État de référence distant** : `origin/main` = `3d8feb6`, tag **`v0.3.0`** posé. Le Socle, le Bureau, l'Assistant et l'ISO nominal y sont fusionnés. Attention : le checkout racine `main` est encore à `1b10b85`.
-- **Reprise Codex du 2026-09-07** : branche `codex/audit-reprise-2026-09-07`, depuis `handoff` à `32c9e70`, dans `.worktrees/socle`. [Audit global](audits/2026-09-07-projet-global.md), preuves §37 de `tools/vm-dev.md`. Corrections enregistrées localement (`31a90c2`) : 154 tests, core Quickshell et builds ARM verts. **Push/PR bloqués par la revue automatique : autorisation explicite de publication sur le dépôt public demandée. CI distante non lancée pour cette vague.** Aucune fusion ni publication ISO.
+- **Reprise Codex du 2026-09-07** : branche `codex/audit-reprise-2026-09-07`, depuis `handoff` à `32c9e70`, dans `.worktrees/socle`. [Audit global](audits/2026-09-07-projet-global.md), preuves §37 de `tools/vm-dev.md`. Corrections enregistrées localement (`31a90c2`) : 154 tests, core Quickshell et builds ARM verts. **Publication explicitement autorisée : [PR #6](https://github.com/Seylar/eschaton/pull/6) ouverte en brouillon ; [CI distante](https://github.com/Seylar/eschaton/actions/runs/34132966375) en cours.** Aucune fusion ni publication ISO.
 
 ---
 
@@ -11,7 +11,7 @@
 
 Elles ont toutes été payées par un incident réel. Ne les renégocie pas en cours de route.
 
-1. **Jamais de push sur `main`, jamais de tag, jamais de fusion.** Tu travailles sur une branche, tu notifies, la fusion est une cérémonie Claude.
+1. **Travail sur branche et revue par PR.** Aucun push direct sur `main`. Le pilotage des revues et fusions est repris par Codex sur délégation explicite de Seylar ; une fusion exige une revue du diff et la CI verte. Un tag ou une sortie publique exige aussi que les conditions de publication soient remplies.
 2. **CI verte à chaque vague** avant de rendre la main.
 3. **`pkgrel` bumpé dès qu'un octet du paquet change** — même pour un commentaire. Le dépôt est immuable : jamais deux contenus différents sous un même nom.
 4. **Preuves dans `tools/vm-dev.md`**, numérotées, avec les sorties réelles. Ce qui n'a pas été exécuté est **annoncé comme non exécuté**. N'invente jamais une sortie.
@@ -52,7 +52,7 @@ Une vague de correction a été lancée puis **interrompue en cours de route**. 
 - **I-3** — l'échappatoire `pacman -Rns eschaton-t2` que le script propose est bloquée par son propre hook quand `linux-t2` est une dépendance.
 - **I-4** — commentaire « écart à ratifier » périmé dans `packages/eschaton-t2/PKGBUILD` : `main` a ratifié.
 
-**Ensuite** : re-revue scopée, puis fusion (Claude). **Rien de ce qui touche la vraie machine n'est faisable sans elle** — voir §4.
+**Ensuite** : re-revue scopée, puis décision de fusion par le pilote du projet. **Rien de ce qui touche la vraie machine n'est faisable sans elle** — voir §4.
 
 ---
 

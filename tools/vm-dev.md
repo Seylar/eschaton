@@ -5656,3 +5656,20 @@ Les contrôles locaux et les builds ARM ci-dessus sont verts ; ils ne doivent
 pas être présentés comme une CI bi-architecture verte. Pour finir cette porte :
 autoriser le push de cette branche vers `Seylar/eschaton`, ouvrir la PR brouillon,
 attendre les deux builds et joindre leurs résultats.
+
+
+### 37.8 Autorisation de publication et reprise du pilotage
+
+Seylar a répondu « yes vas y » à la demande de publication, puis « t'as full
+autorité, c'est toi qui reprend le sujet ». Le blocage d'autorisation décrit au
+§37.7 est donc levé. La branche a été poussée avec succès :
+
+```text
+[new branch] codex/audit-reprise-2026-09-07 -> codex/audit-reprise-2026-09-07
+```
+
+[PR #6](https://github.com/Seylar/eschaton/pull/6) ouverte en brouillon.
+Première exécution CI : [34132966375](https://github.com/Seylar/eschaton/actions/runs/34132966375),
+sur `cbc98f15e30aa22241cec928e07ce5d56e923170`, en cours au moment de cette
+entrée. Aucun tag ni aucune fusion. Le pilotage et les revues sont désormais
+assumés par Codex ; les réserves de validation du §37 restent applicables.

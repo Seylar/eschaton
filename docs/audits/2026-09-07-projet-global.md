@@ -99,8 +99,11 @@ Les sorties et limites exactes de validation sont consignées dans
 
 ## Livraison
 
-Corrections enregistrées localement dans `31a90c2`. La revue automatique
-a refusé le push vers le dépôt public `Seylar/eschaton`, même après vérification
-que le compte connecté en est propriétaire. Une autorisation explicite de
-publication est demandée ; aucune PR n’a été créée et aucune CI distante de
-cette vague n’a tourné. Les résultats locaux sont détaillés au §37 du journal.
+Corrections enregistrées dans `31a90c2`. Après un premier refus automatique,
+Seylar a explicitement autorisé la publication, puis confié la reprise du
+pilotage à Codex. La [PR #6](https://github.com/Seylar/eschaton/pull/6) est
+ouverte en brouillon ; la [CI distante](https://github.com/Seylar/eschaton/actions/runs/34132966375)
+est en cours. Les résultats locaux sont détaillés au §37 du journal.
+Cette délégation remplace la réservation des revues/fusions à Claude dans
+l’ancien document de passation ; elle ne constitue pas une preuve des essais
+matériels ni une décision technique sur les arbitrages encore ouverts.
