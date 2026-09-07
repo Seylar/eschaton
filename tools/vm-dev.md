@@ -5751,3 +5751,50 @@ loin, sur son propre refus de tourner hors root) : c'est le test
 L'image T2 et son `NE-PAS-PUBLIER.txt` sont restés hors du dépôt, dans un
 répertoire de travail temporaire. **Elle n'est ni versionnée, ni téléversée, ni
 publiée** — c'est tout l'objet de la Task 4.3.
+
+### 36.9 Reprise des corrections interrompues — 2026-09-07
+
+Après délégation du pilotage par Seylar, reprise sur
+`codex/t2-reprise-2026-09-07`, depuis `8b982ab`, dans `.worktrees/t2-reprise`.
+Les neuf fichiers modifiés du worktree original ont été copiés par patch ;
+aucun fichier de `.claude/worktrees/agent-a186b0e417ae099d8` n'a été réécrit.
+
+Le travail repris corrige C-2 : variant explicite ou marqueur du média,
+`linux-t2` et firmware demandés pendant pacstrap, dépôt tiers déclaré dans le
+live puis sur la cible, garde installée avant le premier démarrage. Le chemin
+nominal est couvert séparément. I-3 propose `pacman -Rn` pour conserver le
+noyau dépendant ; I-4 et la concordance hook/script sont documentés.
+
+Corrections ajoutées à la reprise :
+
+- marqueur absent distingué d'un fichier vide, inaccessible, non régulier,
+  lien pendant ou erreur de lecture ; propagation du refus avant toute commande
+  disque. Les espaces autour de la valeur sont tolérés, une deuxième valeur
+  ou des caractères insérés dans le nom ne le sont pas ;
+- contrôle du dépôt tiers : le code 1 de grep est distingué du code 2 ; les
+  erreurs remontent aux deux points de contrôle, avant et après mkarchiso ;
+- `eschaton-t2` passe de `0.1.0-1` à `0.1.0-2` ;
+- réserves corrigées : une liste de noms de noyaux ne garantit pas que tout
+  noyau alternatif résulte d'une demande délibérée ; un dry-run ne prouve pas
+  une installation effective.
+
+Commandes et résultats locaux, macOS, utilisateur non root :
+
+```text
+shellcheck installer/lib.sh installer/eschaton-install iso/build-iso packages/eschaton-t2/t2-garde-noyau
+# code 0, aucune sortie
+bats tests/installer.bats tests/iso-variant-t2.bats tests/iso-depot-garde.bats
+1..94
+# 94 « ok », code 0
+bats tests/
+1..206
+# 206 « ok », code 0
+```
+
+Les nouveaux tests exercent de vraies permissions refusées, un parent
+inaccessible et des erreurs I/O simulées, ainsi que le programme d'installation
+en dry-run. Aucun partitionnement, aucune nouvelle ISO, aucun démarrage T2,
+aucune installation via pacstrap réelle et aucun rollback matériel n'ont été
+exécutés. La construction T2 reste interdite en CI ; les builds de paquets
+seront vérifiés par la CI ordinaire. Les preuves de construction et de pacman
+aux §36.3–36.5 concernent la version antérieure, pas ce nouveau contenu.

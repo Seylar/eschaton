@@ -35,7 +35,7 @@ iso/
 | Cible | x86_64 ordinaire — **le produit** | MacBook Pro 2019 de l'auteur — **le banc** |
 | Noyau | `linux` (Arch) | `linux-t2` (dépôt tiers `arch-mact2`, non signé) |
 | Image | `eschaton-<version>-x86_64.iso` | `eschaton-t2-<version>-x86_64.iso` |
-| Publication | GitHub Release au tag | **jamais, nulle part** (§Variant T2) |
+| Publication | GitHub Release au tag, **en brouillon** (voir plus bas) | **jamais, nulle part** (§Variant T2) |
 
 ## Construire
 
@@ -82,6 +82,23 @@ docker run --rm --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
 En CI, c'est [`.github/workflows/iso.yml`](../.github/workflows/iso.yml) :
 déclenchement manuel ou sur un tag `v*`, publication en **GitHub Release** (Pages
 plafonne à 1 Go par site, Releases à 2 Gio par fichier).
+
+**Et cette Release est un BROUILLON** (`gh release create --draft`), ce qui n'est
+pas un détail de forme : poser un tag `v*` suffit à déclencher ce workflow, donc
+sans `--draft` le geste « tagger une version » mettrait AUTOMATIQUEMENT en ligne
+un média téléchargeable par tous. Or deux choses de ce dépôt l'interdisent encore :
+
+- [`iso/PROVENANCE.md`](PROVENANCE.md) — le profil dérive de `configs/releng`
+  (GPL-3.0-or-later) dans un dépôt MIT, et la question de licence « se poserait
+  dès la première mise en ligne étiquetée » : une Release attachée à un tag *est*
+  cette mise en ligne ;
+- les choix de média de développement listés plus bas (console série, connexion
+  automatique en root, root sans mot de passe), « à repeser avant toute
+  distribution grand public ».
+
+Un brouillon reste invisible au public et téléchargeable par les seuls
+mainteneurs : l'artefact existe, la mise en ligne reste un geste humain. Retirer
+`--draft` est une décision de produit, pas un nettoyage.
 
 | Variable | Défaut | Rôle |
 |---|---|---|
@@ -283,13 +300,25 @@ delta à la copie de travail, jamais au profil versionné :
 relevé le 2026-08-30, publie 37 paquets et **aucun de ce nom**. Le pilote est
 compilé *dans* `linux-t2`. C'est le plan qu'il faut corriger, pas la liste.
 
-## Le dépôt tiers ne sort pas de la construction
+## Le dépôt tiers ne sort pas de la construction — et ce que cela veut dire
 
 `arch-mact2` est servi par un miroir tiers, publié par un mainteneur unique, et
 **n'est pas signé** (`SigLevel = Never`). Il est ajouté au `pacman.conf` de
-construction et **jamais** à celui de l'environnement live ni du système
-installé (ADR 0004 §4.2) — sans quoi l'exigence de signature que le SP4a doit
-fermer sur `[eschaton]` serait vidée de son sens.
+**construction** et **jamais** à ce que l'image livre (ADR 0004 §4.2) — sans quoi
+l'exigence de signature que le SP4a doit fermer sur `[eschaton]` serait vidée de
+son sens.
+
+> **Ce que ce cloisonnement ne dit PAS : qu'une machine T2 vivrait sans son
+> dépôt.** L'invariant porte sur l'ISO nominal et sur les paquets du projet : un
+> dépôt non signé n'entre pas dans la configuration **par défaut** d'Eschaton.
+> Sur la machine T2 elle-même, `arch-mact2` **doit** être configuré, et l'ADR
+> 0004 §4.2 l'écrivait déjà : « le dépôt T2 est ajouté séparément, avec sa
+> politique propre, sur une machine T2 uniquement, et ce compromis est affiché à
+> l'utilisateur ». Sans lui, la machine n'a aucune source pour son propre
+> noyau — plus une seule mise à jour de `linux-t2`, et la garde refusant tout
+> retour au noyau amont, un système figé sans que rien ne l'explique.
+> C'est `eschaton-install --variant t2` qui l'écrit sur la cible, et qui affiche
+> le compromis avant d'effacer quoi que ce soit.
 
 `build-iso` le vérifie **deux fois** : sur le profil avant de construire, et sur
 l'arborescence que `pacstrap` a réellement produite. Le contrôle porte sur les
@@ -299,9 +328,12 @@ construction s'est arrêtée sur ce faux positif exact, cf. `tools/vm-dev.md` §
 
 ## La garde d'épinglage du noyau
 
-Elle vit dans le paquet **`packages/eschaton-t2/`**, qui ne s'installe **qu'à la
-main**, sur la machine concernée : rien ne le tire, ni `eschaton-base` ni
-l'installeur. Trois crochets alpm y branchent un script unique :
+Elle vit dans le paquet **`packages/eschaton-t2/`**. **Aucun paquet du socle
+n'en dépend** — ni `eschaton-base`, ni `eschaton-desktop` : une installation
+ordinaire ne le voit jamais passer. Il arrive par deux chemins, et deux
+seulement : `eschaton-install --variant t2`, qui le pose **pendant**
+l'installation, ou `pacman -S eschaton-t2` à la main sur une machine déjà
+installée. Trois crochets alpm y branchent un script unique :
 
 | Crochet | Moment | Effet |
 |---|---|---|
@@ -312,6 +344,27 @@ l'installeur. Trois crochets alpm y branchent un script unique :
 Le script tranche sur le **nom exact** du paquet, jamais sur ce qu'il fournit :
 `linux-t2` déclare `provides = linux`, et l'on ne veut pas dépendre de la façon
 dont pacman associe une cible à un fournisseur.
+
+La liste de noyaux refusés est **doublée** : les `Target =` du crochet `90` et le
+tableau `noyaux_amont` du script. Il le faut — alpm ne déclenche que sur ce
+qu'écrit le crochet, le script ne voit que ce qu'alpm lui présente — et une
+entrée retirée d'un seul côté ne produirait ni erreur ni avertissement, juste un
+noyau qui passe. `tests/iso-variant-t2.bats` confronte les deux listes.
+
+**Périmètre de cette liste.** Elle couvre exactement `linux`, `linux-lts`,
+`linux-zen`, `linux-hardened`, `linux-rt` et `linux-rt-lts`. Un noyau de l'AUR,
+d'un dépôt tiers ou compilé à la main peut franchir la garde, même s'il est
+tiré par une dépendance. La garde ne garantit ni l'intention de l'utilisateur
+ni la compatibilité d'un autre noyau avec T2. Le démarrage et le rollback
+restent à éprouver sur le matériel concerné.
+
+**L'échappatoire est `pacman -Rn eschaton-t2`, pas `-Rns`.** Le `s` emporterait
+les dépendances devenues orphelines, donc `linux-t2` s'il a été installé *comme
+dépendance* de ce paquet — et le retrait de `linux-t2` déclenche le crochet `91`
+(`AbortOnFail`), qui refuse alors toute la transaction : l'issue de secours se
+referme sur elle-même. Le cas ne se pose pas quand `linux-t2` a été installé
+explicitement, ce que fait `eschaton-install` en le nommant dans son `pacstrap`,
+mais la commande sûre est la même dans les deux cas.
 
 **Ce que la garde ne fait pas, et il faut le dire.** La veille §2.3 souhaitait
 « un crochet qui bloque un `-Syu` si `linux-t2` n'est pas disponible pour la
@@ -376,14 +429,50 @@ tranché — et tant que ce n'est pas tranché, la réponse est non.
 4. **Vérifier d'abord que le disque est visible** : `lsblk -o NAME,SIZE,MODEL,TYPE`.
    S'il ne l'est pas, ne pas insister — l'image n'est pas la bonne.
 5. **Installer** : `eschaton-install --disk /dev/… --user … --hostname …`.
+
+   L'installeur **reconnaît de lui-même le média T2**, par le marqueur que
+   `build-iso` y a déposé (`/usr/local/share/eschaton/variant`) : il annonce le
+   chemin retenu, affiche le compromis du dépôt non signé, puis pose `linux-t2`,
+   `apple-bcm-firmware`, le dépôt `arch-mact2` **sur la cible** et le paquet
+   `eschaton-t2` — la garde d'épinglage est donc en place **avant** le premier
+   démarrage. Pour forcer explicitement : `--variant t2` (ou `--variant nominal`
+   pour l'ignorer). Sans marqueur et sans drapeau, c'est toujours le chemin
+   nominal — un live tiers installe donc un système ordinaire, comme avant.
+   Un marqueur vide, illisible, non régulier ou invalide arrête le programme
+   avant toute commande disque ; seul un marqueur réellement absent permet ce
+   défaut nominal. Une erreur de lecture pendant le contrôle du dépôt tiers
+   arrête également la construction de l’image.
+
    ⚠️ L'installeur **efface le disque entier sans confirmation** (voir les
    réserves plus haut) et exige une ESP de 4 Gio, là où celle d'Apple fait
    300 Mo : c'est l'effacement complet, ou rien.
-6. **Après le premier démarrage**, installer la garde à la main :
-   ajouter le dépôt `arch-mact2` (sa politique est à l'utilisateur, elle n'est
-   pas livrée par Eschaton), puis `pacman -S eschaton-t2`.
+6. **Au premier démarrage**, il n'y a plus rien à installer. Vérifier plutôt ce
+   que la garde constate : `pacman -Q linux-t2 eschaton-t2`, la présence de
+   `/boot/vmlinuz-linux-t2`, et l'absence de `/boot/vmlinuz-linux`. Puis
+   éprouver la garde pour de vrai : `pacman -S linux` **doit** être refusé.
 7. **Prouver le rollback** sur cette machine : cassage volontaire, restauration,
    redémarrage vérifié. C'est le point le plus précieux de toute la tâche.
+
+### Ce qui reste à prouver, et que rien ici ne prouve
+
+Tout le chemin T2 de l'installeur est vérifié **en répétition à blanc**, depuis
+un Mac Apple Silicon : le plan demande le noyau T2 et prévoit la configuration
+du dépôt sur la cible. Ce contrôle ne prouve pas leur installation effective. Aucune de ces lignes n'a jamais été exécutée sur une
+machine T2, et **aucune VM ne peut le faire** — le disque *est* derrière la puce.
+Restent donc entièrement ouverts :
+
+- le **démarrage** du système installé, qui est l'objet même de tout ceci ;
+- les **paramètres d'amorçage** repris du média (`intel_iommu=on iommu=pt
+  pcie_ports=compat pm_async=off`) : ni leur nécessité ni leur suffisance sur le
+  système installé n'ont été éprouvées. `apple_gmux.force_igd=y` et `nomodeset`,
+  qui dépendent du point ouvert ADR 0004 §6.1, ne sont **pas** repris — le média
+  les offre au menu, c'est là que l'auteur découvrira lesquels sa machine
+  réclame, et il faudra alors les reporter dans l'installeur ;
+- le fait que `pacstrap` résolve réellement `linux-t2` depuis `arch-mact2`
+  déclaré à chaud dans le `pacman.conf` du live ;
+- le comportement des crochets d'`eschaton-t2` **installés dans la transaction
+  même** qui les pose : alpm construit sa liste de crochets au début de la
+  transaction, ils ne devraient donc pas s'y exécuter — constaté nulle part.
 
 ## Ce qui ne marchera pas, ou mal
 
@@ -423,12 +512,9 @@ variant.
    fait 300 Mo contre les 4 Gio exigés, et une mise à jour macOS casse le boot).
 3. **Ratification du périmètre** (ADR 0004 §6.3) — l'ADR est encore *proposé*.
 
-Un quatrième point s'y ajoute, découvert en écrivant ce variant :
-
-4. **L'architecture du paquet `eschaton-t2`.** L'ADR §4.1 l'annonce
-   « forcément non-`any` puisqu'il dépend de `linux-t2` ». Il est livré en
-   **`arch=(any)`**, et le PKGBUILD dit pourquoi : l'architecture décrit ce qu'un
-   paquet *contient* — ici deux fichiers texte et un script shell — pas ce dont
-   il dépend. Ce n'est pas cosmétique : `repo/build-repo` construit **tous** les
-   PKGBUILD dans les **deux** jobs d'architecture et refuse un dépôt incomplet,
-   donc un `arch=(x86_64)` ferait échouer le job aarch64. À ratifier.
+Un quatrième point y figurait — **l'architecture du paquet `eschaton-t2`**, que
+l'ADR §4.1 annonçait « forcément non-`any` ». Il est **clos** : le §4.1 a été
+réécrit le 2026-08-30 pour acter que le paquet est livré en `arch=(any)`
+(l'architecture décrit ce qu'un paquet *contient*, et `repo/build-repo` le
+construit dans les **deux** jobs d'architecture). La doctrine `any` du projet
+n'a donc aucune exception, ce qui est mieux que ce que l'ADR proposait.

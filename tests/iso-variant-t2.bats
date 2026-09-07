@@ -25,9 +25,39 @@ setup() {
   VARIANT="$RACINE/iso/variants/t2"
   BUILD="$RACINE/iso/build-iso"
   GARDE="$RACINE/packages/eschaton-t2/t2-garde-noyau"
+  INSTALL="$RACINE/installer/eschaton-install"
 }
 
 paquets_t2() { grep -vE '^[[:space:]]*(#|$)' "$VARIANT/packages.x86_64"; }
+
+# `! commande` EN POSITION NON FINALE EST INERTE dans un test bats, et ce
+# fichier en était rempli. bash(1), section `set -e` : « The shell does not exit
+# if the command that fails … is being inverted with `!` ». Une assertion niée
+# qui n'est pas la dernière ligne du test ne peut donc RIEN faire échouer.
+# Constaté ici même : « le job de publication ne ramasse pas une image T2 par
+# joker » était au vert alors que sa négation était fausse. Une garde qui ne
+# peut pas échouer est pire que pas de garde — c'est la règle que ce dépôt
+# s'applique déjà au contrôle d'inventaire de build-iso.
+refute() { # $@ = commande qui DOIT échouer
+  if "$@"; then
+    echo "assertion : « $* » a réussi alors qu'elle devait échouer" >&2
+    return 1
+  fi
+}
+
+# Répétition à blanc de l'installeur, avec la machine simulée : l'architecture
+# est forcée (ce poste est un Mac Apple Silicon) et le marqueur de variant est
+# pointé où le test veut. Aucun disque, aucun root, aucune écriture.
+plan_installation() { # $1 = valeur du marqueur ou "" ; $@ suivants = arguments
+  local marqueur="$1"; shift
+  local fichier="$BATS_TEST_TMPDIR/marqueur-absent"
+  if [ -n "$marqueur" ]; then
+    fichier="$BATS_TEST_TMPDIR/variant"
+    printf '%s\n' "$marqueur" > "$fichier"
+  fi
+  ESCHATON_ARCH=x86_64 ESCHATON_MARQUEUR_VARIANT="$fichier" \
+    "$INSTALL" --dry-run --disk /dev/vda --user seylar "$@" 2>&1
+}
 
 # --- 1. Le variant est une liste de paquets, pas une fourche --------------------
 
@@ -65,7 +95,7 @@ paquets_t2() { grep -vE '^[[:space:]]*(#|$)' "$VARIANT/packages.x86_64"; }
   # compilé DANS `linux-t2` — c'est même sa raison d'être. L'inscrire dans la
   # liste ferait échouer le pacstrap sur « target not found », très tard.
   [ -f "$VARIANT/packages.x86_64" ]
-  ! grep -qx 'apple-bce' <(paquets_t2)
+  refute grep -qx 'apple-bce' <(paquets_t2)
   # …et la liste dit POURQUOI, sans quoi le prochain lecteur le rajoutera.
   grep -q 'apple-bce' "$VARIANT/packages.x86_64"
 }
@@ -77,7 +107,7 @@ paquets_t2() { grep -vE '^[[:space:]]*(#|$)' "$VARIANT/packages.x86_64"; }
   # ensemble donnent un conflit de fichiers, et lui seul donnerait des crochets
   # d'initramfs de seize versions en retard.
   [ -f "$VARIANT/packages.x86_64" ]
-  ! grep -qx 'mkinitcpio-archiso-t2' <(paquets_t2)
+  refute grep -qx 'mkinitcpio-archiso-t2' <(paquets_t2)
   grep -q 'mkinitcpio-archiso-t2' "$VARIANT/packages.x86_64"
 }
 
@@ -92,9 +122,9 @@ paquets_t2() { grep -vE '^[[:space:]]*(#|$)' "$VARIANT/packages.x86_64"; }
   grep -q 'SigLevel[[:space:]]*=[[:space:]]*Never' "$VARIANT/arch-mact2.conf"
 
   # …et nulle part ailleurs dans le profil versionné.
-  ! grep -rq 'arch-mact2' "$AIROOTFS"
-  ! grep -q 'arch-mact2' "$PROFIL/pacman.conf"
-  ! grep -q 'arch-mact2' "$PROFIL/packages.x86_64"
+  refute grep -rq 'arch-mact2' "$AIROOTFS"
+  refute grep -q 'arch-mact2' "$PROFIL/pacman.conf"
+  refute grep -q 'arch-mact2' "$PROFIL/packages.x86_64"
 }
 
 @test "build-iso injecte le dépôt tiers dans la copie de travail, jamais dans airootfs" {
@@ -207,9 +237,57 @@ paquets_t2() { grep -vE '^[[:space:]]*(#|$)' "$VARIANT/packages.x86_64"; }
   grep -q '^pkgname=eschaton-t2$' "$pkg"
   grep -q 't2-garde-noyau' "$pkg"
   # Le socle ne doit JAMAIS le tirer : le T2 est toléré, pas supporté
-  # (ADR 0004 §4.1). Il s'installe à la main, sur la machine concernée.
-  ! grep -q 'eschaton-t2' "$RACINE/packages/eschaton-base/PKGBUILD"
-  ! grep -q 'eschaton-t2' "$RACINE/installer/eschaton-install"
+  # (ADR 0004 §4.1). C'est une dépendance de PAQUET que l'on interdit ici —
+  # l'installeur, lui, le pose bien, mais sur le seul chemin `--variant t2`
+  # (voir « le chemin nominal n'installe RIEN de T2 » plus bas).
+  refute grep -q 'eschaton-t2' "$RACINE/packages/eschaton-base/PKGBUILD"
+  refute grep -q 'eschaton-t2' "$RACINE/packages/eschaton-desktop/PKGBUILD"
+}
+
+@test "la liste des noyaux refusés est la MÊME dans le crochet et dans la garde" {
+  # Deux listes, deux fichiers, aucun mécanisme pour les tenir ensemble : alpm
+  # ne déclenche que sur les `Target =` du crochet, et le script ne voit que ce
+  # qu'alpm lui présente. Retirer `Target = linux-zen` du seul crochet laissait
+  # la suite au vert — l'ancien test ne vérifiait qu'une entrée, `linux`.
+  hook="$RACINE/packages/eschaton-t2/90-eschaton-t2-noyau.hook"
+  cibles="$(sed -n 's/^Target[[:space:]]*=[[:space:]]*//p' "$hook" | sort)"
+  liste="$(bash "$GARDE" lister-noyaux | sort)"
+  [ -n "$liste" ]
+  [ "$cibles" = "$liste" ] || {
+    echo "crochet :"; echo "$cibles"
+    echo "garde   :"; echo "$liste"
+    return 1
+  }
+  # Et la liste est bien celle des six noyaux officiels, pas une liste vide qui
+  # coïnciderait avec un crochet vidé.
+  [ "$(printf '%s\n' "$liste" | wc -l | tr -d ' ')" -eq 6 ]
+}
+
+@test "le PÉRIMÈTRE de la garde est écrit, pas subi" {
+  # M-2 : la liste couvre les six noyaux officiels et pas les noyaux tiers
+  # (`linux-mainline`, `linux-xanmod`, AUR). C'est correct pour la menace visée
+  # — un noyau amont qui arrive sans que personne ne l'ait voulu — mais un
+  # lecteur doit pouvoir le savoir sans relire la liste ligne à ligne.
+  grep -q 'PÉRIMÈTRE' "$GARDE"
+  grep -q 'linux-mainline' "$GARDE"
+  # Le comportement correspondant, constaté : un noyau tiers PASSE.
+  run bash "$GARDE" refuser-noyau-standard <<<'linux-xanmod'
+  [ "$status" -eq 0 ]
+  # …et le README le dit aussi, là où l'auteur le lira.
+  grep -q 'linux-mainline\|linux-xanmod' "$RACINE/iso/README.md"
+}
+
+@test "l'échappatoire proposée par la garde n'est pas bloquée par la garde" {
+  # I-3 : le message proposait `pacman -Rns eschaton-t2`. Si `linux-t2` a été
+  # installé comme DÉPENDANCE, le `-s` cascade dessus et déclenche
+  # 91-eschaton-t2-retrait (AbortOnFail), qui refuse toute la transaction :
+  # l'issue de secours se referme sur elle-même.
+  run bash "$GARDE" refuser-noyau-standard <<<'linux'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"pacman -Rn eschaton-t2"* ]]
+  refute grep -q -- '-Rns eschaton-t2' "$GARDE"
+  # …et la condition est nommée, pas seulement contournée.
+  [[ "$output" == *"91-eschaton-t2-retrait"* ]]
 }
 
 # --- 4. Aucun chemin de CI ne peut publier ce variant ---------------------------
@@ -245,7 +323,7 @@ paquets_t2() { grep -vE '^[[:space:]]*(#|$)' "$VARIANT/packages.x86_64"; }
 
 @test "le workflow ISO ne construit jamais le variant" {
   wf="$RACINE/.github/workflows/iso.yml"
-  ! grep -qE 'build-iso.*--variant|ESCHATON_ISO_VARIANT' "$wf"
+  refute grep -qE 'build-iso.*--variant|ESCHATON_ISO_VARIANT' "$wf"
 }
 
 # Extrait le corps `run:` d'une étape nommée du workflow, désindenté, pour
@@ -257,8 +335,14 @@ etape_du_workflow() {
   # Le corps d'un bloc `run: |` est exactement ce qui est indenté de dix
   # espaces : on s'arrête à la première ligne qui ne l'est pas, sans quoi on
   # emporte l'en-tête de l'étape suivante — et `bash` tente d'exécuter « - ».
+  # La comparaison est LITTÉRALE, pas une expression régulière : le nom d'étape
+  # « GitHub Release (brouillon) » contient des parenthèses, que `$0 ~ (nom "$")`
+  # prendrait pour un groupe — l'étape ne serait jamais trouvée, `$script`
+  # sortirait vide, et le test échouerait sans rien dire du workflow.
+  # « la ligne se termine exactement par `- name: <nom>` » se dit avec index().
   awk -v nom="$nom" '
-    index($0, "- name: " nom) && $0 ~ (nom "$") { etape = 1; next }
+    { cible = "- name: " nom; pos = index($0, cible) }
+    !etape && pos > 0 && length($0) == pos + length(cible) - 1 { etape = 1; next }
     etape && /run: \|/ { corps = 1; next }
     corps {
       if ($0 ~ /^          /) { sub(/^          /, ""); print; next }
@@ -294,14 +378,59 @@ etape_du_workflow() {
   [ "$status" -ne 0 ]
 }
 
-@test "le job de publication ne ramasse pas une image T2 par joker" {
-  # `gh release create … iso-out/*.iso` publie ce qu'il trouve. Le jour où
-  # quelqu'un ferait construire les deux images dans le même job, le joker
-  # emporterait le variant sans qu'une seule ligne ne change.
-  wf="$RACINE/.github/workflows/iso.yml"
-  ! grep -qE 'iso-out/\*\.iso' "$wf"
-  # …et une étape refuse activement tout artefact T2 avant la publication.
-  grep -q 'NE-PAS-PUBLIER\|eschaton-t2' "$wf"
+@test "le job de publication énumère l'image nominale et publie en BROUILLON" {
+  # DEUX gardes, complémentaires, et il faut les deux : l'énumération choisit
+  # QUEL fichier part, `--draft` décide QUI peut le voir. La fusion de `main`
+  # dans cette branche pouvait en perdre une des deux — c'était le conflit.
+  #
+  # On EXÉCUTE l'étape au lieu de la grepper. L'ancienne version de ce test
+  # cherchait l'absence de `iso-out/*.iso` dans tout le fichier : la chaîne
+  # figure dans le commentaire qui explique justement pourquoi on n'en veut pas,
+  # et l'assertion — niée, en position non finale — était de toute façon inerte.
+  script="$(etape_du_workflow 'GitHub Release (brouillon)')"
+  [ -n "$script" ]
+
+  cd "$BATS_TEST_TMPDIR"
+  mkdir -p iso-out faux-bin
+  : > iso-out/eschaton-2026.08.30-x86_64.iso
+  : > iso-out/eschaton-2026.08.30-x86_64.iso.sha256
+  : > iso-out/eschaton-t2-2026.08.30-x86_64.iso     # l'image qui ne doit pas partir
+  : > iso-out/eschaton-t2-2026.08.30-x86_64.iso.sha256
+  : > notes.md
+  # `gh` de paille : il consigne ses arguments au lieu de publier quoi que ce soit.
+  printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "$PWD/gh-args"\n' > faux-bin/gh
+  chmod +x faux-bin/gh
+
+  PATH="$PWD/faux-bin:$PATH" GITHUB_REF_NAME=v0.1.0 GITHUB_REPOSITORY=Seylar/eschaton \
+    run bash -c "$script"
+  [ "$status" -eq 0 ]
+
+  # a) L'image T2 n'est PAS dans ce qui part.
+  refute grep -q 'eschaton-t2' gh-args
+  # b) L'image nominale, si.
+  grep -qx 'iso-out/eschaton-2026.08.30-x86_64.iso' gh-args
+  grep -qx 'iso-out/eschaton-2026.08.30-x86_64.iso.sha256' gh-args
+  # c) Et la Release est un BROUILLON : un tag ne met rien en ligne publiquement
+  # tant que la double licence GPL/MIT et les choix de média de développement ne
+  # sont pas tranchés (iso/PROVENANCE.md, iso/README.md).
+  grep -qx -- '--draft' gh-args
+}
+
+@test "deux images nominales arrêtent la publication au lieu d'en choisir une" {
+  # Le pendant du test précédent : l'énumération doit REFUSER l'ambiguïté, pas
+  # publier la première venue.
+  script="$(etape_du_workflow 'GitHub Release (brouillon)')"
+  cd "$BATS_TEST_TMPDIR"
+  mkdir -p iso-out faux-bin
+  : > iso-out/eschaton-2026.08.30-x86_64.iso
+  : > iso-out/eschaton-2026.08.31-x86_64.iso
+  : > notes.md
+  printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "$PWD/gh-args"\n' > faux-bin/gh
+  chmod +x faux-bin/gh
+  PATH="$PWD/faux-bin:$PATH" GITHUB_REF_NAME=v0.1.0 GITHUB_REPOSITORY=Seylar/eschaton \
+    run bash -c "$script"
+  [ "$status" -ne 0 ]
+  [ ! -e gh-args ]
 }
 
 @test "build-iso marque l'image T2 comme non publiable, dans son nom et à côté d'elle" {
@@ -349,4 +478,166 @@ etape_du_workflow() {
   grep -qi 'micro' "$readme"
   # …et la marche à suivre matérielle : démarrage sécurisé, effacement.
   grep -qi 'Startup Security Utility\|démarrage sécurisé' "$readme"
+}
+
+# --- 5. LE SYSTÈME INSTALLÉ DÉMARRE — le chemin T2 de l'installeur -------------
+#
+# Jusqu'ici tout ce fichier vérifiait le MÉDIA. Or le média n'installe rien : ce
+# que la machine démarre, c'est ce que `eschaton-install` a posé sur le disque.
+# L'installeur ignorait le variant : il posait le `linux` amont — le seul noyau
+# qui ne voit pas le NVMe d'un Mac T2, la puce T2 en étant le contrôleur. Une
+# installation T2 réussissait donc, et ne démarrait jamais.
+#
+# ⚠️ CE QUE CES TESTS PROUVENT : le PLAN d'installation. Ils exercent la
+# répétition à blanc, sur un Mac, sans disque et sans root. Ils ne prouvent
+# RIEN du démarrage réel — cela demande la machine de l'auteur (iso/README.md,
+# « ce qui reste à prouver sur la vraie machine »).
+
+@test "le chemin nominal n'installe RIEN de T2 — l'invariant à ne pas casser" {
+  # Le livrable ne bouge pas. Ce test est le verrou : si un jour le chemin T2
+  # débordait sur le nominal, c'est ici que ça se verrait.
+  run plan_installation ""      # aucun marqueur : c'est le cas d'un live tiers
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pacstrap -K /mnt base linux intel-ucode amd-ucode"* ]]
+  [[ "$output" != *"linux-t2"* ]]
+  [[ "$output" != *"arch-mact2"* ]]
+  [[ "$output" != *"eschaton-t2"* ]]
+  [[ "$output" != *"apple-bcm-firmware"* ]]
+  [[ "$output" != *"intel_iommu"* ]]
+  [[ "$output" == *"default_entry: Eschaton/linux"* ]]
+  # La ligne de commande du noyau est celle d'avant, mot pour mot.
+  [[ "$output" == *"cmdline: root=LABEL=eschaton rootflags=subvol=@ rw quiet"$'\n'* ]]
+}
+
+@test "un marqueur « nominal » installe le chemin nominal" {
+  run plan_installation "nominal"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"linux-t2"* ]]
+  [[ "$output" != *"arch-mact2"* ]]
+}
+
+@test "le chemin T2 pose linux-t2 et le firmware, jamais le noyau amont" {
+  # LA panne : `linux` sur un Mac T2 donne au premier démarrage une machine sans
+  # disque visible, sans clavier et sans trackpad — irréparable sur place.
+  run plan_installation "" --variant t2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pacstrap"*"linux-t2"* ]]
+  # `apple-bcm-firmware` explicitement : c'est le SEUL réseau de cette machine,
+  # qui n'a aucun port Ethernet. Le laisser aux seules dépendances d'un
+  # méta-paquet, c'est accepter qu'un jour il disparaisse en silence.
+  [[ "$output" == *"apple-bcm-firmware"* ]]
+  # Le noyau amont n'est nulle part dans le plan : ni pacstrap, ni amorçage.
+  refute grep -qE 'pacstrap .*(^| )linux( |$)' <<<"$output"
+  [[ "$output" == *"default_entry: Eschaton/linux-t2"* ]]
+  [[ "$output" == *"boot():/vmlinuz-linux-t2"* ]]
+  [[ "$output" == *"boot():/initramfs-linux-t2.img"* ]]
+}
+
+@test "le chemin T2 configure le dépôt arch-mact2 SUR LA CIBLE, et l'affiche" {
+  # Sans dépôt sur la cible, la machine n'a aucune source pour son propre noyau :
+  # plus une seule mise à jour de `linux-t2`, et la garde refuse tout retour au
+  # noyau amont. L'ADR 0004 §4.2 l'anticipait — « ajouté séparément, avec sa
+  # politique propre, sur une machine T2 uniquement » — et exige que le
+  # compromis soit AFFICHÉ.
+  run plan_installation "" --variant t2
+  [ "$status" -eq 0 ]
+  # a) sur la cible…
+  [[ "$output" == *"/mnt/etc/pacman.d/arch-mact2.conf"* ]]
+  [[ "$output" == *"Include = /etc/pacman.d/arch-mact2.conf"* ]]
+  # b) …et dans le live, sans quoi pacstrap ne trouverait pas linux-t2.
+  [[ "$output" == *"DRY: écrire le dépôt arch-mact2"* ]]
+  # c) le compromis est montré, et il est montré AVANT le premier sgdisk.
+  [[ "$output" == *"n'est PAS signé"* ]]
+  [[ "$output" == *"mainteneur unique"* ]]
+  avant="${output%%sgdisk*}"
+  [[ "$avant" == *"CHEMIN T2"* ]]
+}
+
+@test "le chemin T2 installe la garde d'épinglage PENDANT l'installation" {
+  # Le README prescrivait « après le premier démarrage, pacman -S eschaton-t2 ».
+  # Ce premier démarrage est précisément celui qu'un noyau mal choisi rend
+  # impossible : la garde doit être là avant, pas après.
+  run plan_installation "" --variant t2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pacstrap"*"eschaton-t2"* ]]
+  [[ "$output" == *"/mnt/usr/lib/eschaton/t2-garde-noyau"* ]]
+  refute grep -qi 'après le premier démarrage' "$RACINE/iso/README.md"
+}
+
+@test "le variant se déduit du marqueur du média, pas d'une détection matérielle" {
+  # Explicite plutôt que deviné : c'est `build-iso` qui écrit ce fichier, en
+  # sachant quelle image il construit.
+  run plan_installation "t2"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"linux-t2"* ]]
+  [[ "$output" == *"marqueur du média"* ]]
+  # Aucune reniflette DMI/modèle dans l'installeur : le mauvais chemin ne doit
+  # jamais venir d'une supposition.
+  refute grep -qE 'dmidecode|/sys/class/dmi|MacBookPro' "$INSTALL"
+  refute grep -qE 'dmidecode|/sys/class/dmi|MacBookPro' "$RACINE/installer/lib.sh"
+}
+
+@test "le drapeau explicite prime sur le marqueur, dans les deux sens" {
+  run plan_installation "t2" --variant nominal
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"linux-t2"* ]]
+  run plan_installation "nominal" --variant t2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"linux-t2"* ]]
+}
+
+@test "un marqueur de valeur inconnue fait REFUSER, il ne fait pas deviner" {
+  # Ce fichier n'est écrit que par build-iso, et il n'y écrit que deux valeurs.
+  # Autre chose n'est pas un doute, c'est une contradiction — et le mauvais
+  # chemin donne un système qui ne démarre pas. Même règle que --disk répété.
+  run plan_installation "t3"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"t3"* ]]
+  # …et rien de destructeur n'a été annoncé.
+  [[ "$output" != *"sgdisk"* ]]
+  # Un --variant inconnu est refusé de la même façon.
+  run plan_installation "" --variant t3
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"sgdisk"* ]]
+}
+
+@test "build-iso dépose le marqueur, pour les deux variants" {
+  grep -q 'usr/local/share/eschaton/variant' "$BUILD"
+  # Écrit HORS du bloc `if [[ "$variante" == t2 ]]` : le nominal en a un aussi,
+  # ce qui fait de « marqueur absent » le cas des seuls médias non Eschaton.
+  bloc="$(sed -n '/^if \[\[ "\$variante" == t2 \]\]; then$/,/^fi$/p' "$BUILD")"
+  [ -n "$bloc" ]
+  refute grep -q 'usr/local/share/eschaton/variant' <<<"$bloc"
+  # …et l'installeur lit exactement ce chemin-là.
+  grep -q '/usr/local/share/eschaton/variant' "$RACINE/installer/lib.sh"
+}
+
+@test "l'adresse du dépôt tiers est la MÊME dans l'ISO et dans l'installeur" {
+  # Duplication assumée : le fragment de l'ISO sert à CONSTRUIRE, celui de
+  # l'installeur à INSTALLER, et les deux ne se rencontrent jamais à
+  # l'exécution. Ce test est ce qui la rend sûre.
+  url_iso="$(sed -n 's/^Server[[:space:]]*=[[:space:]]*//p' "$VARIANT/arch-mact2.conf")"
+  url_installeur="$(sed -n 's/^DEPOT_T2_URL="\(.*\)"$/\1/p' "$RACINE/installer/lib.sh")"
+  [ -n "$url_iso" ]
+  [ "$url_iso" = "$url_installeur" ]
+}
+
+@test "l'installeur ne porte AUCUNE section [arch-mact2] littérale" {
+  # `build-iso` copie l'installeur dans l'airootfs de l'image, puis refuse toute
+  # image dont un fichier porte une ligne « [arch-mact2] ». Un script qui
+  # COMPOSE cette section n'est pas une configuration de l'image — mais le
+  # `grep` de la garde ne sait pas faire la différence, et l'affaiblir pour lui
+  # apprendre la nuance serait la désarmer. Le nom de section est donc assemblé.
+  refute grep -qE '^[[:space:]]*\[arch-mact2\]' "$INSTALL"
+  refute grep -qE '^[[:space:]]*\[arch-mact2\]' "$RACINE/installer/lib.sh"
+}
+
+@test "la garde d'après-construction s'exerce sur les DEUX variants" {
+  # M-4 : elle ne tournait que sur le T2. Sur le nominal une fuite est
+  # invraisemblable — donc personne ne la regarderait, donc c'est là qu'elle
+  # vivrait le plus longtemps. Et le nominal est l'image qui se publie.
+  bloc="$(sed -n '/Le dépôt tiers ne doit pas non plus/,/aucune configuration pacman du système livré/p' "$BUILD")"
+  [ -n "$bloc" ]
+  refute grep -qE 'if \[\[ "\$variante" == t2 \]\]' <<<"$bloc"
+  grep -q 'mkarchiso/x86_64/airootfs' <<<"$bloc"
 }

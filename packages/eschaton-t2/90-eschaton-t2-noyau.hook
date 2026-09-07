@@ -8,6 +8,16 @@
 # standard. C'est le script — et non ce fichier — qui tranche : `linux-t2`
 # déclare `provides = linux`, et l'on ne veut pas dépendre de la façon dont
 # pacman fait correspondre une cible à un fournisseur.
+#
+# ⚠️ LA LISTE `Target =` CI-DESSOUS DOIT COÏNCIDER EXACTEMENT avec `noyaux_amont`
+# dans t2-garde-noyau, et les deux se lisent dans deux fichiers différents.
+# alpm ne déclenche que sur ce qui est écrit ICI ; le script ne voit que ce
+# qu'alpm lui présente. Une ligne retirée d'un seul côté ne provoque aucune
+# erreur, aucun avertissement — juste un noyau qui passe. Les deux listes sont
+# confrontées par `tests/iso-variant-t2.bats`, via `t2-garde-noyau
+# lister-noyaux` : c'est le seul contrôle qui puisse voir cet écart-là.
+# Le PÉRIMÈTRE de la liste (les six noyaux officiels, et pourquoi pas plus) est
+# argumenté dans t2-garde-noyau.
 
 [Trigger]
 Operation = Install

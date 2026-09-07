@@ -36,6 +36,19 @@ racine="${racine%/}"
 # cette liste évite : `linux-t2` DÉCLARE `provides = linux`, donc un crochet
 # alpm déclenché sur la cible `linux` peut très bien lui être présenté. On
 # tranche sur le NOM exact du paquet, jamais sur ce qu'il fournit.
+#
+# PÉRIMÈTRE : les six noms explicitement énumérés ci-dessous. Un noyau de
+# l'AUR, d'un dépôt tiers ou compilé à la main peut franchir cette garde sans
+# avertissement, même s'il arrive par une dépendance. Cette liste ne prouve ni
+# l'intention de l'utilisateur ni la compatibilité d'un autre noyau avec T2.
+# Le démarrage et le rollback doivent être éprouvés sur le matériel concerné.
+#
+# ⚠️ CETTE LISTE EST DOUBLÉE dans 90-eschaton-t2-noyau.hook (`Target =`), et il
+# le faut : alpm ne sait déclencher que sur des cibles écrites dans le crochet,
+# et ce script ne voit que ce qu'alpm lui présente. Retirer une entrée d'un seul
+# des deux côtés donne une garde muette. Le sous-commande `lister-noyaux`
+# ci-dessous existe pour que les tests confrontent les deux listes sans avoir à
+# analyser du bash — c'est le seul moyen que cet écart ne passe pas.
 noyaux_amont=(linux linux-lts linux-zen linux-hardened linux-rt linux-rt-lts)
 
 msg() { printf '%s\n' "$@" >&2; }
@@ -75,7 +88,16 @@ refuser_noyau_standard() {
 		"Rien n'a été écrit ; la transaction est annulée." \
 		"" \
 		"Si c'est délibéré (cette machine n'est plus un Mac T2, par exemple) :" \
-		"    pacman -Rns eschaton-t2      # retire la garde, en connaissance de cause"
+		"    pacman -Rn eschaton-t2       # retire la garde, en connaissance de cause" \
+		"" \
+		"  -Rn et non -Rns : le « s » emporterait les dépendances devenues" \
+		"  orphelines, donc linux-t2 si celui-ci a été installé COMME DÉPENDANCE" \
+		"  de ce paquet — et le retrait de linux-t2 déclenche l'autre garde" \
+		"  (91-eschaton-t2-retrait, AbortOnFail), qui refuse alors toute la" \
+		"  transaction. L'échappatoire se referme sur elle-même. Le cas ne se" \
+		"  pose pas quand linux-t2 a été installé EXPLICITEMENT — c'est ce que" \
+		"  fait eschaton-install sur le chemin T2, en le nommant dans pacstrap —" \
+		"  mais la commande sûre est la même dans les deux cas."
 	return 1
 }
 
@@ -151,12 +173,20 @@ verifier_alignement() {
 	return 1
 }
 
+# Imprime la liste des noyaux refusés, un par ligne. Elle n'est utile qu'à une
+# chose, et cette chose n'est pas cosmétique : confronter cette liste à celle du
+# crochet alpm. Les deux DOIVENT coïncider (voir le commentaire de
+# `noyaux_amont`) et rien d'autre ne peut le constater — un test qui vérifierait
+# une seule entrée laisserait retirer les cinq autres sans passer au rouge.
+lister_noyaux() { printf '%s\n' "${noyaux_amont[@]}"; }
+
 case "${1-}" in
 	refuser-noyau-standard) refuser_noyau_standard ;;
 	refuser-retrait)        refuser_retrait ;;
 	verifier-alignement)    verifier_alignement ;;
+	lister-noyaux)          lister_noyaux ;;
 	*)
-		msg "usage : ${0##*/} refuser-noyau-standard|refuser-retrait|verifier-alignement"
+		msg "usage : ${0##*/} refuser-noyau-standard|refuser-retrait|verifier-alignement|lister-noyaux"
 		exit 2
 		;;
 esac

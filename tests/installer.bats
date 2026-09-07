@@ -510,3 +510,175 @@ stub_outils() { # $1 = type rendu par lsblk
   [[ "$output" == *"arch-chroot /mnt useradd -m -G wheel seylar"* ]]
   [[ "$output" != *'bash -c useradd'* ]]
 }
+
+# --- Le chemin T2 (ADR 0004) — au niveau des fonctions ------------------------
+#
+# Ces tests-ci existent parce que le plan de la répétition à blanc ne peut PAS
+# tout voir : la restriction du microcode ne s'exécute que sur le chemin RÉEL
+# (`DRY_RUN == 0`), donc jamais sous bats. C'est pourtant la ligne qui
+# réintroduirait `linux` sur un Mac T2 — elle le faisait, en écrasant le choix
+# fait deux lignes plus haut. On l'exerce donc directement.
+
+@test "kernel_pkgs_for pose linux-t2 sur le chemin T2, et refuse ailleurs qu'en x86_64" {
+  run kernel_pkgs_for x86_64 t2
+  [ "$status" -eq 0 ]
+  [ "$output" = "linux-t2 intel-ucode apple-bcm-firmware" ]
+  # La puce T2 n'a jamais été posée sur autre chose que du Mac Intel.
+  run kernel_pkgs_for aarch64 t2
+  [ "$status" -ne 0 ]
+  # Et sans variant, rien ne change : c'est le chemin nominal, mot pour mot.
+  run kernel_pkgs_for x86_64
+  [ "$output" = "linux intel-ucode amd-ucode" ]
+  run kernel_pkgs_for x86_64 nominal
+  [ "$output" = "linux intel-ucode amd-ucode" ]
+}
+
+@test "restreindre_microcode garde le noyau et ne trie QUE les microcodes" {
+  # L'ancienne ligne réécrivait la liste en dur — `kernels="linux …"` — et
+  # écrasait donc le choix de kernel_pkgs_for : sur une machine T2, le noyau qui
+  # ne voit pas son disque revenait par cette ligne, deux lignes après avoir été
+  # écarté. Le filtre ne touche plus qu'aux microcodes.
+  microcode_for_cpu() { echo intel-ucode; }
+  run restreindre_microcode "linux intel-ucode amd-ucode"
+  [ "$output" = "linux intel-ucode" ]
+  run restreindre_microcode "linux-t2 intel-ucode apple-bcm-firmware"
+  [ "$output" = "linux-t2 intel-ucode apple-bcm-firmware" ]
+  # Vendeur inconnu : aucun microcode, mais le noyau reste — c'est déjà ce que
+  # faisait l'ancienne ligne, et il ne faut pas le changer par accident.
+  microcode_for_cpu() { echo; }
+  run restreindre_microcode "linux intel-ucode amd-ucode"
+  [ "$output" = "linux" ]
+}
+
+@test "l'installeur ne réécrit plus la liste de noyaux en dur" {
+  # Garde statique du même point : cette ligne-là n'était atteignable que sur une
+  # vraie installation, donc invisible à toute répétition à blanc.
+  run grep -n 'kernels="linux ' "$BATS_TEST_DIRNAME/../installer/eschaton-install"
+  [ "$status" -ne 0 ]
+  grep -q 'restreindre_microcode' "$BATS_TEST_DIRNAME/../installer/eschaton-install"
+}
+
+@test "paquets_eschaton_for n'ajoute eschaton-t2 que sur le chemin T2" {
+  run paquets_eschaton_for nominal
+  [ "$output" = "eschaton-base eschaton-branding" ]
+  run paquets_eschaton_for
+  [ "$output" = "eschaton-base eschaton-branding" ]
+  run paquets_eschaton_for t2
+  [ "$output" = "eschaton-base eschaton-branding eschaton-t2" ]
+}
+
+@test "resoudre_variante : explicite d'abord, marqueur ensuite, nominal à défaut" {
+  ESCHATON_MARQUEUR_VARIANT="$BATS_TEST_TMPDIR/absent"
+  run resoudre_variante ""
+  [ "$status" -eq 0 ]; [ "$output" = "nominal" ]
+
+  ESCHATON_MARQUEUR_VARIANT="$BATS_TEST_TMPDIR/variant"
+  printf 't2\n' > "$ESCHATON_MARQUEUR_VARIANT"
+  run resoudre_variante ""
+  [ "$output" = "t2" ]
+  # Le drapeau explicite prime, dans les deux sens.
+  run resoudre_variante nominal
+  [ "$output" = "nominal" ]
+  printf 'nominal\n' > "$ESCHATON_MARQUEUR_VARIANT"
+  run resoudre_variante t2
+  [ "$output" = "t2" ]
+}
+
+@test "resoudre_variante refuse un marqueur inconnu au lieu de deviner" {
+  # Seul build-iso écrit ce fichier, et il n'y écrit que deux valeurs : autre
+  # chose n'est pas un doute, c'est une contradiction. Et le mauvais chemin
+  # donne un système qui ne démarre pas.
+  ESCHATON_MARQUEUR_VARIANT="$BATS_TEST_TMPDIR/variant"
+  printf 'presque-t2\n' > "$ESCHATON_MARQUEUR_VARIANT"
+  run resoudre_variante ""
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"presque-t2"* ]]
+  run resoudre_variante t3
+  [ "$status" -ne 0 ]
+  # Les espaces et une fin de ligne CRLF ne doivent pas transformer un marqueur
+  # valable en refus : le fichier traverse un `install`, pas un éditeur.
+  printf '  t2 \r\n' > "$ESCHATON_MARQUEUR_VARIANT"
+  run resoudre_variante ""
+  [ "$status" -eq 0 ]; [ "$output" = "t2" ]
+}
+
+@test "ESCHATON_ARCH ne ment sur l'architecture QU'EN répétition à blanc" {
+  # Cette porte n'existe que pour éprouver le plan T2 depuis un Mac Apple
+  # Silicon. Sur le chemin réel elle doit être ignorée : mentir sur
+  # l'architecture d'une vraie installation ne rendrait service à personne.
+  DRY_RUN=1
+  run detect_arch
+  [ "$output" = "$(uname -m | sed 's/^arm64$/aarch64/')" ]
+  ESCHATON_ARCH=x86_64
+  DRY_RUN=1 run detect_arch
+  [ "$output" = "x86_64" ]
+  DRY_RUN=0 run detect_arch
+  [ "$output" = "$(uname -m | sed 's/^arm64$/aarch64/')" ]
+}
+
+@test "un marqueur vide ou multiligne ne devient jamais une installation nominale" {
+  ESCHATON_MARQUEUR_VARIANT="$BATS_TEST_TMPDIR/variant"
+  for contenu in '' '   ' $'t2\nnominal' $'t\n2'; do
+    printf '%s\n' "$contenu" > "$ESCHATON_MARQUEUR_VARIANT"
+    run resoudre_variante ""
+    [ "$status" -ne 0 ]
+  done
+  # La décision explicite reste prioritaire, même sur un média endommagé.
+  run resoudre_variante nominal
+  [ "$status" -eq 0 ]; [ "$output" = nominal ]
+}
+
+@test "un marqueur sans droit de lecture est refusé" {
+  ((EUID != 0)) || skip 'root peut lire même sans bits de permission'
+  ESCHATON_MARQUEUR_VARIANT="$BATS_TEST_TMPDIR/variant"
+  printf 't2\n' > "$ESCHATON_MARQUEUR_VARIANT"
+  chmod 000 "$ESCHATON_MARQUEUR_VARIANT"
+  run resoudre_variante ""
+  chmod 600 "$ESCHATON_MARQUEUR_VARIANT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *illisible* ]]
+}
+
+@test "un parent inaccessible ne fait pas passer le marqueur pour absent" {
+  ((EUID != 0)) || skip 'root traverse les répertoires sans permission'
+  mkdir "$BATS_TEST_TMPDIR/ferme"
+  ESCHATON_MARQUEUR_VARIANT="$BATS_TEST_TMPDIR/ferme/variant"
+  printf 't2\n' > "$ESCHATON_MARQUEUR_VARIANT"
+  chmod 000 "$BATS_TEST_TMPDIR/ferme"
+  run resoudre_variante ""
+  chmod 700 "$BATS_TEST_TMPDIR/ferme"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'accès impossible'* ]]
+}
+
+@test "une erreur de lecture du marqueur remonte malgré un fichier lisible" {
+  ESCHATON_MARQUEUR_VARIANT="$BATS_TEST_TMPDIR/variant"
+  printf 't2\n' > "$ESCHATON_MARQUEUR_VARIANT"
+  cat() { return 2; } # échec I/O après le contrôle des permissions
+  run resoudre_variante ""
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'lecture du marqueur'* ]]
+}
+
+@test "un marqueur non régulier ou un lien pendant est refusé" {
+  ESCHATON_MARQUEUR_VARIANT="$BATS_TEST_TMPDIR/repertoire"
+  mkdir "$ESCHATON_MARQUEUR_VARIANT"
+  run resoudre_variante ""
+  [ "$status" -ne 0 ]
+  ESCHATON_MARQUEUR_VARIANT="$BATS_TEST_TMPDIR/lien"
+  ln -s absent "$ESCHATON_MARQUEUR_VARIANT"
+  run resoudre_variante ""
+  [ "$status" -ne 0 ]
+}
+
+@test "un marqueur vide arrête le programme avant toute commande disque" {
+  marker="$BATS_TEST_TMPDIR/variant"
+  : > "$marker"
+  run env ESCHATON_MARQUEUR_VARIANT="$marker" ESCHATON_ARCH=x86_64 \
+    bash "$BATS_TEST_DIRNAME/../installer/eschaton-install" \
+    --dry-run --disk /dev/vda --user testeur
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'marqueur de variant vide'* ]]
+  [[ "$output" != *sgdisk* ]]
+  [[ "$output" != *pacstrap* ]]
+}

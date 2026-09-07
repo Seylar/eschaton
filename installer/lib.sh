@@ -21,17 +21,180 @@ write_file() { # $1 = chemin, $2 = contenu (une ligne)
 detect_arch() {
   # macOS dit « arm64 » là où Linux dit « aarch64 » : les tests bats tournent
   # sur le Mac, le script sur le live env — un seul dialecte en sortie.
+  #
+  # `ESCHATON_ARCH` n'est honorée QUE en répétition à blanc, et c'est la
+  # condition qui la rend acceptable : le chemin T2 n'existe que sur x86_64, or
+  # le poste de développement est un Mac Apple Silicon — sans cette porte, le
+  # plan d'une installation T2 ne serait vérifiable nulle part avant la vraie
+  # machine. Sur le chemin réel la variable est ignorée : mentir sur
+  # l'architecture d'une VRAIE installation ne rendrait service à personne.
+  if [[ "${DRY_RUN:-0}" == "1" && -n "${ESCHATON_ARCH:-}" ]]; then
+    echo "${ESCHATON_ARCH}"; return 0
+  fi
   local m; m="$(uname -m)"
   [[ "$m" == "arm64" ]] && m="aarch64"
   echo "$m"
 }
 
-kernel_pkgs_for() { # $1 = aarch64|x86_64
-  case "$1" in
+# --- LE CHEMIN T2, ET COMMENT IL SE SIGNALE (ADR 0004) ------------------------
+#
+# Il y a DEUX chemins d'installation, et un seul par défaut.
+#
+#   nominal — le livrable. Noyau amont, aucun dépôt tiers. Il ne bouge pas.
+#   t2      — la machine de dogfooding de l'auteur (MacBook Pro 2019). Noyau
+#             `linux-t2`, et le dépôt tiers `arch-mact2` configuré SUR LA CIBLE.
+#
+# POURQUOI LE CHEMIN T2 DOIT CONFIGURER LE DÉPÔT SUR LA CIBLE, alors que tout le
+# reste du variant s'échine à l'en tenir éloigné. Le cloisonnement de l'ADR 0004
+# §4.2 vise l'ISO NOMINAL et les paquets du projet : un dépôt non signé n'entre
+# pas dans la configuration par défaut d'Eschaton. Il n'a jamais voulu dire
+# qu'une machine T2 vivrait sans son dépôt — elle n'aurait alors ni noyau qui
+# démarre, ni mise à jour de ce noyau. L'ADR le dit lui-même au §4.2 : « le dépôt
+# T2 est ajouté séparément, avec sa politique propre, sur une machine T2
+# uniquement, et ce compromis est affiché à l'utilisateur ». C'est exactement ce
+# que fait ce chemin — et l'affichage n'est pas décoratif, il est exigé.
+#
+# COMMENT LE CHEMIN SE CHOISIT — trois règles, dans cet ordre :
+#  1. `--variant` explicite fait foi, toujours.
+#  2. Sinon, le MARQUEUR que `iso/build-iso` dépose dans l'environnement live :
+#     une image T2 dit qu'elle est une image T2. Ce n'est pas une devinette,
+#     c'est le constructeur de l'image qui l'a écrit.
+#  3. Sinon : NOMINAL. Aucune détection matérielle, aucune heuristique DMI. Un
+#     live tiers (archboot, ISO Arch) n'a pas de marqueur et installe donc le
+#     chemin nominal ; qui veut le chemin T2 depuis un tel média le DEMANDE.
+#
+# Un marqueur illisible n'est pas un doute, c'est une contradiction : personne
+# d'autre que `build-iso` n'écrit ce fichier. On refuse alors — avant le moindre
+# effacement — plutôt que de choisir à la place de l'utilisateur. C'est la règle
+# déjà posée pour `--disk` indiqué deux fois.
+
+# Le marqueur, et de quoi le déplacer pour les tests (aucun Mac T2 ici).
+: "${ESCHATON_MARQUEUR_VARIANT:=/usr/local/share/eschaton/variant}"
+
+# Le dépôt tiers. Ces deux valeurs DOUBLENT `iso/variants/t2/arch-mact2.conf` —
+# l'ISO le déclare pour CONSTRUIRE, l'installeur le déclare pour INSTALLER, et
+# les deux fichiers ne se rencontrent jamais à l'exécution. La duplication est
+# assumée et verrouillée par un test qui compare les deux.
+DEPOT_T2_NOM="arch-mact2"
+DEPOT_T2_URL="https://mirror.funami.tech/arch-mact2/os/x86_64"
+
+lire_marqueur_variant() { # absence réelle : succès/vide ; toute erreur : refus
+  local contenu parent
+  if [[ ! -e "$ESCHATON_MARQUEUR_VARIANT" && ! -L "$ESCHATON_MARQUEUR_VARIANT" ]]; then
+    # -e est également faux quand un répertoire parent interdit l'accès.
+    # Remonter jusqu'au premier parent existant distingue ce cas de l'absence.
+    parent=$(dirname -- "$ESCHATON_MARQUEUR_VARIANT")
+    while [[ ! -e "$parent" && ! -L "$parent" && "$parent" != / && "$parent" != . ]]; do
+      parent=$(dirname -- "$parent")
+    done
+    if [[ -d "$parent" && -x "$parent" ]]; then return 0; fi
+    echo "eschaton-install : accès impossible au marqueur de variant." >&2
+    return 1
+  fi
+  if [[ ! -f "$ESCHATON_MARQUEUR_VARIANT" || ! -r "$ESCHATON_MARQUEUR_VARIANT" ]]; then
+    echo "eschaton-install : marqueur de variant illisible ou non régulier." >&2
+    return 1
+  fi
+  # Lire tout le fichier, sans pipeline qui masque l'échec de la lecture.
+  if ! contenu=$(cat -- "$ESCHATON_MARQUEUR_VARIANT"); then
+    echo "eschaton-install : lecture du marqueur de variant impossible." >&2
+    return 1
+  fi
+  if [[ "$contenu" =~ ^[[:space:]]*$ ]]; then
+    echo "eschaton-install : marqueur de variant vide ; installation refusée." >&2
+    return 1
+  fi
+  # Tolérer seulement les espaces autour d'une valeur, jamais au milieu ni une
+  # deuxième valeur sur la ligne suivante. Les anciennes fins CRLF restent lues.
+  if [[ "$contenu" =~ ^[[:space:]]*(nominal|t2)[[:space:]]*$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  else
+    printf '%s\n' "$contenu"
+  fi
+}
+
+resoudre_variante() { # $1 = valeur de --variant (vide si l'option est absente)
+  local demande="${1:-}" marqueur
+  if [[ -n "$demande" ]]; then
+    case "$demande" in
+      nominal|t2) printf '%s\n' "$demande"; return 0 ;;
+      *)
+        echo "eschaton-install : variant inconnu « $demande » — attendu « nominal » ou « t2 »." >&2
+        return 1 ;;
+    esac
+  fi
+  marqueur="$(lire_marqueur_variant)" || return 1
+  case "$marqueur" in
+    # Le cas de loin le plus fréquent : pas de marqueur, donc chemin nominal.
+    "")         printf 'nominal\n' ;;
+    nominal|t2) printf '%s\n' "$marqueur" ;;
+    *)
+      echo "eschaton-install : le marqueur de variant $ESCHATON_MARQUEUR_VARIANT" >&2
+      echo "  contient « $marqueur », que ce script ne connaît pas. Seul iso/build-iso" >&2
+      echo "  écrit ce fichier, et il n'y écrit que « nominal » ou « t2 » : cette" >&2
+      echo "  valeur est invalide ou le média a été altéré." >&2
+      echo "  On refuse de choisir un chemin d'installation à votre place — le" >&2
+      echo "  mauvais chemin donne un système qui ne démarre pas. Indiquez" >&2
+      echo "  --variant nominal ou --variant t2." >&2
+      return 1 ;;
+  esac
+}
+
+kernel_pkgs_for() { # $1 = aarch64|x86_64, $2 = nominal|t2 (nominal par défaut)
+  local arch="$1" variante="${2:-nominal}"
+  if [[ "$variante" == "t2" ]]; then
+    # Le chemin T2 n'existe que sur du Mac Intel : la puce T2 n'a jamais été
+    # posée sur autre chose. Refuser plutôt que de composer une liste absurde.
+    if [[ "$arch" != "x86_64" ]]; then
+      echo "eschaton-install : le chemin T2 suppose un Mac Intel (x86_64), pas $arch." >&2
+      return 1
+    fi
+    # `linux-t2` et NON `linux` : sur ce matériel la puce T2 est le contrôleur
+    # NVMe et le pilote apple-bce (compilé dans ce noyau) porte le clavier et le
+    # trackpad. Le noyau amont donne une machine sans disque et sans clavier au
+    # premier démarrage — c'est-à-dire irréparable sur place.
+    # `apple-bcm-firmware` est nommé ICI et pas seulement laissé aux dépendances
+    # d'`eschaton-t2` : c'est le SEUL réseau de cette machine, qui n'a aucun port
+    # Ethernet. Un jour où le méta-paquet cesserait de le déclarer, le système
+    # installé démarrerait sans le moindre moyen de se réparer.
+    # Microcode : tous les Mac T2 sont des Intel, il n'y a rien à détecter.
+    echo "linux-t2 intel-ucode apple-bcm-firmware"
+    return 0
+  fi
+  case "$arch" in
     aarch64) echo "linux-aarch64" ;;
     x86_64)  echo "linux intel-ucode amd-ucode" ;;
     *) echo "architecture non gérée : $1" >&2; return 1 ;;
   esac
+}
+
+# Paquets du projet à poser en plus, selon le chemin. Sur T2 la garde
+# d'épinglage du noyau s'installe PENDANT l'installation et non « après le
+# premier démarrage » : ce premier démarrage est précisément le moment où une
+# machine dont le noyau serait mal épinglé n'a plus ni clavier ni disque.
+paquets_eschaton_for() { # $1 = nominal|t2
+  if [[ "${1:-nominal}" == "t2" ]]; then
+    echo "eschaton-base eschaton-branding eschaton-t2"
+  else
+    echo "eschaton-base eschaton-branding"
+  fi
+}
+
+# Remplace les microcodes CANDIDATS par celui du processeur réellement présent.
+# En répétition à blanc il n'y a rien à détecter — la liste garde les deux, et
+# c'est bien ce que le plan doit afficher.
+restreindre_microcode() { # $1 = liste de paquets ; imprime la liste filtrée
+  local ucode p; ucode="$(microcode_for_cpu)"
+  local -a entree=() sortie=()
+  read -ra entree <<< "$1"
+  for p in "${entree[@]}"; do
+    case "$p" in
+      intel-ucode|amd-ucode)
+        if [[ "$p" == "$ucode" ]]; then sortie+=("$p"); fi ;;
+      *) sortie+=("$p") ;;
+    esac
+  done
+  printf '%s\n' "${sortie[*]}"
 }
 
 keyring_pkgs_for() { # $1 = aarch64|x86_64
@@ -57,6 +220,64 @@ microcode_for_cpu() { # x86_64 uniquement : détection du vendeur
   if grep -q GenuineIntel /proc/cpuinfo 2>/dev/null; then echo intel-ucode
   elif grep -q AuthenticAMD /proc/cpuinfo 2>/dev/null; then echo amd-ucode
   fi
+}
+
+# --- le dépôt tiers, posé sur la CIBLE et nulle part ailleurs ------------------
+
+# ⚠️ LE NOM DE SECTION EST ASSEMBLÉ, PAS ÉCRIT LITTÉRALEMENT, et ce n'est pas une
+# coquetterie. `iso/build-iso` copie ce fichier et `eschaton-install` dans
+# l'`airootfs` de l'image, puis passe dessus une garde qui refuse toute image
+# dont un fichier porte une ligne « [arch-mact2] » : c'est elle qui garantit que
+# le dépôt non signé n'entre pas dans la configuration livrée. Un script qui
+# COMPOSE cette section à l'installation n'est pas une configuration de l'image
+# — mais un `grep` ne sait pas faire la différence, et affaiblir la garde pour
+# lui apprendre la nuance serait la désarmer. Une variable coûte moins cher.
+# NE PAS « simplifier » en heredoc : la garde de build-iso refuserait l'image.
+ecrire_depot_t2() { # $1 = chemin du fragment à écrire
+  if [[ "${DRY_RUN:-0}" == "1" ]]; then
+    echo "DRY: écrire le dépôt $DEPOT_T2_NOM ($DEPOT_T2_URL) dans $1"
+    return 0
+  fi
+  mkdir -p "$(dirname "$1")"
+  printf '%s\n' \
+    "# Dépôt tiers $DEPOT_T2_NOM — posé par eschaton-install sur une machine Mac T2." \
+    "#" \
+    "# NON SIGNÉ (SigLevel = Never), mainteneur unique, suit l'amont avec du" \
+    "# retard. Ce n'est PAS la configuration par défaut d'Eschaton : ce fragment" \
+    "# n'existe que sur une machine T2, où il n'y a pas d'alternative — le noyau" \
+    "# qui voit le disque de cette machine ne se trouve nulle part ailleurs." \
+    "# ADR 0004 §4.2. Le retirer rend la machine non maintenable, pas plus sûre." \
+    "" \
+    "[$DEPOT_T2_NOM]" \
+    "SigLevel = Never" \
+    "Server = $DEPOT_T2_URL" > "$1"
+}
+
+# Le compromis, AFFICHÉ — l'ADR 0004 §4.2 l'exige en toutes lettres, et il
+# l'exige parce qu'un dépôt non signé accepté en silence n'est pas un compromis,
+# c'est une régression. Affiché AVANT le premier geste destructeur : qui n'en
+# veut pas peut encore partir.
+afficher_compromis_t2() {
+  echo ""
+  echo "  ─────────────────────────────────────────────────────────────────────"
+  echo "  CHEMIN T2 — Mac toléré, jamais supporté (ADR 0004)."
+  echo ""
+  echo "  Ce système recevra le noyau linux-t2 et le dépôt tiers $DEPOT_T2_NOM :"
+  echo "      $DEPOT_T2_URL"
+  echo ""
+  echo "  Ce dépôt n'est PAS signé (SigLevel = Never), il a un mainteneur unique"
+  echo "  et il suit l'amont avec du retard (trois versions correctives le"
+  echo "  2026-08-30). Chaque mise à jour du noyau vient donc d'une source que ni"
+  echo "  Arch ni Eschaton ne contrôlent."
+  echo ""
+  echo "  C'est le compromis, et il n'a pas d'alternative sur ce matériel : la"
+  echo "  puce T2 est le contrôleur NVMe, un noyau amont ne voit aucun disque."
+  echo "  Le filet est le snapshot d'avant mise à jour et « eschaton-rollback »."
+  echo ""
+  echo "  Le paquet eschaton-t2 est installé en même temps que le système : il"
+  echo "  refuse toute transaction qui réintroduirait un noyau amont."
+  echo "  ─────────────────────────────────────────────────────────────────────"
+  echo ""
 }
 
 # --- validation des arguments (différés SP4 du bilan du Socle) ----------------

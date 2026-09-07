@@ -249,6 +249,25 @@ echo "==> Intégration d'eschaton-install dans l'environnement live"
 install -Dm755 "$racine/installer/eschaton-install" "$profil/airootfs/usr/local/bin/eschaton-install"
 install -Dm644 "$racine/installer/lib.sh" "$profil/airootfs/usr/local/bin/lib.sh"
 
+# LE MARQUEUR DE VARIANT — c'est par lui que l'image dit à l'installeur ce
+# qu'elle est. Sans lui, `eschaton-install` lancé depuis le média T2 poserait le
+# noyau AMONT sur le disque : le seul que la puce T2 ne laisse pas voir son
+# propre NVMe. Le système s'installerait, et ne démarrerait jamais.
+#
+# C'est un MARQUEUR, pas une détection : il est écrit ici, délibérément, par le
+# script qui sait quelle image il construit. L'installeur ne renifle aucun DMI,
+# ne lit aucun modèle de machine, et retombe sur le chemin nominal dès que ce
+# fichier manque — un live tiers (archboot, ISO Arch) n'en a pas.
+#
+# On l'écrit pour LES DEUX variants. Le nominal n'en a pas besoin pour choisir
+# son chemin — c'est déjà le défaut — mais un fichier toujours présent a une
+# valeur que son absence n'aurait pas : il rend l'image auto-descriptive, et il
+# fait de « marqueur absent » un cas qui ne concerne QUE les médias non
+# Eschaton. Le contenu est lu par installer/lib.sh (resoudre_variante).
+install -Dm644 /dev/null "$profil/airootfs/usr/local/share/eschaton/variant"
+printf '%s\n' "$variante" > "$profil/airootfs/usr/local/share/eschaton/variant"
+echo "    marqueur de variant : $variante"
+
 # --- 2. Place réservée au trousseau (SP4a) -----------------------------------
 # Le motif est celui d'Omarchy, relevé par la veille §4.3 : la clé publique est
 # versionnée dans le dépôt de construction, ajoutée et signée LOCALEMENT pendant
@@ -279,16 +298,32 @@ fi
 #   - une section [arch-mact2], OÙ QUE CE SOIT sous airootfs ;
 #   - toute mention dans les fichiers que pacman lit vraiment.
 fuite_depot_tiers() {
-	local base="$1"
-	grep -rlE '^[[:space:]]*\[arch-mact2\]' "$base" 2>/dev/null || true
+	local base="$1" c rc
+	[[ -d "$base" ]] || { echo "build-iso : arborescence illisible ($base)." >&2; return 2; }
+	# grep : 0 = trouvé, 1 = absent, 2 = erreur. Seul 1 prouve l'absence.
+	# Sans -l : grep doit lire chaque fichier entier, même après un résultat.
+	if grep -rE '^[[:space:]]*\[arch-mact2\]' "$base"; then :
+	else
+		rc=$?
+		if ((rc != 1)); then return "$rc"; fi
+	fi
 	for c in "$base/etc/pacman.conf" "$base/etc/pacman.d"; do
-		[[ -e "$c" ]] && { grep -rl 'arch-mact2' "$c" 2>/dev/null || true; }
+		[[ -e "$c" || -L "$c" ]] || continue
+		if grep -r 'arch-mact2' "$c"; then :
+		else
+			rc=$?
+			if ((rc != 1)); then return "$rc"; fi
+		fi
 	done
+	return 0
 }
 
 # Ce contrôle tourne pour les DEUX variants. Sur le nominal il ne devrait rien
 # avoir à dire — mais c'est justement là qu'une fuite passerait inaperçue.
-fuites="$(fuite_depot_tiers "$profil/airootfs" | sort -u)"
+if ! fuites="$(fuite_depot_tiers "$profil/airootfs" | sort -u)"; then
+	echo "build-iso : contrôle du dépôt tiers impossible ; image refusée." >&2
+	exit 1
+fi
 if [[ -n "$fuites" ]]; then
 	echo "build-iso : le dépôt tiers arch-mact2 a fui dans la configuration pacman" >&2
 	echo "  de l'environnement live. Il ne doit JAMAIS entrer dans la configuration" >&2
@@ -398,24 +433,35 @@ done
 # compressé en zstd, un `grep` dedans ne trouverait rien même si la chaîne y
 # était — une garde qui ne peut pas échouer est pire que pas de garde. C'est
 # exactement le même contenu, avant compression.
-if [[ "$variante" == t2 ]]; then
-	echo "==> Le dépôt tiers n'est pas dans le système livré"
-	livre="$travail/mkarchiso/x86_64/airootfs"
-	if [[ ! -d "$livre" ]]; then
-		echo "build-iso : arborescence pacstrap introuvable ($livre) — la garde de" >&2
-		echo "  cloisonnement du dépôt tiers ne peut pas s'exercer. Image refusée." >&2
-		exit 1
-	fi
-	fuites="$(fuite_depot_tiers "$livre" | sort -u)"
-	if [[ -n "$fuites" ]]; then
-		echo "build-iso : arch-mact2 a fui dans la configuration pacman du système" >&2
-		echo "  livré. Ce dépôt n'est pas signé et ne doit jamais entrer dans la" >&2
-		echo "  configuration par défaut (ADR 0004 §4.2). Fichiers en cause :" >&2
-		printf '    %s\n' "$fuites" >&2
-		exit 1
-	fi
-	echo "    ok : aucune configuration pacman du système livré ne déclare arch-mact2"
+#
+# ⚠️ CE CONTRÔLE TOURNE POUR LES DEUX VARIANTS, exactement comme celui d'avant
+# construction. Il ne s'exerçait que sur le T2 : c'était l'inverse du bon
+# raisonnement. Sur le variant, une fuite est plausible et attendue — on la
+# cherche. Sur le NOMINAL, elle est invraisemblable, donc personne ne la
+# regarderait, donc c'est là qu'elle vivrait le plus longtemps : un `pacman.conf`
+# déposé par un paquet ou un fragment recopié par erreur passerait sans un mot,
+# et l'image NOMINALE est celle qui se publie. Le contrôle coûte un `grep` sur
+# une arborescence déjà sur le disque.
+echo "==> Le dépôt tiers n'est pas dans le système livré"
+livre="$travail/mkarchiso/x86_64/airootfs"
+if [[ ! -d "$livre" ]]; then
+	echo "build-iso : arborescence pacstrap introuvable ($livre) — la garde de" >&2
+	echo "  cloisonnement du dépôt tiers ne peut pas s'exercer. Image refusée." >&2
+	exit 1
 fi
+if ! fuites="$(fuite_depot_tiers "$livre" | sort -u)"; then
+	echo "build-iso : contrôle du dépôt tiers impossible ; image refusée." >&2
+	exit 1
+fi
+if [[ -n "$fuites" ]]; then
+	echo "build-iso : arch-mact2 a fui dans la configuration pacman du système" >&2
+	echo "  livré (variant « $variante »). Ce dépôt n'est pas signé et ne doit" >&2
+	echo "  jamais entrer dans la configuration par défaut (ADR 0004 §4.2)." >&2
+	echo "  Fichiers en cause :" >&2
+	printf '    %s\n' "$fuites" >&2
+	exit 1
+fi
+echo "    ok : aucune configuration pacman du système livré ne déclare arch-mact2"
 
 octets="$(stat -c %s "$image")"
 

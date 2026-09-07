@@ -1,28 +1,30 @@
 pkgname=eschaton-t2
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Adaptations Mac T2 : garde d'épinglage du noyau et matériel Apple (toléré, non supporté)"
 
-# ⚠️ ÉCART ASSUMÉ AVEC L'ADR 0004 §4.1, À RATIFIER PAR L'AUTEUR.
-# L'ADR annonce ce paquet « forcément non-`any` puisqu'il dépend de linux-t2 ».
-# L'architecture d'un paquet Arch décrit ce qu'il CONTIENT, pas ce dont il
-# dépend : ici, deux fichiers texte et un script shell — donc `any`, comme
-# eschaton-base. Le raisonnement de l'ADR anticipait un paquet qui n'existait
-# pas encore ; le voici, et il ne compile rien.
-# Ce n'est pas un détail de forme : `repo/build-repo` construit TOUS les
-# PKGBUILD de packages/ dans les DEUX jobs d'architecture (x86_64 et aarch64) et
-# refuse un dépôt incomplet. Un `arch=(x86_64)` ferait échouer le job aarch64 —
-# la doctrine `arch=(any)` du Socle n'est pas qu'une préférence, c'est ce sur
-# quoi la CI est bâtie.
+# `any` : ce paquet ne contient que des fichiers texte et un script shell, et
+# `repo/build-repo` construit TOUS les PKGBUILD dans les DEUX jobs
+# d'architecture — un `arch=(x86_64)` ferait échouer le job aarch64.
+# Ce point n'est plus un écart à ratifier : l'ADR 0004 §4.1 a été corrigé en ce
+# sens le 2026-08-30, et la doctrine `any` du projet n'a donc aucune exception.
 arch=(any)
 license=(MIT)
 
-# Rien ne tire ce paquet. Il s'installe À LA MAIN, sur la machine concernée :
-# le T2 est toléré et cloisonné (ADR 0004 §4.1), jamais une cible par défaut.
-#   pacman -S eschaton-t2
+# AUCUN paquet du socle ne dépend de celui-ci : ni `eschaton-base`, ni
+# `eschaton-desktop`. Le T2 est toléré et cloisonné (ADR 0004 §4.1), jamais une
+# cible par défaut — une installation ordinaire ne le voit même pas passer.
+# Il est posé sur DEUX chemins, et deux seulement :
+#   - `eschaton-install --variant t2`, qui le pacstrape avec le système. La
+#     garde d'épinglage doit exister AVANT le premier démarrage : ce démarrage
+#     est précisément le moment où un noyau mal choisi laisse une machine sans
+#     disque et sans clavier ;
+#   - `pacman -S eschaton-t2` à la main, sur une machine déjà installée.
 # `linux-t2`, `t2fanrd` et `apple-t2-audio-config` viennent du dépôt tiers
-# `arch-mact2`, que l'auteur ajoute séparément, avec sa politique propre — il
-# n'est PAS dans la configuration livrée par Eschaton (ADR 0004 §4.2).
+# `arch-mact2`. Ce dépôt n'est PAS dans la configuration livrée par Eschaton : il
+# est déclaré sur la machine T2 elle-même, avec sa politique propre, et le
+# compromis y est affiché (ADR 0004 §4.2). Sur le chemin `--variant t2`, c'est
+# `eschaton-install` qui l'écrit ; à la main, c'est à l'utilisateur.
 depends=(
   eschaton-base
   # Le noyau épinglé, et la raison d'être de tout le reste.
