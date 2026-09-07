@@ -46,7 +46,7 @@ jobs:
           persist-credentials: false
       # curl et jq sont préinstallés sur ubuntu-latest ; on les demande quand même
       # pour que la dépendance de `tools/check-desktop-deps` soit lisible ici.
-      - run: sudo apt-get update && sudo apt-get install -y shellcheck bats curl jq
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck bats curl jq nodejs
       - name: shellcheck
         run: |
           shellcheck \

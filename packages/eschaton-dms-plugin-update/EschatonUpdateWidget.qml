@@ -129,16 +129,17 @@ PluginComponent {
     }
 
     readonly property bool resultatEstUnEchec:
-        resultat === "echec" || resultat === "echec-prevol"
-        || resultat === "decision-humaine" || resultat === "interrompu"
-        || resultat === "succes-degrade" || resultat === "verdict-inconnu"
-        // Une annulation tardive n'est pas un échec de la mise à jour — elle a
-        // partiellement réussi. C'est un échec du VŒU de l'utilisateur, qui
-        // avait demandé l'arrêt et se retrouve avec des paquets installés. Elle
-        // mérite donc la couleur d'attention ; et surtout, elle rétracte la
-        // boîte du journal à 150 px, ce qui est ce qui garantit que le bouton de
-        // retour arrière reste dans le cadre plafonné à 479 px par DMS (§31.4).
-        || resultat === "annule-trop-tard"
+        // Un verdict inconnu doit garder le journal compact et la restauration
+        // accessible, comme les autres résultats qui demandent de l'attention.
+        resultat !== "" && resultat !== "succes" && resultat !== "annule"
+        && resultat !== "succes-non-verifie"
+
+    function detailAnnulationTardive() {
+        return "Des paquets ont pu être installés avant l'arrêt. Consultez le journal. "
+            + (restaurationUtile
+                ? "Le retour arrière ci-dessous utilise le snapshot " + snapshotAvant + "."
+                : "Aucun point de retour n'est disponible dans ce panneau. Consultez les snapshots dans le panneau Restauration.");
+    }
 
     // Les résultats qui n'appellent PAS de retour arrière, et eux seuls.
     //
@@ -761,7 +762,7 @@ PluginComponent {
                         if (root.resultat === "decision-humaine")
                             return "pacman a posé une question à laquelle Eschaton refuse de répondre à votre place. La question exacte est dans le journal ci-dessus, ainsi que, le cas échéant, la nouvelle Arch qui la documente. Rien n'a été modifié.";
                         if (root.resultat === "annule-trop-tard")
-                            return "L'arrêt est arrivé après que pacman avait commencé à écrire : des paquets ont été installés malgré votre demande d'annulation. Le journal ci-dessus dit lesquels. Le retour arrière ci-dessous ramène le système à son état d'avant.";
+                            return root.detailAnnulationTardive();
                         return "Rien n'a été approuvé à votre place. La sortie exacte de pacman est ci-dessus, telle quelle.";
                     }
                     // `unitesEnEchec` vient de `systemctl list-units` : une

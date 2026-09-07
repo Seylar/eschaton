@@ -1,6 +1,6 @@
 # Prise en main de la VM — 20 minutes pour juger toi-même
 
-> Ce document n'est pas un journal d'ingénierie (ça, c'est [`tools/vm-dev.md`](../tools/vm-dev.md), 3 000 lignes). C'est le parcours minimal pour que **tu** voies Eschaton de tes yeux et que tu me dises où le rendu s'écarte de ce que tu voulais. Il répond à la recommandation n°1 du [registre des arbitrages](REGISTRE-ARBITRAGES.md).
+> Parcours actualisé le 2026-09-07 d'après le code. Les preuves d'exécution sont dans [`tools/vm-dev.md`](../tools/vm-dev.md). Ce guide sert à juger le produit et les choix du [registre des arbitrages](REGISTRE-ARBITRAGES.md).
 
 ## 1. Démarrer (30 secondes)
 
@@ -34,11 +34,13 @@ Ne teste rien. Regarde. **C'est le seul moment du projet où « joli » a un jug
 
 Clique dessus. Elle liste les paquets en attente et propose de lancer la mise à jour.
 
-> **Dis-moi** : le fait qu'un **terminal s'ouvre** et te demande un mot de passe sudo, c'est acceptable ou c'est la trahison du « zéro terminal » ? (arbitrage **O1** du registre)
+Le flux actuel ouvre une **authentification graphique**, puis suit l'installation dans le panneau. Annuler exige une seconde authentification. Une mise à jour qui pose une question de résolution s'arrête pour demander une décision humaine.
+
+> **Dis-moi** : ces deux compromis sont-ils acceptables ? L'ancien flux en terminal a été remplacé ; le veto **O1** reste à trancher sur ce nouveau comportement. Si un terminal s'ouvre encore, la VM n'a pas la version actuelle du plugin.
 
 ### Étape 3 — La pastille de rollback (5 min)
 
-Clique dessus : tu vois la liste des snapshots avec leurs dates et descriptions. C'est **le** différenciateur d'Eschaton — personne d'autre n'a un navigateur de snapshots dans sa barre.
+Clique dessus : tu vois la liste des snapshots avec leurs dates et descriptions, puis une restauration à confirmer.
 
 > **Dis-moi** : est-ce lisible pour quelqu'un qui ne sait pas ce qu'est un snapshot ? Et surtout — la **modale de mot de passe** qui apparaît quand tu confirmes, tu la gardes ou tu la supprimes ? (arbitrage **R2**, trivial à défaire aujourd'hui)
 
@@ -46,7 +48,7 @@ Clique dessus : tu vois la liste des snapshots avec leurs dates et descriptions.
 
 Le panneau s'ouvre. Demande-lui l'état du système, puis essaie de lui demander autre chose : d'ouvrir une application, de changer un réglage, de te parler d'un fichier.
 
-> **Dis-moi** : il refusera tout sauf ses trois outils. C'est ça, ton « assistant omniprésent » ? (arbitrage **R1** — c'est la question la plus importante du registre)
+> **Dis-moi** : il peut converser, mais ses actions système se limitent à trois outils : état, mise à jour et proposition de restauration. Est-ce suffisant pour l'« assistant omniprésent » que tu attends ? (arbitrage **R1**)
 >
 > Essaie aussi : « regarde mon système et corrige ce qui ne va pas ». Il lira, puis s'arrêtera : il faut un second message pour qu'il agisse. C'est le rempart anti-injection (**R3**) — trop pénible, ou acceptable ?
 
@@ -54,13 +56,15 @@ Le panneau s'ouvre. Demande-lui l'état du système, puis essaie de lui demander
 
 Ouvre un terminal dans la VM et regarde `~/.config/hypr/`. Essaie d'y modifier quelque chose.
 
-> **Dis-moi** : cet arbre appartient au shell, pas à toi ; tes modifications seront écrasées. Pour toi qui bricoles, c'est rédhibitoire ou tolérable ? (arbitrage **J1**, le plus coûteux à défaire)
+Les fichiers générés par DMS peuvent être régénérés par `dms setup`. **`dms/binds-user.lua` est l'exception prévue pour les surcharges personnelles** : Eschaton y ajoute son accroche une seule fois et respecte son retrait. Une mise à jour du paquet ne réécrit pas tout le dossier personnel.
+
+> **Dis-moi** : cette séparation est-elle compréhensible ? (arbitrage **J1**)
 
 ## 4. Ce que cette VM ne peut PAS te dire — ne t'y trompe pas
 
 | | Pourquoi |
 |---|---|
-| **La fluidité** | Tout est en **rendu logiciel** (`LIBGL_ALWAYS_SOFTWARE=1`), sur ARM émulé. Si c'est lent ou saccadé, **c'est le banc, pas le produit**. Ne juge pas la performance ici. |
+| **La fluidité** | Le banc ARM utilise la virtualisation sur Apple Silicon, pas l'émulation x86. Le rendu logiciel limite la comparaison avec un vrai GPU. Une lenteur doit néanmoins être diagnostiquée : le banc n'innocente pas automatiquement le produit. |
 | **Le son** | La VM tourne sans audio (`-audio none`). Rien n'a jamais été testé. |
 | **Le GPU, le jeu, le HDR** | Impossibles ici. C'est tout l'objet du SP4b (vraie machine) et du SP5. |
 | **La vraie installation** | Ce que tu vois est une VM installée par notre installeur, mais sur du matériel virtuel simple. |

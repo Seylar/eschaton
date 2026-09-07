@@ -2,7 +2,8 @@
 
 - **Date** : 2026-09-07
 - **Destinataire** : Codex (exécution). Les gates de revue, les rulings, les tags et les fusions restent à Claude.
-- **État de référence** : `main` = `3d8feb6`, tag **`v0.3.0`** posé. Le Socle, le Bureau, l'Assistant et l'ISO nominal y sont fusionnés.
+- **État de référence distant** : `origin/main` = `3d8feb6`, tag **`v0.3.0`** posé. Le Socle, le Bureau, l'Assistant et l'ISO nominal y sont fusionnés. Attention : le checkout racine `main` est encore à `1b10b85`.
+- **Reprise Codex du 2026-09-07** : branche `codex/audit-reprise-2026-09-07`, depuis `handoff` à `32c9e70`, dans `.worktrees/socle`. [Audit global](audits/2026-09-07-projet-global.md), preuves §37 de `tools/vm-dev.md`. Corrections locales soumises à validation, aucune fusion ni publication ISO.
 
 ---
 
@@ -38,7 +39,7 @@ Elles ont toutes été payées par un incident réel. Ne les renégocie pas en c
 
 Branche `iso-t2`, tête **`8b982ab`**. Le variant existe, se construit (1,18 Gio) et a passé une revue qui l'a jugé solide sur le fond : cloisonnement du dépôt tiers à double garde, delta de paquets sans fourche du profil, garde d'épinglage du noyau qui tranche sur le nom exact et échoue fermée, réserves honnêtes.
 
-Une vague de correction a été lancée puis **interrompue en cours de route**. Elle a eu le temps de régler C-1 seulement. **C-2 est le premier travail à reprendre, et il est bloquant.**
+Une vague de correction a été lancée puis **interrompue en cours de route**. Seul C-1 est dans le commit distant. **C-2 reste bloquant dans ce commit**, mais des modifications non commitées existent dans `.claude/worktrees/agent-a186b0e417ae099d8` : ne pas les réécrire depuis zéro. Le 2026-09-07, leur relecture et 84 tests ciblés passent ; le pkgrel et deux gardes restent à reprendre ([détail](audits/2026-09-07-projet-global.md#re-revue-ciblée-t2)). Ce worktree a été préservé.
 
 - **C-1 — ✅ RÉGLÉ** (`8b982ab`). La branche, écrite avant le commit `92cbf0e` de `main`, réécrivait le même bloc de `.github/workflows/iso.yml` et **supprimait `--draft`** — sans lui, poser un tag publie l'ISO en téléchargement public, ce que `iso/PROVENANCE.md` et `iso/README.md` interdisent tant que la licence et les choix de média de développement ne sont pas tranchés. La fusion de `main` garde bien **les deux** protections : l'énumération sans joker et l'étape « Refuser tout artefact T2 » de la branche, plus `--draft` et son commentaire. *Vérifié : `--draft` est présent, l'étape s'appelle « GitHub Release (brouillon) ».*
 - **C-2 — ❌ OUVERT, BLOQUANT. L'installeur pose le noyau amont sur la cible.** Un système installé depuis l'ISO T2 **ne peut pas démarrer** : `linux` ne voit pas le NVMe piloté par la puce T2, et n'a pas `apple-bce`. `grep -rn 'linux-t2' installer/ iso/eschaton/` ne renvoie rien — le delta T2 ne touche que l'environnement **live**, l'installeur n'a aucune conscience du variant. Aggravant : le dépôt tiers n'étant pas dans le `pacman.conf` du live, `pacstrap` ne *pourrait* pas tirer `linux-t2` même si on le lui demandait. Et `iso/README.md` prescrit « après le premier démarrage, `pacman -S eschaton-t2` » — une étape qui présuppose un démarrage impossible.
@@ -62,10 +63,10 @@ Une vague de correction a été lancée puis **interrompue en cours de route**. 
 C'est le dernier sous-projet entièrement débloqué. Il solde trois dettes ouvertes depuis le Socle :
 
 - **greeter authentifié** et **fin de l'auto-login** (aujourd'hui : session ouverte sans mot de passe, nom d'utilisateur **en dur** dans `greetd.toml`) ;
-- **PAM / trousseau** ([ADR 0003](decisions/0003-service-secrets-assistant.md) §8) : aujourd'hui le trousseau est **en clair au repos** parce que rien ne le déverrouille à l'ouverture de session. C'est affiché à l'utilisateur, mais ça reste vrai ;
+- **PAM / trousseau** ([ADR 0003](decisions/0003-service-secrets-assistant.md) §8) : aucun déverrouillage PAM n'est intégré. Un trousseau créé avec un mot de passe vide conserve les secrets **en clair au repos** ; un trousseau protégé demande un déverrouillage manuel. L'auto-login ne prouve donc pas, à lui seul, que tous les trousseaux sont en clair ;
 - **verrouillage de session**.
 
-Il n'existe **ni veille, ni spec, ni plan**. Commence par la veille datée (ADR 0002), propose la spec, attends le gate.
+La [veille du 2026-09-07](veille/2026-09-07-premiere-session.md) et une [proposition de spec](superpowers/specs/2026-09-07-premiere-session-design.md) sont maintenant rédigées. ReGreet + Cage est le premier spike proposé ; les deux paquets existent sur les deux architectures. **Spec non validée : revue prévue avant implémentation PAM/greeter.** Aucun auto-login ni trousseau existant n'a été modifié.
 
 ### 3.2 SP4a — Signature du dépôt *(spec et plan prêts, mais §4 d'abord)*
 
@@ -73,9 +74,9 @@ Il n'existe **ni veille, ni spec, ni plan**. Commence par la veille datée (ADR 
 
 ⚠️ **La Task 1 contient un point utilisateur obligatoire** et deux vetos en attente : ne lance rien avant §4.
 
-### 3.3 Le défaut du Bureau trouvé pendant l'ISO, jamais corrigé
+### 3.3 Première session lente : correctif écrit, preuve graphique à rejouer
 
-Sur une machine lente, `eschaton-dms-provision` abandonne à la première session parce que le bureau n'a pas encore écrit sa configuration → **la première session s'ouvre sans les pastilles**. La reprise fonctionne et a été prouvée, mais c'est la toute première impression du produit qui est ratée. Trouvé en installant depuis le média réel, hors périmètre de la vague d'alors.
+Le script attend désormais un objet JSON lisible pendant 90 s ; le service retente dans la même session, au plus trois démarrages par fenêtre de 30 min, avec délai maximal de 5 min par essai. Tests du programme complet avec apparition tardive et reprise après échec passés ; unité acceptée par `systemd-analyze` dans la VM. **La première session graphique lente avec ce nouveau paquet reste à rejouer** (§37), avant de fermer ce point.
 
 ### 3.4 La preuve dynamique jamais faite
 
@@ -114,13 +115,13 @@ Aucun de ces points ne s'ouvre sans une réponse explicite de Seylar. Le [regist
 
 Aucun ne bloque. Ils sont consignés dans les ledgers `.superpowers/sdd/*/progress.md`.
 
-**Assistant** : contrat UI plus large que la spec à documenter · le core entier est passé au panneau (la clé d'API y est accessible) · `refreshCredentials` sans retry si le trousseau est occupé · dropdown désynchronisé après un refus · timeout du `ProviderCatalog` · `stubTools` à `true` par défaut (le démon force `false`, mais l'inverse serait plus sûr) · le bouton stop relance un tour de streaming.
+**Assistant** : contrat UI plus large que la spec à documenter · le core entier est passé au panneau (la clé d'API y est accessible) · `refreshCredentials` sans retry si le trousseau est occupé · dropdown désynchronisé après un refus · timeout du `ProviderCatalog`. **Corrigé dans la reprise Codex** : stubs désactivés par défaut ; Stop ne relance plus le streaming après les résultats d'outils (tests Node et harnais Quickshell en VM passés).
 
-**Mise à jour** : `annule-trop-tard` peut être annoncé **sans porte de sortie** quand aucun snapshot n'a été calculé (le message et l'offre se contredisent) · `resultatEstUnEchec` est restée une liste d'**autorisation** alors que `restaurationUtile` a été renversée en liste d'exclusion · `interrompu` ne consulte pas le point de non-retour · tout membre de `wheel` peut annuler la transaction d'un autre · l'assistant peut faire apparaître une modale de mise à jour sans clic de confirmation préalable, contrairement au rollback (fatigue d'authentification, borne tenue).
+**Mise à jour** : **corrigé dans la reprise Codex** : le message d'annulation tardive distingue avec/sans snapshot ; les résultats inconnus conservent la présentation d'attention et le journal compact (expressions QML testées). Restent : `interrompu` ne consulte pas le point de non-retour · tout membre de `wheel` peut annuler la transaction d'un autre · l'assistant peut faire apparaître une modale de mise à jour sans clic de confirmation préalable, contrairement au rollback (fatigue d'authentification, borne tenue).
 
-**ISO** : le média s'identifie encore **« Arch Linux »** et non « Eschaton » — plus profond qu'il n'y paraît, réserve écrite dans `iso/README.md` · `fuite_depot_tiers` neutralise les erreurs de `grep` (une arborescence illisible se lirait « aucune fuite ») · la garde d'après-construction ne s'exerce que sur le variant · aucune confirmation interactive avant `sgdisk --zap-all` : la garde `--disk` est la seule protection.
+**ISO** : le média s'identifie encore **« Arch Linux »** et non « Eschaton » — plus profond qu'il n'y paraît, réserve écrite dans `iso/README.md` · `fuite_depot_tiers` neutralise les erreurs de `grep` (une arborescence illisible se lirait « aucune fuite ») · la garde d'après-construction ne s'exerce que sur le variant dans le commit T2 ; le travail local l'étend aux deux chemins (84 tests ciblés passés) · aucune confirmation interactive avant `sgdisk --zap-all` : la garde `--disk` est la seule protection.
 
-**Couverture** : les tests QML sont des greps de chaînes — la logique n'est réellement exécutée qu'en VM par les harnais. C'est un compromis assumé (QML inexécutable en CI GitHub), pas un oubli.
+**Couverture** : les tests QML historiques restent surtout statiques. La reprise ajoute des tests Node qui exécutent les fonctions/expressions de production pour Stop et les verdicts, plus un test Quickshell réel de Stop en VM. Les bindings, le rendu et le reste des scénarios exigent toujours les harnais VM. Le transfert série teste désormais aussi les écritures partielles et un pseudo-terminal réel.
 
 ---
 
@@ -128,7 +129,7 @@ Aucun ne bloque. Ils sont consignés dans les ledgers `.superpowers/sdd/*/progre
 
 | Quoi | Où |
 |---|---|
-| Le journal de terrain, toutes les preuves | `tools/vm-dev.md` (36 sections) |
+| Le journal de terrain, toutes les preuves | `tools/vm-dev.md` (preuve de reprise §37 ; §36 réservé au variant T2) |
 | Specs | `docs/superpowers/specs/` |
 | Plans d'exécution | `docs/superpowers/plans/` |
 | Décisions d'architecture | `docs/decisions/` (0001 à 0004) |

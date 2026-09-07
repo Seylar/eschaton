@@ -41,9 +41,9 @@ Item {
     property int maxToolCallsPerRound: 8
     property int maxToolPayloadChars: 65536
 
-    // Les harnais pré-Task 5 peuvent encore activer les stubs. Le daemon réel
-    // impose false et délègue exclusivement à ToolExecutor.
-    property bool stubTools: true
+    // Les stubs exigent une activation explicite dans un harnais de test.
+    // En production, seul ToolExecutor peut rendre un résultat d'outil.
+    property bool stubTools: false
 
     property var toolCatalog: []
     property var _conversation: []
@@ -135,10 +135,14 @@ Item {
     }
 
     function cancel() {
-        if (!_requestActive)
+        if (!busy)
             return;
+        // L'intention d'arrêter couvre aussi l'attente d'un outil. Ses résultats
+        // doivent encore être corrélés, mais ne doivent pas relancer curl.
+        // L'annulation de l'action elle-même reste du ressort de ToolExecutor.
         _cancelled = true;
-        streamProcess.running = false;
+        if (_requestActive)
+            streamProcess.running = false;
     }
 
     function clear() {
@@ -192,6 +196,10 @@ Item {
         _pendingTools = next;
         pendingToolCount = Object.keys(next).length;
         if (pendingToolCount === 0) {
+            if (_cancelled) {
+                finishReply("cancelled", "Réponse annulée.");
+                return true;
+            }
             _requestAllowsTools = _followupAllowsTools;
             _followupAllowsTools = true;
             beginAssistantMessage();

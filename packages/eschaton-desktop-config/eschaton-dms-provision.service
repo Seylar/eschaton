@@ -1,6 +1,9 @@
 [Unit]
 Description=Activation initiale des plugins DMS Eschaton
 After=dms.service
+PartOf=graphical-session.target
+StartLimitIntervalSec=30min
+StartLimitBurst=3
 ConditionPathExists=/etc/xdg/quickshell/dms-plugins/eschatonUpdate/plugin.json
 ConditionPathExists=/etc/xdg/quickshell/dms-plugins/eschatonRollback/plugin.json
 ConditionPathExists=/etc/xdg/quickshell/dms-plugins/eschatonAssistant/plugin.json
@@ -9,3 +12,8 @@ ConditionPathExists=/etc/xdg/quickshell/dms-plugins/eschatonAssistant/plugin.jso
 Type=oneshot
 ExecStart=/usr/lib/eschaton/eschaton-dms-provision
 RemainAfterExit=yes
+# Un bureau lent doit pouvoir se compléter sans demander une reconnexion.
+# Trois essais au plus par fenêtre, chacun borné même si un appel IPC se fige.
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=5min
