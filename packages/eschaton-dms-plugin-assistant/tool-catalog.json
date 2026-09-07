@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "system_status",
+        "description": "Lit l'état Eschaton : mises à jour, snapshots et métriques. Cette opération est strictement en lecture seule.",
+        "strict": true,
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "trigger_update",
+        "description": "Ouvre la porte privilégiée de mise à jour d'Eschaton. Une modale polkit exige l'authentification de l'utilisateur ; la transaction est ensuite portée par une unité systemd et sa progression s'affiche dans le panneau « Mises à jour ». Rien n'est approuvé à la place de l'utilisateur, et l'assistant emprunte exactement la même porte que l'interface.",
+        "strict": true,
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "propose_rollback",
+        "description": "Propose la restauration d'un snapshot existant. Une modale polkit exige toujours l'authentification humaine avant l'action.",
+        "strict": true,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "snapshot_id": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Numéro positif d'un snapshot présent dans la liste Snapper courante."
+            }
+          },
+          "required": ["snapshot_id"],
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

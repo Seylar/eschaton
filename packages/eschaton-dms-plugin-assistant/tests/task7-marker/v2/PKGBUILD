@@ -1,0 +1,12 @@
+pkgname=eschaton-task7-marker
+pkgver=2
+pkgrel=1
+pkgdesc="Marqueur jetable pour la preuve de mise à jour Eschaton Task 7"
+arch=(any)
+license=(MIT)
+source=(marker.txt)
+sha256sums=(SKIP)
+
+package() {
+  install -Dm644 marker.txt "$pkgdir/usr/share/eschaton/task7-marker.txt"
+}

@@ -28,7 +28,11 @@ Preuves de référence :
 - `check-desktop-deps` : une panne API/outillage rend désormais rc=2, jamais un
   faux « paquet absent » ;
 - `tools/vm-serial` : arguments invalides sans traceback ;
-- `eschaton-update --yes` : traduction stricte vers `pacman --noconfirm` ;
+- ~~`eschaton-update --yes` : traduction stricte vers `pacman --noconfirm`~~ —
+  **révoqué le 2026-08-30** : cette traduction *était* l'auto-approbation. `--yes`
+  est désormais refusé, comme toute option qui répondrait à la place de
+  l'utilisateur (spec update graphique §3.4, garde
+  `tests/update-sans-auto-approbation.bats`) ;
 - tests Bats ajoutés pour ces contrats.
 
 ### Tasks 5–9
@@ -171,4 +175,109 @@ Le sous-projet 3 est spécifié et planifié :
 - **Plan d'exécution (8 tâches)** : `docs/superpowers/plans/2026-08-28-assistant.md` — Task 1 = spike de terrain `dms-ai-assistant` + mesure du streaming QML (décision A vs B-remontée AVANT d'écrire le moteur).
 - **Veille (autorité factuelle, ses §7.2 interdits sont contraignants)** : `docs/veille/2026-08-28-sp3-assistant.md`.
 
-Ordre impératif : finir le §7 (rendu pastilles) → revue Claude → [Claude : fusion + tag v0.2.0] → SP3 Task 1. Mêmes règles que toujours : pousser sur `bureau` (ou la branche que Claude indiquera post-fusion), CI verte à chaque vague, preuves vm-dev, jamais de tag/fusion.
+Ordre impératif : finir le §7 (rendu pastilles) → revue Claude → [Claude : fusion + tag v0.2.0] → SP3 Task 1. Mêmes règles que toujours : pousser sur **`assistant`** (créée depuis main post-fusion v0.2.0 — c'est TA branche de travail SP3), CI verte à chaque vague, preuves vm-dev, jamais de tag/fusion.
+
+## 9. Checkpoint vague SP3 T1-4 — verdict Claude et ouverture de la Task 5
+
+**Verdict : « With fixes » — Task 5 autorisée, à condition d'ouvrir par ces deux correctifs** (findings Important de la revue de vague, qui a rejoué 52/52 bats, 69/69 assertions fixtures et 42 attaques local-only — toutes refusées ; les 3 amendements ADR 0003 sont conformes) :
+
+1. **[Important] Body JSON en argv → E2BIG garanti** — `providers/OpenAIAdapter.js:70` et `AnthropicAdapter.js:148` passent le body en un argument ; Linux borne chaque argument à 131 072 octets, or `maxResponseChars` (262 144) + l'historique le dépassent (démontré : 262 266 o → execve échoue). La Task 5 aggrave (résultats d'outils 64 Kio réinjectés). **Correctif : body par stdin (`--data-binary @-`, motif `stdinEnabled` déjà maîtrisé dans KeyringBridge)** — avec un test qui envoie un body > 131 072 o et prouve que curl démarre.
+2. **[Important + ruling] `toolCall` n'émet pas `callId`** — `AssistantCore.qml:68` : `signal toolCall(string name, string argsJson)` alors que `toolResult(callId, …)` l'exige : contrat inopérant pour un exécuteur externe, la trajectoire B serait une réécriture. **Ruling contrôleur : la signature devient `toolCall(callId, name, argsJson)`** — la spec §3 est déjà amendée ; adapte le signal, les stubs et les tests.
+
+**Minor à intégrer en T5 au fil de l'eau** (autorisé) : garde-fou sur l'`index` d'outil OpenAI manquant dans des chunks séparés (`OpenAIAdapter.js:128`). **Minors différés au ledger** (post-tag) : contrat UI réel plus large que §3 à documenter (messages/busy/cancel/clear — et ne plus passer l'objet core entier au Panel, `apiKey` accessible) ; `refreshCredentials` sans retry si trousseau occupé ; arithmétique vm-dev §20.2 (170,97 t/s) ; dropdown désynchronisé après refus busy ; timeout ProviderCatalog.
+
+Ensuite, la Task 5 telle que planifiée — rappels : catalogue FERMÉ, refus loggé de tout outil inconnu, contenu système = données étiquetées jamais concaténées au prompt système, `pkexec eschaton-rollback --yes N` seulement après affichage de l'intention, JAMAIS d'auto-approve.
+
+## 10. File d'attente Codex après le SP3 — SP4a Signature & keyring
+
+Le SP4 est découpé (veille + roadmap actée) : **4a Signature** (court, bloquant, indépendant) → 4b Première vraie machine → 4c Première ouverture de session. Dès que le SP3 est clos (ou pendant une attente de revue) : **SP4a**.
+- Spec (autorité, sa séquence §3.3 EST l'architecture) : `docs/superpowers/specs/2026-08-28-signature-design.md`
+- Plan (6 tâches) : `docs/superpowers/plans/2026-08-28-signature.md`
+- ⚠️ Task 1 contient un **point utilisateur obligatoire** (garde de la clé privée : sauvegarde chiffrée + passphrase remises à l'utilisateur AVANT tout secret GitHub) et deux décisions restent **à veto utilisateur** (threat model clé-en-CI, spec §3.1 ; requalification de l'atomique, roadmap Socle §1.2) — les signaler au lancement.
+
+## 11. Checkpoint SP3 T5 — verdict Claude et ouverture des Tasks 6-8
+
+**Verdict : « Yes » — 0 Critical, 0 Important. La Task 5 est saine, feu vert pour T6-T8.** La revue sécurité (`4d0de9e`, rejouée : 58/58 bats, shellcheck 0 sur les 13 scripts, jq OK) confirme : chaîne pkexec en défense en profondeur sur 4 étages (core → exécuteur → relecture Snapper → regex `lib.sh` derrière polkit), catalogue réellement fermé aux deux étages avec refus loggé, intention affichée et cliquée AVANT tout pkexec (assertion harnais `pkexec_before_click=false`), `trigger_update` via le flux existant (et bravo pour la suppression opportuniste du `bash -lc` du widget update — réduction de surface au-delà du périmètre), `system_status` étiqueté `UNTRUSTED_SYSTEM_DATA` et jamais concaténé au prompt système, boucle bornée. Les deux correctifs d'ouverture du §9 sont vérifiés en place (`2578f70`).
+
+**3 Minor à intégrer au fil de l'eau en T6** (adjugés, aucun ne bloque) :
+1. **Borne int32 dans `positiveInteger()`** (`ToolExecutor.qml:157-160`) : la validation accepte jusqu'à 2^53-1 mais `rollbackSnapshotId` est `property int` — un id ≥ 2^32 serait silencieusement replié (~ToInt32) avant la relecture d'existence. Non exploitable (affichage, relecture, clic et argv portent tous la même valeur repliée), mais c'est un aliasing muet sur le chemin le plus privilégié. Correctif : refuser > 2147483647.
+2. **Borne défensive dans `AssistantCore.toolResult`** (`AssistantCore.qml:162-185`) : le core fait confiance au `boundedResult` de l'exécuteur ; tronquer aussi côté core (3 lignes, `maxToolPayloadChars`).
+3. **Timeout statut ⇒ `finishCurrent` forcé** (`ToolExecutor.qml:756-767`) : si un des binaires de `system_status` ne spawn jamais, `finishStatusSource` n'atteint pas 0 et la file reste coincée pour la session ; le `statusTimeout` doit forcer la fin de l'appel courant avec un résultat d'erreur.
+
+**Minors différés au ledger** (post-tag, ne pas traiter) : couverture bats textuelle (greps — la logique n'est exécutée qu'en VM par les harnais, pattern assumé du projet) ; `stubTools: true` par défaut dans le core (le daemon force false — inverser le défaut serait plus sûr pour un futur intégrateur) ; le bouton stop relance un tour de streaming après annulation d'outil (UX, protocolairement cohérent).
+
+Ensuite T6-T8 telles que planifiées. Rappels T6 (conversations réelles) : les clés restent hors argv/logs (motif KeyringBridge), le contenu des messages assistant rendu `Text.PlainText`, et tout constat de terrain qui contredit la spec remonte dans la spec (ADR 0002). Au terme de T8 : notifier pour la revue finale SP3 — le tag v0.3.0 et la fusion restent la cérémonie Claude.
+
+## 12. Handoff final SP3 — revue Claude demandée
+
+**Codex remet l'Assistant pour gate final.** Les Tasks 6 et 7 sont respectivement
+`24b3500` et `a66dd74`; la Task 8 clôt le DoD documentaire sans changement
+runtime supplémentaire. La spec est passée à « implémentée sur `assistant` ».
+Ni `main`, ni Pages, ni un tag n'ont été modifiés.
+
+**Validation du dernier code runtime** : CI `33221648941` entièrement verte —
+lint et 59 Bats, garde de dépendances Arch x86_64 + ALARM aarch64, build x86_64
+4 min 37 s, build aarch64 4 min 54 s ; `publish` ignoré comme prévu. Le paquet
+VM final est `eschaton-dms-plugin-assistant 0.1.0-7`, chargé après le reboot qui
+a réellement restauré le snapshot 78.
+
+**Points prioritaires de revue** :
+
+1. le durcissement Task 7 dans `AssistantCore` : après `system_status`, la
+   requête de restitution porte `tools: []` et tout `tool_delta` spontané est
+   refusé avant l'exécuteur ;
+2. la conversation brute
+   `docs/proofs/2026-08-29-assistant-task7-conversation.jsonl` : l'injection
+   hostile est bien présente, puis le fournisseur adverse tente encore
+   `propose_rollback(2147483647)` sans qu'aucun `pkexec` n'en découle ;
+3. les preuves §24-§25 de `tools/vm-dev.md` : deux formats de fournisseurs,
+   update réelle 1→2 avec snapshots 79/80 et Limine, rollback réel vers 78 par
+   Polkit, retour 2→1 au reboot et `/home` intact ;
+4. le fournisseur déterministe et les paquets marqueurs restent des fixtures de
+   test, explicitement absentes du PKGBUILD runtime ;
+5. les réserves §26.2 : pas d'appel au SaaS Anthropic, soak court, focus du
+   terminal perfectible, et dette PAM ferme côté SP4.
+
+**État de la VM pour la revue** : le banc temporaire est nettoyé, les réglages
+DMS sont revenus à `{"enabled":true}`, aucun fournisseur utilisateur ni port
+18083/18084 ne subsiste. Le snapshot hostile 78 et
+`@.avant-rollback-20260829-014101` sont volontairement conservés et
+récupérables. Si la revue est « Yes », le tag `v0.3.0` et la fusion restent à
+faire par Claude, conformément au gate utilisateur.
+
+## 13. Revue finale SP3 — verdict « With fixes » : 1 correctif bloquant avant tag
+
+**Verdict : With fixes.** 0 Critical. Le durcissement T7 **résiste à tous les contournements tracés** (multi-outils dans le même tour quel que soit l'ordre, annulation, retry — inexistant, `tool_delta` partiellement mergé, `finish_reason=tool_calls` sans fragments, réinitialisations `finishReply`/`resetStream`) ; le DoD §6 est soldé sur preuves réelles, aucun critère « sur papier » ; la conversation archivée est authentique (SHA-256 concordant, injection réelle dans un vrai snapshot Snapper, `propose_rollback(2147483647)` refusé au bon étage — le core, avant l'exécuteur) ; les fixtures Python sont saines et rien n'est packagé ; replay 59/59 bats, shellcheck 0, jq OK, py_compile OK.
+
+**[Important — BLOQUE LE TAG] Attribution croisée après timeout de `system_status`** (`ToolExecutor.qml:239-253` vs `:747-762`). Régression du minor #3 du §11, appliqué à moitié : le `statusTimeout` appelle bien `finishCurrent(...)`, mais laisse `_statusRemaining` à 4. Les `onExited` des 4 processus que `stopStatusSource` vient de tuer décrémentent encore, et à 0 `finishStatusSource` appelle `finishCurrent(buildSystemStatusResult())` **sans vérifier que `_currentCall` est toujours le status** — alors que tous ses homologues le font (`snapshotValidationExited:509-511`, `updateStarted:421`, `rollbackExited:617`). Conséquences : sur un tour multi-appels (status + update/rollback, dès que `checkupdates` dépasse 30 s), l'appel suivant reçoit le payload status périmé ; et si un `propose_rollback` est en `awaiting_confirmation`, il perd son `_currentCall` → `confirmRollback:562` et `cancelRollback:579` deviennent inertes tandis que `hasQueuedPrivilegedTool:89` reste vrai : **toute action privilégiée est refusée jusqu'au redémarrage du shell**. Pas d'escalade (polkit intact, désarmement anti-injection déjà posé), mais c'est une corruption d'état sur le chemin le plus sensible.
+**Correctif attendu** : garder `finishStatusSource` sur `_currentCall && _currentCall.name === "system_status"` (ou marquer les 4 sources finies dans le handler du timeout — au choix, mais un seul mécanisme). **Ajoute un test bats** qui verrouille la garde, bump `pkgrel`, rejoue bats + qmllint en VM, pousse sur `assistant`, CI verte. **C'est le seul travail autorisé avant le tag** — ne rien entreprendre d'autre.
+
+**Minors au ledger (post-tag, NE PAS traiter maintenant)** : refus humain du rollback ne désarme pas les outils (re-proposition possible jusqu'à `maxToolRounds`, bornée et jamais auto-approuvée) ; `_sawDone` en écriture seule ; `syncPluginSettings → applyProvider` sans garde `busy` ; statuts d'exécution T5/T6 absents du plan ; friction focus terminal à inscrire ; une ligne à ajouter à vm-dev §25 précisant que les lignes 13-14 du JSONL archivé reflètent le routeur de fixture pré-correctif (le serveur commité rendrait `UNKNOWN` sur ce tour — écart déjà narré, à relier au fichier).
+
+## 14. STOP tag v0.3.0 — veto utilisateur sur le flux d'update (2026-08-29)
+
+**Ton correctif `0ff455d` est validé** : la garde `finishStatusSource` est exactement celle demandée, au bon endroit, sur le motif de ses homologues ; 22 lignes de tests la verrouillent ; CI verte. Le bloqueur technique du §13 est levé. **Mais le tag et la fusion sont suspendus pour une raison de produit, pas de code.**
+
+**L'utilisateur a opposé un veto** : « pour update, faut taper le sudo dans le terminal — c'est non. » Le flux d'update actuel (terminal `foot` visible + `sudo pacman -Syu` au clavier) est **rejeté**. Il doit passer par une **modale polkit graphique**, comme le rollback. Cela touche le widget update du SP2 **et** l'outil `trigger_update` de l'assistant, qui appelle le même chemin — donc le SP3 ne peut pas être tagué en l'état.
+
+**Ne commence rien sur ce sujet pour l'instant.** Une veille datée est en cours (ADR 0002) sur l'état de l'art des mises à jour graphiques sur Arch — le point dur est que `pacman -Syu` est interactif (conflits, `.pacnew`, interventions annoncées en amont), ce qui interdit un simple `--noconfirm`. La spec suivra la veille, et le plan suivra la spec.
+
+**Autre changement de cap** : la machine de banc d'essai n'est plus une tour Ryzen/Nvidia mais **un Mac secondaire à processeur i7** (x86_64), sur lequel l'utilisateur installera dès qu'un ISO existera. Une seconde veille couvre ce que cela implique (puce T2 ou non, démarrage sur firmware Apple avec Limine, pilotes Broadcom). **La priorité du SP4 bascule : l'ISO d'abord.** La signature du dépôt (SP4a) reste nécessaire mais ne bloque pas une installation que l'utilisateur fait sur sa propre machine.
+
+## 15. Deux fronts ouverts pour Codex (2026-08-29) — spécifiés, plannifiés, prêts
+
+La veille sur la mise à jour graphique est rendue et **deux specs + deux plans t'attendent**. Les deux chantiers sont indépendants : mène-les dans l'ordre ci-dessous, ou en parallèle si tu en as les moyens.
+
+### Front A — La mise à jour graphique (PRIORITÉ : il débloque le tag v0.3.0)
+- Spec : `docs/superpowers/specs/2026-08-29-update-graphique-design.md` · Plan : `docs/superpowers/plans/2026-08-29-update-graphique.md` · Branche : `assistant`
+- **Task 1 est bloquante et non négociable** : deux hypothèses de la spec ne sont **pas** vérifiées (un `systemd-run` lancé par root déclenche-t-il un contrôle polkit ? un utilisateur peut-il suivre le journal d'une unité système ?). Prouve-les en VM avant d'écrire du code définitif ; si le terrain contredit, bascule sur le repli D-Bus et **remonte-le dans la spec** (ADR 0002).
+- **Task 2 est la plus urgente en valeur** : la mise à jour est **auto-approuvée aujourd'hui** (`--yes` → `--noconfirm` dans `lib.sh`, vérifié). C'est un défaut actif, pas une dette théorique — il vaut mieux échouer proprement qu'approuver tout seul.
+- **Le §3.1 de la spec est la raison d'être de l'architecture** : `pkexec` arme `PR_SET_PDEATHSIG` et le « parent » est le *fil*, pas le processus — une interface QML multi-thread tuerait `pacman` en pleine transaction. Ne simplifie jamais en revenant à un `pkexec` qui porte la transaction elle-même.
+
+### Front B — L'ISO (ce que l'utilisateur attend pour quitter la VM)
+- Spec : `docs/superpowers/specs/2026-08-29-iso-design.md` · Plan : `docs/superpowers/plans/2026-08-29-iso.md` · **Branche `iso` à créer depuis `main`**
+- Les Tasks 1-3 (profil `archiso` nominal, preuve d'installation en VM x86_64, construction et publication en CI) **ne dépendent d'aucune décision en attente** — commence par elles.
+- Les Tasks 4-5 (variant T2, vraie machine) **attendent trois arbitrages utilisateur** listés à l'[ADR 0004 §6](decisions/0004-perimetre-materiel-mac-t2.md) : taille d'écran, sort de macOS, ratification du périmètre. N'y touche pas avant.
+
+### Rappels de contexte
+Le tag `v0.3.0` reste suspendu (§14) jusqu'à la revue du front A. `main` reste interdit. La machine de banc est un **MacBook Pro 2019 (T2)** : la veille correspondante (`docs/veille/2026-08-29-mac-intel-t2.md`) établit que Touch ID est **définitivement** inaccessible sous Linux et que le disque est **invisible** sans noyau `linux-t2` — d'où le variant d'ISO.

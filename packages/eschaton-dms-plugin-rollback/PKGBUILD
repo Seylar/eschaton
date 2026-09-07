@@ -1,23 +1,30 @@
 pkgname=eschaton-dms-plugin-rollback
 pkgver=0.1.0
-pkgrel=3
+pkgrel=5
 pkgdesc="Plugin DMS Eschaton : liste des snapshots et restauration système"
 arch=(any)
 license=(MIT)
-depends=(dms-shell eschaton-base snapper polkit)
+# `eschaton-base>=0.1.0-23` : ce greffon a CESSÉ de livrer
+# `org.eschaton.rollback.policy` (pkgrel 3→4), l'action voyageant désormais avec
+# le binaire qu'elle contraint, dans le socle. Sans cette borne, un socle plus
+# ancien laisserait `pkexec` retomber sur l'action générique de polkit, dont le
+# défaut MÉMORISE l'autorisation — exactement le défaut critique corrigé le
+# 2026-08-30. Qui cesse de livrer l'action doit exiger le socle qui la livre.
+depends=(dms-shell 'eschaton-base>=0.1.0-23' snapper polkit)
 # Aucune règle polkit (`rules.d`) n'est livrée : les `<defaults>` de l'action
 # suffisent et exigent une authentification. Justification dans l'en-tête de
-# org.eschaton.rollback.policy.
-source=(plugin.json EschatonRollbackWidget.qml EschatonRollbackSettings.qml
-        org.eschaton.rollback.policy LICENSE)
-sha256sums=(SKIP SKIP SKIP SKIP SKIP)
+# org.eschaton.rollback.policy — désormais livré par `eschaton-base`, avec le
+# binaire `/usr/bin/eschaton-rollback` qu'il épingle (revue de sécurité C1,
+# 2026-08-30). Ce greffon n'est qu'une SURFACE : il ne doit pas être ce qui
+# décide si le binaire du socle est contraint, puisqu'il peut parfaitement ne
+# pas être installé — l'installeur ne pacstrape que le socle.
+source=(plugin.json EschatonRollbackWidget.qml EschatonRollbackSettings.qml LICENSE)
+sha256sums=(SKIP SKIP SKIP SKIP)
 
 package() {
   local plugin_dir="$pkgdir/etc/xdg/quickshell/dms-plugins/eschatonRollback"
   install -Dm644 plugin.json "$plugin_dir/plugin.json"
   install -Dm644 EschatonRollbackWidget.qml "$plugin_dir/EschatonRollbackWidget.qml"
   install -Dm644 EschatonRollbackSettings.qml "$plugin_dir/EschatonRollbackSettings.qml"
-  install -Dm644 org.eschaton.rollback.policy \
-    "$pkgdir/usr/share/polkit-1/actions/org.eschaton.rollback.policy"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

@@ -1,0 +1,8 @@
+[Unit]
+Description=Détection du shadowing du plugin Assistant Eschaton
+After=dms.service
+ConditionPathExists=/etc/xdg/quickshell/dms-plugins/eschatonAssistant/plugin.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/eschaton/eschaton-assistant-shadowing

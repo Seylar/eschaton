@@ -1,0 +1,13 @@
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}],"created":1787932386,"id":"chatcmpl-KsklD7NRiBWPYzNZFZ0ng4iOLRKR571r","model":"HuggingFaceTB/smollm-135M-instruct-v0.2-Q8_0-GGUF","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"**"}}],"created":1787932386,"id":"chatcmpl-KsklD7NRiBWPYzNZFZ0ng4iOLRKR571r","model":"HuggingFaceTB/smollm-135M-instruct-v0.2-Q8_0-GGUF","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"R"}}],"created":1787932386,"id":"chatcmpl-KsklD7NRiBWPYzNZFZ0ng4iOLRKR571r","model":"HuggingFaceTB/smollm-135M-instruct-v0.2-Q8_0-GGUF","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"é"}}],"created":1787932386,"id":"chatcmpl-KsklD7NRiBWPYzNZFZ0ng4iOLRKR571r","model":"HuggingFaceTB/smollm-135M-instruct-v0.2-Q8_0-GGUF","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"ponds"}}],"created":1787932386,"id":"chatcmpl-KsklD7NRiBWPYzNZFZ0ng4iOLRKR571r","model":"HuggingFaceTB/smollm-135M-instruct-v0.2-Q8_0-GGUF","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":"length","index":0,"delta":{}}],"created":1787932388,"id":"chatcmpl-KsklD7NRiBWPYzNZFZ0ng4iOLRKR571r","model":"HuggingFaceTB/smollm-135M-instruct-v0.2-Q8_0-GGUF","object":"chat.completion.chunk"}
+
+data: [DONE]

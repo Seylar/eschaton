@@ -101,7 +101,10 @@ main() {
   local ready=false
   config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/DankMaterialShell"
   settings="$config_dir/settings.json"
-  stamp="$config_dir/.eschaton-plugins-provisioned"
+  # v2 ajoute le daemon assistant. Le nouveau marqueur rejoue une fois le
+  # provisioning sur les comptes déjà passés par la vague Bureau ; toutes les
+  # opérations sont idempotentes et les choix de barre restent préservés.
+  stamp="$config_dir/.eschaton-plugins-provisioned-v2"
   dms_bin="${ESCHATON_DMS_BIN:-/usr/bin/dms}"
   systemctl_bin="${ESCHATON_SYSTEMCTL_BIN:-/usr/bin/systemctl}"
 
@@ -154,7 +157,7 @@ main() {
       # `plugins enable` peut rendre 0 pendant que DMS initialise encore ses
       # réglages, puis être annulé par le chargement tardif de plugin_settings.
       # Seul un état `loaded` stable autorise donc le marqueur one-shot.
-      for plugin in eschatonUpdate eschatonRollback; do
+      for plugin in eschatonUpdate eschatonRollback eschatonAssistant; do
         ensure_plugin_loaded "$dms_bin" "$plugin" || {
           log "$plugin n'est pas resté chargé après 15 s"
           return 1

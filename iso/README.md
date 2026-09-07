@@ -295,7 +295,7 @@ fermer sur `[eschaton]` serait vidée de son sens.
 l'arborescence que `pacstrap` a réellement produite. Le contrôle porte sur les
 *configurations pacman*, pas sur le mot lui-même — le motd nomme le dépôt en
 toutes lettres, et c'est voulu. (Ce raffinement n'est pas théorique : la première
-construction s'est arrêtée sur ce faux positif exact, cf. `tools/vm-dev.md` §20.)
+construction s'est arrêtée sur ce faux positif exact, cf. `tools/vm-dev.md` §36.)
 
 ## La garde d'épinglage du noyau
 

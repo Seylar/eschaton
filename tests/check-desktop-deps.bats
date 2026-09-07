@@ -10,6 +10,12 @@ setup() {
   [[ "$output" == *"attend un chemin"* ]]
 }
 
+@test "un PKGBUILD additionnel sans valeur rend aussi une erreur d'usage" {
+  run "$tool" --also-pkgbuild
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--also-pkgbuild attend un chemin"* ]]
+}
+
 @test "une panne de l'API Arch est une erreur d'outillage, pas un paquet absent" {
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   cat > "$BATS_TEST_TMPDIR/bin/curl" <<'EOF'

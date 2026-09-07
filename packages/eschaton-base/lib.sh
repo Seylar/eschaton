@@ -9,17 +9,207 @@ running_kernel_missing_modules() { # $1=/usr/lib/modules $2=$(uname -r)
   [[ ! -d "$1/$2" ]]
 }
 
-# `--yes` est l'interface stable d'Eschaton (CLI et plugin DMS), alors que
-# pacman nomme cette option `--noconfirm`. Transmettre `--yes` tel quel fait
-# échouer pacman avant même la résolution des paquets.
+# ————— Interdiction d'auto-approbation dans le chemin de mise à jour —————
+#
+# Jusqu'au 2026-08-30, cette fonction traduisait `--yes` — l'interface stable
+# d'Eschaton — en `--noconfirm`. Autrement dit, la mise à jour d'Eschaton
+# répondait « oui » à la place de l'utilisateur : aux remplacements de paquets,
+# aux retraits de conflits, aux imports de clés. C'est l'anti-modèle que le
+# projet bannit partout ailleurs, et il était actif ici, y compris par l'outil
+# `trigger_update` de l'assistant. La traduction est supprimée.
+#
+# Les options sont désormais REFUSÉES, pas ignorées. Une option silencieusement
+# ignorée laisse croire à l'appelant qu'elle a pris effet, et le prochain
+# lecteur la remet ; un refus rend la faute visible au premier appel.
+pacman_auto_approve_arg() { # $1=argument ; rc=0 si l'option répond à la place de l'humain
+  case "$1" in
+    # Répond à toutes les questions.
+    --noconfirm|--yes) return 0 ;;
+    # `--ask` préremplit les réponses par un masque de bits : même effet, moins
+    # lisible encore.
+    --ask|--ask=*) return 0 ;;
+    # `--overwrite` fait passer outre un conflit de fichiers — exactement la
+    # décision humaine de l'archétype `linux-firmware` (spec §4). La porte de
+    # secours de ce cas est `pacman` dans un terminal, jamais une option
+    # d'`eschaton-update` : l'ajouter « par robustesse » écraserait des fichiers
+    # que personne n'a examinés.
+    --overwrite|--overwrite=*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Rend les arguments destinés à pacman, inchangés, ou échoue si l'un d'eux
+# supprime une question. Rien n'est écrit sur la sortie standard en cas
+# d'échec : l'appelant n'a jamais à filtrer un résultat partiel.
 pacman_update_args() {
   local arg
   for arg in "$@"; do
-    case "$arg" in
-      --yes) printf '%s\n' --noconfirm ;;
-      *) printf '%s\n' "$arg" ;;
-    esac
+    if pacman_auto_approve_arg "$arg"; then
+      printf 'eschaton-update : option interdite dans le chemin de mise à jour : %s\n' "$arg" >&2
+      printf "  Une mise à jour ne répond jamais à la place de l'utilisateur.\n" >&2
+      return 1
+    fi
   done
+  (($# == 0)) || printf '%s\n' "$@"
+}
+
+# ————————— Pré-vol : « cette transaction demande-t-elle une décision ? » —————
+#
+# `checkupdates` répond à « y a-t-il des mises à jour ? », jamais à « faut-il
+# une décision humaine ? ». La seconde question est celle qui conditionne le
+# zéro-terminal.
+#
+# Le pré-vol emprunte le VRAI chemin (`pacman -Syu`, entrée standard sur
+# /dev/null), pas `--print`. Mesuré le 2026-08-30 : un `--print` est
+# structurellement AVEUGLE à l'interactivité. Son `cb_question` répond
+# lui-même, sans rien afficher — source amont `src/pacman/callback.c` :
+#
+#     if(config->print) {
+#             switch(question->type) {
+#                     case ALPM_QUESTION_INSTALL_IGNOREPKG:
+#                     case ALPM_QUESTION_REPLACE_PKG:
+#                             question->any.answer = 1;      /* OUI, en silence */
+#                             break;
+#                     default:
+#                             question->any.answer = 0;
+#                             break;
+#             }
+#             return;
+#     }
+#
+# Sur le vrai chemin, en revanche, EOF fait répondre NON à tout (§ `question()`
+# de util.c) : le pré-vol s'arrête au sommaire sans avoir rien téléchargé ni
+# installé, et il aura AFFICHÉ chaque question rencontrée.
+#
+# Viser les marqueurs plutôt que d'énumérer les messages : toute question de
+# pacman passe par `question()` ou `select_question()`, qui impriment l'un de
+# ces quatre motifs. Une invite ajoutée en amont demain sera donc attrapée sans
+# que personne n'ait à mettre cette liste à jour.
+#
+# Suppose une locale déterministe côté appelant (`LC_ALL=C.UTF-8`) : ces textes
+# sont traduits.
+update_marqueurs_invite() {
+  printf '%s\n' '\[Y/n\]|\[y/N\]|Enter a number|Enter a selection'
+}
+
+# La question du sommaire — la seule à laquelle l'humain a déjà répondu, devant
+# la modale polkit. C'est elle qu'on cherche à isoler des autres.
+update_marqueur_sommaire() {
+  printf '%s\n' 'Proceed with installation'
+}
+
+# Verdict du pré-vol, en un mot :
+#
+#   rien      il n'y a rien à mettre à jour ;
+#   propre    une seule question a été posée, et c'est le sommaire — la
+#             transaction peut recevoir l'unique réponse déjà authentifiée ;
+#   decision  une question A PRÉCÉDÉ le sommaire (remplacement, conflit, choix
+#             de fournisseur…). Eschaton s'arrête : y répondre serait répondre
+#             à la place de l'utilisateur ;
+#   erreur    la transaction ne se résout pas.
+#
+# On échoue fermé : tout ce qui n'est pas franchement propre est traité comme
+# une décision humaine.
+verdict_prevol() { # $1=fichier de sortie du pré-vol $2=code de retour de pacman
+  local invites invites_du_sommaire
+  # ON COMPTE LES INVITES, PAS LES LIGNES — corrigé le 2026-08-30 (revue de
+  # sécurité I2). `grep -cE` compte des LIGNES : deux invites qui partagent une
+  # ligne n'en valaient qu'une, le verdict tombait sur « propre », et le
+  # `printf 'y'` de la transaction allait approuver LA PREMIÈRE question — un
+  # remplacement de paquet — au lieu du sommaire. Ce n'est pas théorique :
+  # pacman écrit bien deux messages sur une même ligne, on l'a mesuré (le cas
+  # « … [Y/n]  there is nothing to do » ci-dessous, vm-dev.md §31.3).
+  # `grep -oE | wc -l` compte les OCCURRENCES. Le `|| true` protège du
+  # `pipefail` de l'appelant quand il n'y en a aucune.
+  invites=$({ grep -oE "$(update_marqueurs_invite)" "$1" || true; } | wc -l | tr -d ' ')
+  # Et l'unique invite doit être CELLE DU SOMMAIRE. On ne se contente pas de
+  # constater que le sommaire est quelque part dans le fichier : on exige que
+  # l'invite comptée soit portée par une ligne de sommaire. Sans cela, une
+  # question isolée sur une ligne et un sommaire sans invite lisible ailleurs
+  # passeraient ensemble pour un pré-vol propre.
+  invites_du_sommaire=$({ grep -F "$(update_marqueur_sommaire)" "$1" || true; } \
+    | { grep -oE "$(update_marqueurs_invite)" || true; } | wc -l | tr -d ' ')
+  # Les questions AVANT « rien à faire », et l'ordre n'est pas cosmétique.
+  # Mesuré le 2026-08-30 sur un vrai remplacement de paquet : après notre refus
+  # du remplacement, pacman n'avait plus rien à faire et écrivait
+  # « there is nothing to do » — sur la même ligne que la question. Tester
+  # « rien à faire » d'abord transformait donc une décision humaine en succès
+  # silencieux, ce qui est précisément le mensonge qu'on veut interdire.
+  if ((invites == 1)) && ((invites_du_sommaire == 1)); then
+    printf 'propre\n'
+  elif ((invites >= 1)); then
+    printf 'decision\n'
+  elif grep -qF 'nothing to do' "$1"; then
+    printf 'rien\n'
+  elif (($2 != 0)); then
+    printf 'erreur\n'
+  else
+    printf 'rien\n'
+  fi
+}
+
+# ————————— Le point de non-retour de pacman —————————
+#
+# Le supposer était exactement la faute. Mesuré le 2026-08-30 en VM
+# (`vm-dev.md` §34) : une annulation arrivée pendant le `post_upgrade` d'un
+# paquet laisse ce paquet RÉELLEMENT installé — `pacman -Q` rend `1.1-1` — alors
+# que l'état écrit disait `annule` et que le panneau annonçait « Rien n'a été
+# installé ».
+#
+# La frontière n'est pas dans notre code : elle est dans celui de pacman, et
+# pacman la publie. `alpm` écrit « transaction started » dans
+# `/var/log/pacman.log` au moment où il commence à modifier le système, puis une
+# ligne par paquet écrit. Tout ce qui précède — synchronisation des bases,
+# téléchargement, vérification des signatures, sommaire, crochets de
+# pré-transaction — n'écrit rien de cela. Mesuré aux DEUX bornes, et c'est le
+# fait qui rend la distinction utilisable :
+#
+#   - un `pacman -Sw` INTÉGRAL (téléchargement, intégrité, signatures) ne
+#     produit que sa ligne « Running 'pacman …' ». Une annulation pendant le
+#     téléchargement — la fenêtre la plus longue et la plus probable — n'est
+#     donc jamais prise pour tardive ;
+#   - une annulation pendant un crochet `PreTransaction` s'arrête sur
+#     « running '00-….hook'… », sans « transaction started », et le paquet reste
+#     à son ancienne version.
+#
+# Le préfixe `[ALPM]` est porteur, et l'ancrage dessus n'est pas cosmétique :
+# les scriptlets des paquets écrivent dans ce MÊME journal du texte arbitraire,
+# mais sous `[ALPM-SCRIPTLET]`. Sans l'ancre, un paquet tiers pourrait se faire
+# passer pour pacman — ou masquer une écriture réelle sous du bruit.
+#
+# On ne se contente pas de « transaction started » : les verbes par paquet sont
+# des faits accomplis, et ils resteraient lisibles si une version future de
+# pacman changeait sa ligne d'ouverture. Un retrait compte autant qu'une
+# installation : lui aussi modifie le système.
+transaction_pacman_engagee() { # $1=ce que le journal de pacman a gagné ; rc=0 si pacman a écrit
+  printf '%s\n' "$1" | grep -qE \
+    '^\[[^]]*\] \[ALPM\] (transaction started|(installed|upgraded|reinstalled|downgraded|removed) )'
+}
+
+# Un verrou pacman sans processus pacman est un verrou orphelin.
+#
+# Mesuré le 2026-08-30 : un `pacman` tué par SIGTERM pendant « Retrieving
+# packages… » ne retire PAS `/var/lib/pacman/db.lck` — l'annulation laissait
+# donc derrière elle exactement l'orphelin que la définition de terminé
+# interdit. pacman lui-même dit à l'utilisateur de supprimer ce fichier « si tu
+# es sûr qu'aucun gestionnaire de paquets ne tourne » : la condition est
+# précisément celle-ci, et on la vérifie au lieu de la supposer.
+verrou_pacman_orphelin() { # $1=chemin du verrou $2=nombre de pacman vivants
+  [[ -e $1 ]] || return 1
+  (($2 == 0))
+}
+
+# Un service en échec après une transaction réussie n'est PAS un succès.
+#
+# Archétype `dovecot >= 2.4` (nouvelle Arch du 2025-10-31) : `pacman` réussit,
+# et c'est le service qui ne redémarre plus, faute de migration de sa
+# configuration. Un updater qui ne lit que le code de retour annonce un succès
+# franc. On compare donc la liste des unités en échec avant et après, et on ne
+# retient QUE les nouvelles — celles qui étaient déjà cassées avant ne sont pas
+# le fait de cette mise à jour.
+unites_nouvellement_en_echec() { # $1=liste avant $2=liste après (une unité par ligne)
+  comm -13 <(printf '%s\n' "$1" | sed '/^[[:space:]]*$/d' | sort -u) \
+           <(printf '%s\n' "$2" | sed '/^[[:space:]]*$/d' | sort -u)
 }
 
 # `findmnt -no SOURCE` rend « /dev/vda2[/@] » pour un montage de sous-volume

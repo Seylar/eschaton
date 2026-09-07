@@ -42,7 +42,7 @@ Chaque sous-projet suit son propre cycle spec → plan → implémentation.
 1. **Socle** *(cette spec)* — le système de base bootable, reproductible, avec rollback.
 2. **Bureau** — Hyprland + Quickshell : barre, launcher, centre de contrôle, thème, gestes tactiles, clavier virtuel.
 3. **Assistant IA** — l'overlay omniprésent avec outils système, couche d'abstraction de providers.
-4. **Grand public** — installeur graphique, onboarding, mises à jour atomiques, chiffrement.
+4. **Grand public** — installeur graphique, onboarding, chiffrement. *(Découpé le 2026-08-28 en 4a Signature & keyring / 4b Première vraie machine / 4c Première ouverture de session — [veille SP4](../../veille/2026-08-28-sp4-grand-public.md). L'« atomique » initialement promis est requalifié par la même veille : le snapshot-avant-transaction prouvé suffit ; le pas utile est l'application hors-ligne des mises à jour et la couverture du trou ESP — décision à veto utilisateur, argumentaire veille §4.)*
 5. **Gaming** — Steam, Proton, drivers GPU, sur vrai matériel x86_64.
 
 ### 1.3 Trajectoire vers le x86_64 grand public

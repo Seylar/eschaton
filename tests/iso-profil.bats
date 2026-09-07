@@ -73,7 +73,7 @@ paquets() { grep -vE '^[[:space:]]*(#|$)' "$PROFIL/packages.x86_64"; }
 
 @test "la garde anti-succès muet couvre AUSSI le marqueur générique de pacman" {
   # La panne du 2026-08-29 a laissé DEUX lignes au journal (tools/vm-dev.md
-  # §19.3) : celle de mkinitcpio, et « error: command failed to execute
+  # §35.3) : celle de mkinitcpio, et « error: command failed to execute
   # correctly » — le marqueur que pacman pose pour N'IMPORTE QUEL crochet en
   # échec. Ne guetter que la première, c'est n'attraper que la panne connue.
   motifs="$(sed -n "s/^motifs='\\(.*\\)'\$/\\1/p" "$BATS_TEST_DIRNAME/../iso/build-iso")"

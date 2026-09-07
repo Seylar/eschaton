@@ -58,6 +58,27 @@ setup() { source "$BATS_TEST_DIRNAME/../installer/lib.sh"; }
   [[ "$output" == *"default_entry: Eschaton/linux"* ]]
 }
 
+@test "l'installeur vérifie que les actions polkit contraignent bien les binaires" {
+  # REVUE DE SÉCURITÉ I6. Deux façons de perdre la contrainte, aucune visible :
+  # l'action absente — `pkexec` retombe alors sur l'action générique, qui
+  # autorise l'authentification depuis une session distante ou inactive — ou
+  # l'action MASQUÉE par un fichier de même nom dans /etc/polkit-1/actions, qui
+  # prime sur /usr/share, silencieusement. L'installeur contrôle les deux avant
+  # de dire « terminé ».
+  run "$BATS_TEST_DIRNAME/../installer/eschaton-install" --dry-run --disk /dev/vda --user seylar
+  [ "$status" -eq 0 ]
+  for action in org.eschaton.update org.eschaton.rollback; do
+    [[ "$output" == *"/mnt/usr/share/polkit-1/actions/$action.policy"* ]] || {
+      echo "l'installeur ne vérifie pas la présence de $action"
+      return 1
+    }
+    [[ "$output" == *"/mnt/etc/polkit-1/actions/$action.policy"* ]] || {
+      echo "l'installeur ne vérifie pas le masquage de $action par /etc"
+      return 1
+    }
+  done
+}
+
 # --- différés d'installeur routés au SP4 (bilan du Socle §18) -----------------
 
 @test "une option de valeur en DERNIER token rend un message utile, pas « unbound variable »" {

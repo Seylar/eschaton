@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+log() { printf 'eschaton-assistant-shadowing: %s\n' "$*" >&2; }
+
+main() {
+  local plugins_dir manifest id
+  local dms_bin="${ESCHATON_DMS_BIN:-/usr/bin/dms}"
+  plugins_dir="${XDG_CONFIG_HOME:-$HOME/.config}/DankMaterialShell/plugins"
+
+  [[ -d "$plugins_dir" ]] || return 0
+  while IFS= read -r -d '' manifest; do
+    if ! id=$(/usr/bin/jq -r '.id // empty' "$manifest" 2>/dev/null); then
+      log "manifeste utilisateur illisible ignoré : $manifest"
+      continue
+    fi
+    [[ "$id" == eschatonAssistant ]] || continue
+
+    log "ATTENTION : $manifest remplace le plugin système eschatonAssistant"
+    "$dms_bin" notify \
+      "Assistant Eschaton remplacé" \
+      "Un plugin utilisateur portant le même identifiant masque la version installée par le système." \
+      --app "Eschaton" --icon "warning" --timeout 12000 \
+      || log "notification DMS impossible"
+    return 0
+  done < <(/usr/bin/find "$plugins_dir" -mindepth 2 -maxdepth 2 \
+            -type f -name plugin.json -print0)
+}
+
+main "$@"

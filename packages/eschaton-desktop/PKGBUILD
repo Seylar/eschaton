@@ -1,6 +1,6 @@
 pkgname=eschaton-desktop
 pkgver=0.1.0
-pkgrel=2
+pkgrel=4
 pkgdesc="Meta-paquet du bureau Eschaton : Hyprland + DMS, session graphique complète"
 arch=(any)
 license=(MIT)
@@ -70,6 +70,16 @@ depends=(
   # alpm qui applique ce préset sont dans eschaton-desktop-config.
   greetd
 
+  # Backend freedesktop Secret Service de la SESSION, consommé aujourd'hui par
+  # le plugin Assistant via libsecret/secret-tool. `libsecret` n'est qu'un
+  # client : sans démon, ses appels échouent avec « The name is not
+  # activatable ». Cette dépendance vit volontairement dans le meta bureau et
+  # non dans le plugin (ADR 0003 §8.1). Sous l'autologin actuel, le trousseau ne
+  # peut pas être déverrouillé par PAM ; l'UI prévient qu'un mot de passe vide
+  # laisserait ses secrets en clair au repos. SP4 devra prouver le
+  # déverrouillage PAM au login authentifié.
+  gnome-keyring
+
   # --- Élévation de privilège -------------------------------------------------
   # `polkit` SEUL, et rien de plus. Il faut `polkitd` ; il ne faut AUCUN agent
   # d'authentification externe. Le « Polkit ····· Not available » de `dms doctor`
@@ -88,12 +98,14 @@ depends=(
   noto-fonts
 
   # --- Paquets Eschaton du bureau ---------------------------------------------
-  # Les deux plugins sont les Tasks 5 et 6. Le plugin rollback remplit la
+  # Les trois plugins sont les panneaux système du Bureau et de l'Assistant.
+  # Le plugin rollback remplit la
   # condition de sortie de btrfs-assistant : liste, confirmation, restauration
   # et invitation au redémarrage vivent désormais directement dans DMS.
   eschaton-desktop-config
   eschaton-dms-plugin-update
   eschaton-dms-plugin-rollback
+  eschaton-dms-plugin-assistant
 )
 # VOLONTAIREMENT ABSENTS — chacun a été examiné, aucun n'est un oubli :
 # - `seatd` : arrive par `aquamarine`, dépendance d'`hyprland` (vm-dev §12.8) ; et

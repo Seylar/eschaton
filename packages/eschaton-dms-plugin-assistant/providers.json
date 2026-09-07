@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "updated": "2026-08-28",
+  "providers": [
+    {
+      "id": "ramalama-local",
+      "name": "RamaLama local",
+      "base_url": "http://127.0.0.1:8080/v1",
+      "format": "openai",
+      "model": "HuggingFaceTB/smollm-135M-instruct-v0.2-Q8_0-GGUF",
+      "requires_key": false
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "base_url": "https://api.openai.com/v1",
+      "format": "openai",
+      "model": "gpt-4.1-mini",
+      "requires_key": true
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "base_url": "https://api.anthropic.com",
+      "format": "anthropic",
+      "model": "claude-sonnet-5",
+      "requires_key": true
+    }
+  ]
+}
