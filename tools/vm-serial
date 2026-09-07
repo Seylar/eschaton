@@ -143,6 +143,15 @@ def wait_for(pattern, timeout, off=None):
     return False, clean(read_from(start))
 
 
+def write_chunk(fd, payload, offset):
+    """Écriture non bloquante : conserver l'offset exact, même après EAGAIN."""
+    try:
+        written = os.write(fd, payload[offset:offset + 64])
+    except BlockingIOError:
+        return offset
+    return offset + written
+
+
 def cmd_daemon(argv):
     if len(argv) != 2:
         print("usage: vm-serial daemon <pty> <workdir>", file=sys.stderr)
@@ -166,8 +175,15 @@ def cmd_daemon(argv):
 
     last_scan = 0.0
     hung_since = None                       # début de la suspicion de raccrochage
+    pending_path = None
+    payload = b""
+    offset = 0
+    next_write = 0.0
     while True:
-        if select.select([fd], [], [], 0.2)[0]:
+        # Continuer à drainer la sortie pendant un transfert : l'écho du shell
+        # peut remplir le tty. L'ancienne boucle écrivait tout avant de relire,
+        # puis rejouait le fichier DEPUIS ZÉRO après EAGAIN.
+        if select.select([fd], [], [], 0.02 if pending_path else 0.2)[0]:
             try:
                 data = os.read(fd, 65536)
             except OSError as exc:          # EIO : le maître du pty a fermé
@@ -193,23 +209,29 @@ def cmd_daemon(argv):
                     return 0
                 time.sleep(0.2)             # attente passive, pas de boucle chaude
         now = time.time()
-        if now - last_scan > 0.15:
+        if pending_path is None and now - last_scan > 0.15:
             last_scan = now
-            for p in sorted(glob.glob(os.path.join(inbox, "*.snd"))):
-                with open(p, "rb") as f:
+            queued = sorted(glob.glob(os.path.join(inbox, "*.snd")))
+            if queued:
+                pending_path = queued[0]
+                with open(pending_path, "rb") as f:
                     payload = f.read()
-                # Par petits morceaux : la ligne série est lente (115200 bauds)
-                # et un envoi massif déborde le tampon du tty de l'invité.
-                try:
-                    for i in range(0, len(payload), 64):
-                        os.write(fd, payload[i:i + 64])
-                        time.sleep(0.02)
-                except OSError as exc:      # écrire sur une ligne raccrochée
-                    note(f"écriture impossible sur {dev} ({exc.strerror})")
-                    if hung_since is None:
-                        hung_since = time.time()
-                    break
-                os.rename(p, p[:-4] + ".sent")
+                offset = 0
+        if pending_path is not None and now >= next_write:
+            try:
+                offset = write_chunk(fd, payload, offset)
+            except OSError as exc:
+                note(f"écriture impossible sur {dev} ({exc.strerror}), "
+                     f"{offset}/{len(payload)} octets envoyés ; arrêt sans rejeu. "
+                     f"Charge conservée dans {pending_path}")
+                log.close()
+                os.close(fd)
+                return 1
+            next_write = now + 0.02
+            if offset == len(payload):
+                os.rename(pending_path, pending_path[:-4] + ".sent")
+                pending_path = None
+                payload = b""
 
 
 def cmd_run(argv):

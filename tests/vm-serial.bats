@@ -29,3 +29,9 @@ assert_usage_without_traceback() {
   run "$tool" wait '[' 1
   assert_usage_without_traceback
 }
+
+@test "la console série ne perd ni ne rejoue les octets après une écriture partielle" {
+  run python3 "$BATS_TEST_DIRNAME/vm-serial-write.py"
+  printf '%s\n' "$output"
+  [ "$status" -eq 0 ]
+}

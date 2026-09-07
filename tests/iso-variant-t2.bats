@@ -263,18 +263,15 @@ plan_installation() { # $1 = valeur du marqueur ou "" ; $@ suivants = arguments
   [ "$(printf '%s\n' "$liste" | wc -l | tr -d ' ')" -eq 6 ]
 }
 
-@test "le PÉRIMÈTRE de la garde est écrit, pas subi" {
-  # M-2 : la liste couvre les six noyaux officiels et pas les noyaux tiers
-  # (`linux-mainline`, `linux-xanmod`, AUR). C'est correct pour la menace visée
-  # — un noyau amont qui arrive sans que personne ne l'ait voulu — mais un
-  # lecteur doit pouvoir le savoir sans relire la liste ligne à ligne.
-  grep -q 'PÉRIMÈTRE' "$GARDE"
-  grep -q 'linux-mainline' "$GARDE"
-  # Le comportement correspondant, constaté : un noyau tiers PASSE.
-  run bash "$GARDE" refuser-noyau-standard <<<'linux-xanmod'
-  [ "$status" -eq 0 ]
-  # …et le README le dit aussi, là où l'auteur le lira.
-  grep -q 'linux-mainline\|linux-xanmod' "$RACINE/iso/README.md"
+@test "la garde bloque les noms connus même dans une transaction avec noyau tiers" {
+  # Limite explicite : la liste ne détecte pas les noyaux tiers. Leur présence
+  # ne doit toutefois pas masquer un noyau que la garde sait reconnaître.
+  for noyau in linux-mainline linux-xanmod; do
+    run bash "$GARDE" refuser-noyau-standard <<<"$noyau"
+    [ "$status" -eq 0 ]
+    run bash "$GARDE" refuser-noyau-standard <<<"$noyau"$'\nlinux'
+    [ "$status" -ne 0 ]
+  done
 }
 
 @test "l'échappatoire proposée par la garde n'est pas bloquée par la garde" {

@@ -5798,3 +5798,244 @@ aucune installation via pacstrap réelle et aucun rollback matériel n'ont été
 exécutés. La construction T2 reste interdite en CI ; les builds de paquets
 seront vérifiés par la CI ordinaire. Les preuves de construction et de pacman
 aux §36.3–36.5 concernent la version antérieure, pas ce nouveau contenu.
+
+## 37. Reprise Codex : audit et corrections (2026-09-07)
+
+Le numéro 36 reste réservé à la preuve T2 portée par sa branche. Cette section
+concerne `codex/audit-reprise-2026-09-07`, créée depuis `handoff=32c9e70` dans
+`.worktrees/socle`. Racine locale : `main=1b10b85` ; référence distante
+actualisée : `origin/main=3d8feb6`. Ne pas effectuer la revue sur le checkout
+racine périmé. Voir [l'audit global](../docs/audits/2026-09-07-projet-global.md).
+
+### 37.1 Vérifications hôte
+
+Commandes réellement exécutées depuis le worktree, le 2026-09-07 :
+
+- `bats tests/` avant corrections : **146/146**.
+- `bats tests/` après corrections : **154/154**, code 0.
+- `node --test tests/assistant-lifecycle.cjs` : **5/5**.
+- `node --test tests/update-logic.cjs` : **3/3**.
+- `python3 tests/vm-serial-write.py` : **4/4**, dont un pseudo-terminal réel
+  avec 12 288 octets envoyés et leur écho intégralement relu.
+- La commande shellcheck complète du workflow CI : code 0.
+- `/usr/sbin/visudo -cf packages/eschaton-base/10-wheel.sudoers` :
+  `packages/eschaton-base/10-wheel.sudoers: parsed OK`.
+- `python3 -m py_compile tools/vm-serial` et `git diff --check` : code 0.
+
+Les tests Node évaluent les fonctions/expressions lues dans les QML de
+production. Ils ne font pas tourner les bindings Qt ni le rendu. L'ancien test
+qui cherchait le mot `succes-degrade` dans une expression a été remplacé par
+une vérification exécutée de sa valeur.
+
+Le scénario de provisioning simule 65 ticks avant création de settings, pas
+65 secondes réellement écoulées. Il exécute le programme complet avec des
+binaires DMS/systemctl doublés et vérifie marqueur, barre, préservation du
+thème et absence de rejeu. Aucun test ne prétend avoir observé les pastilles
+sur un écran lent réel.
+
+### 37.2 Dépendances réelles
+
+`tools/check-desktop-deps --also-pkgbuild packages/eschaton-dms-plugin-assistant/PKGBUILD`
+a rendu, après un premier échec HTTP 502 de l'API Arch :
+
+```text
+==> OK — 17 dépendances présentes des deux côtés.
+```
+
+Extrait du tableau réellement obtenu :
+
+```text
+dms-shell       1.6.0-2 (extra)       1.6.0-2 (extra)
+greetd          0.10.3-2 (extra)      0.10.3-2 (extra)
+gnome-keyring   1:50.0-1 (extra)      1:50.0-1 (extra)
+hyprland        0.56.2-2 (extra)      0.56.1-3 (extra)
+```
+
+Le contrôle supplémentaire SP4c
+`tools/check-desktop-deps --extra-dep greetd-regreet --extra-dep cage`
+a également rendu 0 : `greetd-regreet 0.5.0-1` et `cage 0.3.1-1` des deux côtés.
+Ce sont des lectures des index, pas des installations de ces candidats.
+
+### 37.3 Machine de test et incident de transfert
+
+UTM a d'abord rendu les deux VM arrêtées. Seule `eschaton-dev` a été démarrée.
+L'agent QEMU n'est pas installé ; `utmctl attach` a donné `/dev/ttys006`.
+Accès par `tools/vm-serial`, session du compte de banc `seylar`.
+
+Sortie réelle dans l'invité :
+
+```text
+aarch64
+systemd 261.2-1
+dms-shell 1.5.3-1
+quickshell 0.3.1-1
+greetd 0.10.3-2
+gnome-keyring 1:50.0-1
+/usr/bin/makepkg
+active
+```
+
+Le premier transfert d'une archive de sources par la console a expiré après
+40 s. Le démon écrivait toute une charge sans drainer l'écho ; après une
+saturation/erreur d'écriture, il pouvait reprendre le même `.snd` à zéro.
+Sa lecture ignorait aussi le nombre d'octets réellement accepté par `os.write`.
+Le transfert a été interrompu, la charge mise de côté et le shell resynchronisé.
+
+Correction : un chunk par itération, lecture intercalée, offset conservé sur
+EAGAIN/écriture partielle, arrêt explicite sur erreur fatale. Après relance du
+démon et désactivation de l'écho, **le même transfert** a rendu :
+
+```text
+transfer_return_code=0
+[rc=0]
+```
+
+Les deux modifications de conditions (nouveau démon et écho désactivé) sont
+signalées : ce résultat n'isole pas leur contribution. Le test pseudo-terminal
+avec écho valide séparément le nouveau démon. Tous les fichiers de validation
+ont été placés sous `/tmp/eschaton-audit` dans l'invité, sans installer les
+nouveaux paquets sur la session de dogfooding.
+
+### 37.4 Qt et systemd dans la VM
+
+Premier emplacement du harnais sous `tests/qml` refusé par le scanner Quickshell
+(module importé hors de la racine de configuration). Harnais déplacé à côté
+du core, comme les harnais existants, sans modifier son contrat testé.
+
+```sh
+timeout 15 env QT_QPA_PLATFORM=offscreen qs -p \
+  /tmp/eschaton-audit/packages/eschaton-dms-plugin-assistant/CancellationHarness.qml
+```
+
+```text
+INFO: Configuration Loaded
+DEBUG qml: ASSISTANT_CANCEL_OK two_results=true no_followup=true stubs=false
+[rc=0]
+```
+
+Des avertissements de scan sur les imports DMS des fichiers UI voisins sont
+émis ; ils n'empêchent pas le core de se charger. Ce test exerce **le core Qt**,
+pas l'affichage du panneau DMS. Deux résultats d'outils après Stop, dont une
+action annoncée appliquée, sont conservés sans créer une nouvelle requête.
+
+```sh
+systemd-analyze --user verify \
+  /tmp/eschaton-audit/packages/eschaton-desktop-config/eschaton-dms-provision.service
+```
+
+Sortie vide, **code 0**. Syntaxe et dépendances vérifiées ; les trois reprises
+sur erreur et une nouvelle ouverture graphique restent à éprouver dans une
+session dédiée. La VM ne reçoit aucune modification de PAM ou d'auto-login.
+
+### 37.5 Construction des paquets modifiés
+
+Dans la VM ARM, comme utilisateur ordinaire, trois exécutions de
+`makepkg -f --nodeps --nocheck` depuis les répertoires copiés :
+
+```text
+Création terminée : eschaton-desktop-config 0.1.0-11
+Création terminée : eschaton-dms-plugin-assistant 0.1.0-11
+Création terminée : eschaton-dms-plugin-update 0.1.0-16
+[rc=0]
+```
+
+Les dépendances ont volontairement été ignorées **pour ce test d'empaquetage** ;
+leur disponibilité est vérifiée séparément au §37.2. Aucun `pacman -U`, aucune
+mise à jour système, aucun rollback n'a été exécuté. La construction complète
+et le namcap bi-architecture restent du ressort de la CI.
+
+### 37.6 Relecture T2 et limites
+
+Dans le worktree T2 préexistant :
+`bats tests/installer.bats tests/iso-variant-t2.bats` → **84/84**, code 0.
+La version committée conserve bien `--draft`. Le correctif d'installation C-2
+est seulement dans les modifications locales, et son `pkgrel=1` n'a pas été
+relevé. Les autres réserves sont dans l'audit, avec leur chemin de code.
+**Aucune modification n'a été faite dans ce worktree.**
+
+Non exécutés : construction ISO, démarrage T2, rollback après changement de
+noyau, installation du greeter/PAM proposé, test visuel du nouveau panneau,
+compatibilité des plugins avec DMS 1.6. Ces items ne sont pas déclarés terminés.
+
+### 37.7 CI distante et livraison
+
+Commit de corrections : `31a90c2`. Le push de
+`codex/audit-reprise-2026-09-07` vers `origin` a été refusé par la revue
+automatique d'autorisation. Vérification complémentaire en lecture seule :
+
+```json
+{"login":"Seylar"}
+{"isPrivate":false,"nameWithOwner":"Seylar/eschaton","url":"https://github.com/Seylar/eschaton","viewerPermission":"ADMIN"}
+```
+
+Après cette preuve d'appartenance, la revue a maintenu son refus : publier
+l'ensemble du code et des documents sur ce dépôt **public** demande une
+autorisation explicite. Aucun push, aucune PR, aucun tag et aucune fusion n'ont
+donc été réalisés. La CI distante **n'a pas été lancée pour ces corrections**.
+Les contrôles locaux et les builds ARM ci-dessus sont verts ; ils ne doivent
+pas être présentés comme une CI bi-architecture verte. Pour finir cette porte :
+autoriser le push de cette branche vers `Seylar/eschaton`, ouvrir la PR brouillon,
+attendre les deux builds et joindre leurs résultats.
+
+
+### 37.8 Autorisation de publication et reprise du pilotage
+
+Seylar a répondu « yes vas y » à la demande de publication, puis « t'as full
+autorité, c'est toi qui reprend le sujet ». Le blocage d'autorisation décrit au
+§37.7 est donc levé. La branche a été poussée avec succès :
+
+```text
+[new branch] codex/audit-reprise-2026-09-07 -> codex/audit-reprise-2026-09-07
+```
+
+[PR #6](https://github.com/Seylar/eschaton/pull/6) ouverte en brouillon.
+Première exécution CI : [34132966375](https://github.com/Seylar/eschaton/actions/runs/34132966375),
+sur `cbc98f15e30aa22241cec928e07ce5d56e923170`, en cours au moment de cette
+entrée. Aucun tag ni aucune fusion. Le pilotage et les revues sont désormais
+assumés par Codex ; les réserves de validation du §37 restent applicables.
+
+
+### 37.9 Résultats distants et jonction avec T2
+
+[Première CI #34132966375](https://github.com/Seylar/eschaton/actions/runs/34132966375),
+sur `cbc98f1` : **success**, lint et builds x86_64/aarch64 verts. Les trois
+paquets modifiés ont été construits sur les deux architectures ; namcap émet
+les avertissements attendus d'un conteneur sans dépendances graphiques
+installées. Ce n'est toujours pas une validation du rendu sous DMS 1.6.
+
+[CI de la tête documentaire `2af131b`](https://github.com/Seylar/eschaton/actions/runs/34133131678) :
+le build x86_64 a échoué pendant le téléchargement de GraalVM après plusieurs
+HTTP 504 ; le lint est vert. Extrait réel :
+
+```text
+curl: (22) The requested URL returned error: 504
+==> ERROR: Failure while downloading https://github.com/graalvm/graalvm-ce-builds/releases/download/graal-25.1.3/graalvm-community-jdk-25i1-25.0.3_linux-x64_bin.tar.gz
+```
+
+Jonction locale de la vague générale avec la reprise T2 `0b23a23` : aucun
+conflit de code. Le conflit d'ajout en fin de journal est résolu en conservant
+les preuves §36 puis §37, sans renumérotation ni suppression des résultats.
+
+
+Validation de la jonction : un premier passage a échoué sur une assertion qui
+exigeait `linux-mainline` dans un commentaire supprimé. Ce test documentaire
+est remplacé par l'exécution de transactions simulées : noyau tiers seul,
+puis noyau tiers accompagné de `linux` (refus attendu). Ce changement n'élargit
+pas le périmètre de la garde.
+
+
+Passage final après remplacement de l'assertion documentaire :
+
+```text
+bats tests/
+1..214
+# 214 « ok », code 0
+# shellcheck complet du workflow : code 0
+packages/eschaton-base/10-wheel.sudoers: parsed OK
+# python3 -m py_compile tools/vm-serial : code 0
+# git diff --check : code 0
+```
+
+Le build ARM de la tête `2af131b` a fini vert. Le job x86_64 victime du 504 a
+été relancé seul avec `gh run rerun 34133131678 --failed`. Aucun assouplissement
+de version épinglée, de somme de contrôle ou de validation n'est appliqué.
