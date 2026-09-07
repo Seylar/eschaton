@@ -19,6 +19,21 @@
 
 ---
 
+## Cap produit rectifié — expert intégré au système
+
+Seylar a précisé que l'IA doit entretenir, réparer et personnaliser le système,
+et servir aussi d'agent généraliste. Autonomie confirmée : **corriger seul les
+problèmes courants réversibles ; solliciter pour les changements importants**.
+Référence : [ADR 0005](decisions/0005-agent-systeme.md).
+
+La sidebar à trois outils et la connexion Codex de la PR 8 sont des briques v1.
+Elles ne valident pas le cœur du produit. Prochaine preuve : une demande de
+personnalisation menée jusqu'au résultat vérifié et annulable, puis un incident
+contrôlé détecté et réparé sans conversation ouverte. Le moteur durable,
+la politique de mandat, les observations système et les tâches généralistes
+restent à construire. L'architecture proposée est détaillée dans l'ADR ;
+aucune extension de privilèges n'est déployée par cette décision documentaire.
+
 ## Priorité active — VM et abonnements IA
 
 Retour pilote : lenteur générale, IA centrale bancale, rendu visuel inachevé.
@@ -50,7 +65,7 @@ Elles ont toutes été payées par un incident réel. Ne les renégocie pas en c
 3. **`pkgrel` bumpé dès qu'un octet du paquet change** — même pour un commentaire. Le dépôt est immuable : jamais deux contenus différents sous un même nom.
 4. **Preuves dans `tools/vm-dev.md`**, numérotées, avec les sorties réelles. Ce qui n'a pas été exécuté est **annoncé comme non exécuté**. N'invente jamais une sortie.
 5. **ADR 0002** : toute spec s'ouvre par une passe de veille datée, et **tout constat de terrain qui contredit un document remonte dans ce document**. Mais vérifie contre la **bonne base** : une « correction » mesurée sur un `main` périmé a déjà produit deux affirmations fausses (voir §2, I-1).
-6. **Jamais d'auto-approbation.** Une action privilégiée = une authentification humaine. Pas de `--noconfirm` dans un chemin de mise à jour. Pas de second chemin privilégié.
+6. **Autorité indépendante du modèle.** Cible actée par ADR 0005 : réparations courantes réversibles automatiques sous mandat, sollicitation pour les changements importants. Les portes privilégiées v1 restent inchangées jusqu’à validation du remplaçant ; aucune option globale d’auto-approbation ne réalise cette architecture.
 7. **Le contenu système est hostile par construction** (descriptions de snapshots, noms de paquets, journaux) : données étiquetées, jamais concaténées à un prompt système, jamais interprétées comme une approbation.
 8. **Pas de migrations.** Les hooks alpm idempotents sont la seule exception admise.
 9. **Paquets `arch=(any)`.** `repo/build-repo` construit tous les PKGBUILD dans les **deux** jobs d'architecture : un `arch=(x86_64)` casserait le job aarch64.
@@ -106,7 +121,7 @@ livrable est donc une **VM fonctionnelle et réactive**, installée avec les
 corrections actuelles, puis réellement utilisée. Les PR vertes ne ferment pas
 ce point. Voir le [plan de stabilisation et ses critères de passage](superpowers/plans/2026-09-07-vm-dogfooding.md).
 
-Ordre : diagnostic du banc et mise à niveau effective, correction des parcours,
+Ordre rectifié : fluidité du banc et première preuve de l’agent système (ADR 0005), puis correction des parcours,
 connexion/trousseau/verrouillage, audio/réseau, mise à jour/rollback, prise en
 main. Le travail T2 est conservé ; la qualification du vrai Mac vient ensuite.
 

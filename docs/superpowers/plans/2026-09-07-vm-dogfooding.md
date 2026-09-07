@@ -1,5 +1,10 @@
 # Priorité de reprise : une VM utilisable avant le Mac
 
+> **Cap complété par le pilote : [expert intégré au système](../../decisions/0005-agent-systeme.md).**
+> La VM doit prouver l'autonomie utile, la réparation et la personnalisation,
+> en plus de la conversation. Un panneau connecté ne ferme pas ce jalon.
+
+
 Date : 2026-09-07. Pilotage : Codex, sur délégation de Seylar.
 Retour utilisateur : « la VM est vraiment bancale encore ».
 Références : [veille de session](../../veille/2026-09-07-premiere-session.md),
