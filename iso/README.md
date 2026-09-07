@@ -489,28 +489,30 @@ Liste tenue de la veille §3, à ne pas édulcorer :
 | **Bluetooth** | Perturbé quand le Wi-Fi 2,4 GHz est actif simultanément. |
 | **Chiffrement** | Celui de la T2 est transparent pour Linux : au repos, ce sera **LUKS** ou rien. |
 
-## Points ouverts — l'auteur seul peut les trancher
+## Banc personnel confirmé et vérifications restantes
 
-Ils sont **paramétrés, pas figés** : y répondre ne demande pas de repenser le
-variant.
+Le 2026-09-07, l'utilisateur confirme **A1990**, **Eschaton uniquement** et
+**dogfooding personnel avant diffusion**. Le banc est donc un MacBook Pro
+15 pouces avec graphique Intel + AMD, pas le cas 13 pouces/iGPU seul. La
+Radeon exacte reste à relever : voir [la vérification des sources](../docs/veille/2026-09-07-premiere-session.md#complément-du-2026-09-07--machine-et-priorité-confirmées).
 
-1. **Taille d'écran** (ADR 0004 §6.1) — 13″ (iGPU seul) ou 15″/16″ (Radeon
-   dédiée). La réponse est l'option `--gpu` :
+Les options de construction restent explicites :
 
-   | Valeur | Effet |
-   |---|---|
-   | `indetermine` (défaut) | aucun paramètre GPU supposé |
-   | `igpu` | 13″ : rien à ajouter, il n'y a pas de bascule |
-   | `amd` | 15″/16″ : `apple_gmux.force_igd=y` |
+| Valeur `--gpu` | Effet |
+|---|---|
+| `indetermine` (défaut) | aucun paramètre GPU supposé |
+| `igpu` | rien à ajouter pour le cas iGPU seul |
+| `amd` | ajoute `apple_gmux.force_igd=y` |
 
-   Et **même sans réponse, l'image est utilisable** : elle offre au menu une
-   entrée `nomodeset` qui couvre le cas de l'écran noir. La question ne bloque
-   donc pas la construction — elle affine le défaut.
-2. **Sort de macOS** (ADR 0004 §6.2) — **sans effet sur l'image** : c'est une
-   décision qui se joue à l'étape 5 ci-dessus, dans les arguments d'installation.
-   La recommandation de la veille §8 reste l'effacement complet (l'ESP d'Apple
-   fait 300 Mo contre les 4 Gio exigés, et une mise à jour macOS casse le boot).
-3. **Ratification du périmètre** (ADR 0004 §6.3) — l'ADR est encore *proposé*.
+Le mode `amd` est un candidat d'essai pour ce banc ; sa compatibilité n'est
+pas encore prouvée. L'entrée de secours `nomodeset` n'est pas davantage une
+garantie de démarrage ou d'accélération graphique. Le choix qui fonctionne
+sur le média devra être vérifié sur le système installé.
+
+Le choix Eschaton seul écarte le travail de cohabitation macOS. Le périmètre
+T2 reste cloisonné par décision de pilotage dans l'[ADR 0004](../docs/decisions/0004-perimetre-materiel-mac-t2.md).
+L'installation réelle et le rollback restent à éprouver ; les conditions de
+publication de l'image ne sont pas levées par le dogfooding.
 
 Un quatrième point y figurait — **l'architecture du paquet `eschaton-t2`**, que
 l'ADR §4.1 annonçait « forcément non-`any` ». Il est **clos** : le §4.1 a été

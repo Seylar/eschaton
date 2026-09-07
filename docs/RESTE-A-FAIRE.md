@@ -5,6 +5,60 @@
 - **État de référence distant** : `origin/main` = `1d87d83` (passation #5 fusionnée), version de code **`v0.3.0`** à `3d8feb6`. Le Socle, le Bureau, l'Assistant et l'ISO nominal y sont fusionnés. Attention : le checkout racine `main` est encore à `1b10b85`.
 - **Reprise Codex du 2026-09-07** : branche `codex/audit-reprise-2026-09-07`, depuis `handoff` à `32c9e70`, dans `.worktrees/socle`. [Audit global](audits/2026-09-07-projet-global.md), preuves §37 de `tools/vm-dev.md`. Corrections enregistrées localement (`31a90c2`) : 154 tests, core Quickshell et builds ARM verts. **Publication explicitement autorisée : [PR #6](https://github.com/Seylar/eschaton/pull/6). [Première CI](https://github.com/Seylar/eschaton/actions/runs/34132966375) verte sur les deux architectures ; deuxième exécution touchée par un HTTP 504 de GraalVM (§37.9).** Aucune fusion dans `main` ni publication ISO.
 
+
+### Cap utilisateur confirmé le 2026-09-07
+
+- **Machine personnelle** : MacBook Pro A1990, 15 pouces, GPU Intel + AMD ;
+  modèle exact de Radeon et inventaire à relever ([source et limites](veille/2026-09-07-premiere-session.md#complément-du-2026-09-07--machine-et-priorité-confirmées)).
+- **Installation visée** : Eschaton uniquement, sans cohabitation macOS.
+- **Premier objectif** : usage quotidien personnel satisfaisant ; diffusion
+  ensuite, conditionnée aux résultats. Priorité à la connexion sécurisée,
+  au démarrage T2, au réseau/audio/reprise et au couple mise à jour/rollback.
+- **Cloisonnement T2 maintenu par décision de pilotage** : ADR 0004 accepté
+  pour ce dogfooding ; cela ne promet pas de support public des Mac T2.
+
+---
+
+## Cap produit rectifié — expert intégré au système
+
+Seylar a précisé que l'IA doit entretenir, réparer et personnaliser le système,
+et servir aussi d'agent généraliste. Autonomie confirmée : **corriger seul les
+problèmes courants réversibles ; solliciter pour les changements importants**.
+Référence : [ADR 0005](decisions/0005-agent-systeme.md).
+
+La sidebar à trois outils et la connexion Codex de la PR 8 sont des briques v1.
+Elles ne valident pas le cœur du produit. Première tranche implémentée : service
+utilisateur indépendant, transport Codex persistant, diagnostic en lecture seule,
+déplacements de widgets avec comparaison atomique, journal et annulation.
+Dans le clone : horloge déplacée en 156 ms, réglage conservé après redémarrage
+DMS (PID de l’agent inchangé), annulation vérifiée. La demande via un modèle
+réel reste à éprouver après connexion personnelle. Preuves : `tools/vm-dev.md` §40.
+
+Prochaine tranche : incident contrôlé détecté et réparé sans conversation
+ouverte, avec mandat borné et vérification. La politique des changements
+importants et les tâches généralistes restent à construire. Les privilèges
+système ne sont pas étendus par le service actuel.
+
+## Priorité active — VM et abonnements IA
+
+Retour pilote : lenteur générale, IA centrale bancale, rendu visuel inachevé.
+Les fournisseurs attendus sont les **abonnements Codex et Claude**, Codex en
+premier. Le transport à clés API existant ne satisfait pas ce besoin.
+
+- [x] Ajouter le runtime Codex officiel et un parcours ChatGPT par code au panneau.
+- [x] Construire et installer dans le clone les paquets corrigés du bureau,
+  de l'assistant et des mises à jour ; vérifier le dialogue QML ↔ Codex réel.
+- [ ] Finaliser la connexion personnelle et éprouver les vraies réponses,
+  les erreurs de quota/réseau, l'annulation et les actions système.
+- [ ] Résoudre le rendu de la VM : le test VirGL échoue encore sans le forçage
+  logiciel. Ne pas annoncer la fluidité comme acquise.
+- [ ] Vérifier l'entrée souris/clavier avec le pilote, puis terminer la finition
+  graphique et le parcours d'utilisation quotidienne.
+- [ ] Intégrer l'abonnement Claude par un mécanisme officiellement supporté.
+
+Preuves : `tools/vm-dev.md` §39. Branche :
+`codex/vm-stabilisation-2026-09-07`. Aucun déploiement sur le Mac à ce stade.
+
 ---
 
 ## 0. Conventions non négociables
@@ -16,7 +70,7 @@ Elles ont toutes été payées par un incident réel. Ne les renégocie pas en c
 3. **`pkgrel` bumpé dès qu'un octet du paquet change** — même pour un commentaire. Le dépôt est immuable : jamais deux contenus différents sous un même nom.
 4. **Preuves dans `tools/vm-dev.md`**, numérotées, avec les sorties réelles. Ce qui n'a pas été exécuté est **annoncé comme non exécuté**. N'invente jamais une sortie.
 5. **ADR 0002** : toute spec s'ouvre par une passe de veille datée, et **tout constat de terrain qui contredit un document remonte dans ce document**. Mais vérifie contre la **bonne base** : une « correction » mesurée sur un `main` périmé a déjà produit deux affirmations fausses (voir §2, I-1).
-6. **Jamais d'auto-approbation.** Une action privilégiée = une authentification humaine. Pas de `--noconfirm` dans un chemin de mise à jour. Pas de second chemin privilégié.
+6. **Autorité indépendante du modèle.** Cible actée par ADR 0005 : réparations courantes réversibles automatiques sous mandat, sollicitation pour les changements importants. Les portes privilégiées v1 restent inchangées jusqu’à validation du remplaçant ; aucune option globale d’auto-approbation ne réalise cette architecture.
 7. **Le contenu système est hostile par construction** (descriptions de snapshots, noms de paquets, journaux) : données étiquetées, jamais concaténées à un prompt système, jamais interprétées comme une approbation.
 8. **Pas de migrations.** Les hooks alpm idempotents sont la seule exception admise.
 9. **Paquets `arch=(any)`.** `repo/build-repo` construit tous les PKGBUILD dans les **deux** jobs d'architecture : un `arch=(x86_64)` casserait le job aarch64.
@@ -65,6 +119,18 @@ preuve matérielle restent distinctes. Preuves : `tools/vm-dev.md` §36.9 et §3
 
 ## 3. Chantiers ouverts, par ordre
 
+### 3.0 PRIORITÉ — qualifier la VM avant toute installation sur le Mac
+
+Retour de Seylar le 2026-09-07 : la VM reste « vraiment bancale ». Le prochain
+livrable est donc une **VM fonctionnelle et réactive**, installée avec les
+corrections actuelles, puis réellement utilisée. Les PR vertes ne ferment pas
+ce point. Voir le [plan de stabilisation et ses critères de passage](superpowers/plans/2026-09-07-vm-dogfooding.md).
+
+Ordre rectifié : fluidité du banc et première preuve de l’agent système (ADR 0005), puis correction des parcours,
+connexion/trousseau/verrouillage, audio/réseau, mise à jour/rollback, prise en
+main. Le travail T2 est conservé ; la qualification du vrai Mac vient ensuite.
+
+
 ### 3.1 SP4c — Première ouverture de session *(le plus gros morceau disponible)*
 
 C'est le dernier sous-projet entièrement débloqué. Il solde trois dettes ouvertes depuis le Socle :
@@ -75,7 +141,7 @@ C'est le dernier sous-projet entièrement débloqué. Il solde trois dettes ouve
 
 La [veille du 2026-09-07](veille/2026-09-07-premiere-session.md) et une [proposition de spec](superpowers/specs/2026-09-07-premiere-session-design.md) sont maintenant rédigées. ReGreet + Cage est le premier spike proposé ; les deux paquets existent sur les deux architectures. **Spec non validée : revue prévue avant implémentation PAM/greeter.** Aucun auto-login ni trousseau existant n'a été modifié.
 
-### 3.2 SP4a — Signature du dépôt *(spec et plan prêts, mais §4 d'abord)*
+### 3.2 SP4a — Signature du dépôt *(avant diffusion à des tiers ; §4 d'abord)*
 
 [Spec](superpowers/specs/2026-08-28-signature-design.md) et [plan](superpowers/plans/2026-08-28-signature.md) existent et sont à jour. Le dépôt sert des paquets **non signés** depuis le premier jour — c'est un prérequis bloquant de toute distribution à des tiers.
 
@@ -100,7 +166,7 @@ Aucun de ces points ne s'ouvre sans une réponse explicite de Seylar. Le [regist
 1. **Garde de la clé de signature** (SP4a, Task 1) : la sauvegarde chiffrée et sa passphrase doivent être **remises à l'utilisateur avant** que la clé privée n'entre dans un secret GitHub. Et le **threat model** de la spec §3.1 (clé privée en CI = un compromis du compte permet de signer des paquets malveillants) est à veto.
 2. **Licence de l'ISO** : `iso/eschaton/` dérive de `configs/releng` d'archiso, **GPL-3.0-or-later**, dans un dépôt MIT. Inventaire exact dans `iso/PROVENANCE.md`. À trancher **avant** toute mise en ligne étiquetée — trois issues possibles : réécrire les fichiers empruntés, donner à `iso/` sa propre licence, ou passer le dépôt en GPL.
 3. **Publication de l'ISO** : elle est en **brouillon** depuis le 2026-08-30. Retirer `--draft` est une décision de produit, jamais un nettoyage.
-4. **ADR 0004** (périmètre T2) : toujours en statut **proposé**. Trois points ouverts — taille d'écran du MacBook (le 15/16 pouces ajoute un GPU AMD à gérer en hybride), sort de macOS (effacer est recommandé : l'ESP d'Apple fait 300 Mio contre 4 Gio exigés), et ratification du principe « toléré mais cloisonné ».
+4. **ADR 0004 : débloqué pour le dogfooding le 2026-09-07.** A1990/15 pouces et Eschaton seul confirmés ; cloisonnement maintenu par le pilote du projet. Restent l’inventaire GPU exact et les preuves matérielles, pas une nouvelle question sur macOS.
 5. **Requalification du mot « atomique »** dans la feuille de route du Socle (§1.2).
 
 ### Arbitrages de produit en attente

@@ -54,7 +54,7 @@ PluginSettings {
 
     StyledText {
         width: parent.width
-        text: "Choisis le fournisseur dans la sidebar. L'Assistant n'accède qu'aux trois outils Eschaton prévus et demande toujours ton authentification avant une action privilégiée."
+        text: "Connecte ton abonnement ChatGPT depuis le panneau Assistant, avec le bouton « Connecter mon abonnement ». Aucune clé API n'est nécessaire pour Codex. Les clés ci-dessous concernent seulement les fournisseurs API facultatifs. L'intégration de l'abonnement Claude reste à réaliser."
         wrapMode: Text.WordWrap
         color: Theme.surfaceVariantText
     }

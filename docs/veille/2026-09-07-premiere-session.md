@@ -85,3 +85,25 @@ le délai et l'arrêt avec la session restent explicites dans l'unité Eschaton.
   récupérable pour déverrouiller automatiquement le trousseau.
 - Le chiffrement du trousseau ne remplace pas LUKS, ne protège pas une session
   déjà ouverte et ne révoque pas une clé éventuellement exposée auparavant.
+
+
+## Complément du 2026-09-07 : machine et priorité confirmées
+
+L'utilisateur identifie son Mac par le modèle **A1990**, choisit **Eschaton
+uniquement** et confirme l'ordre **dogfooding personnel, puis diffusion si
+l'usage réel fonctionne bien**. Le numéro de série n'est pas nécessaire aux
+décisions de conception et n'est pas recopié dans le dépôt.
+
+Le [démontage iFixit du 15 pouces 2019](https://documents.cdn.ifixit.com/pdf/ifixit/guide_123653_en.pdf)
+relève A1990. La [fiche Apple du 15 pouces 2019](https://support.apple.com/en-ca/111941)
+décrit Intel UHD Graphics 630 et une Radeon Pro dédiée, avec plusieurs options
+555X/560X/Vega. Le format **15 pouces et le GPU hybride** permettent donc de
+sortir du cas 13 pouces/iGPU seul. A1990 ne suffit pas à attribuer une Radeon
+précise, un CPU, une quantité de RAM ou un SSD à cette unité. L'année 2019 reste
+celle donnée dans le contexte utilisateur ; l'inventaire matériel la précisera.
+
+Conséquence : le cas GPU AMD du constructeur est une piste de test, pas une
+preuve de compatibilité. Le choix Eschaton seul fixe la cible d'installation ;
+aucun disque n'est effacé pendant cette mise à jour documentaire. La réussite
+du dogfooding doit couvrir la session, le réseau, l'audio, la reprise et le
+retour arrière, puis les usages quotidiens précisés par l'utilisateur.

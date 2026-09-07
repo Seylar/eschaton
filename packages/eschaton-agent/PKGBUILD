@@ -1,0 +1,27 @@
+pkgname=eschaton-agent
+pkgver=0.1.0
+pkgrel=3
+pkgdesc="Expert Eschaton persistant : Codex et personnalisation réversible du bureau"
+arch=(any)
+license=(MIT)
+depends=('nodejs>=22' eschaton-codex dms-shell bash)
+source=(agent.cjs desktop.cjs status.cjs catalog.json CodexProtocol.js eschaton-codex-session
+        eschaton-agent eschaton-agent.service eschaton-agent.socket LICENSE)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+package() {
+  local dir="$pkgdir/usr/lib/eschaton/agent"
+  install -Dm644 agent.cjs "$dir/agent.cjs"
+  install -Dm644 status.cjs "$dir/status.cjs"
+  install -Dm644 desktop.cjs "$dir/desktop.cjs"
+  install -Dm644 catalog.json "$dir/catalog.json"
+  sed '/^\.pragma library$/d' CodexProtocol.js > protocol.cjs
+  printf '\nmodule.exports = {create};\n' >> protocol.cjs
+  install -Dm644 protocol.cjs "$dir/protocol.cjs"
+  install -Dm755 eschaton-agent "$pkgdir/usr/bin/eschaton-agent"
+  install -Dm755 eschaton-codex-session "$pkgdir/usr/bin/eschaton-codex-session"
+  install -Dm644 eschaton-agent.service "$pkgdir/usr/lib/systemd/user/eschaton-agent.service"
+  install -Dm644 eschaton-agent.socket "$pkgdir/usr/lib/systemd/user/eschaton-agent.socket"
+  install -d "$pkgdir/usr/lib/systemd/user/default.target.wants"
+  ln -s ../eschaton-agent.socket "$pkgdir/usr/lib/systemd/user/default.target.wants/eschaton-agent.socket"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

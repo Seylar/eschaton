@@ -1,5 +1,14 @@
 # Eschaton — Spec de conception : l'Assistant
 
+> **Portée rectifiée le 2026-09-07 — [ADR 0005](../../decisions/0005-agent-systeme.md).**
+> Cette spec décrit l'assistant v1 livré, pas le cœur produit désormais confirmé.
+> La cible est un expert système autonome sur les réparations courantes
+> réversibles, avec sollicitation pour les changements importants, ainsi qu'un
+> agent généraliste. Le catalogue de trois outils et le blocage après collecte
+> sont des limites de cette version ; leurs remplaçants restent à construire.
+> Les protections runtime actuelles ne sont pas supprimées par cette note.
+
+
 - **Date** : 2026-08-28
 - **Statut** : **implémentée sur `assistant` le 2026-08-29**, DoD §6 prouvé en VM et CI bi-architecture verte — en attente de la revue finale, du tag `v0.3.0` et de la fusion par Claude
 - **Sous-projet** : 3/5 (Assistant IA)

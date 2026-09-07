@@ -60,16 +60,22 @@ Les fichiers générés par DMS peuvent être régénérés par `dms setup`. **`
 
 > **Dis-moi** : cette séparation est-elle compréhensible ? (arbitrage **J1**)
 
-## 4. Ce que cette VM ne peut PAS te dire — ne t'y trompe pas
+## 4. Ce que nous devons désormais qualifier dans la VM
 
-| | Pourquoi |
+Le retour utilisateur du 2026-09-07 est clair : la VM reste bancale. Le guide
+ne doit plus demander d'ignorer sa vitesse. Le prochain jalon est une VM
+utilisable au quotidien, selon le [plan de stabilisation](superpowers/plans/2026-09-07-vm-dogfooding.md).
+
+| Sujet | Travail attendu |
 |---|---|
-| **La fluidité** | Le banc ARM utilise la virtualisation sur Apple Silicon, pas l'émulation x86. Le rendu logiciel limite la comparaison avec un vrai GPU. Une lenteur doit néanmoins être diagnostiquée : le banc n'innocente pas automatiquement le produit. |
-| **Le son** | La VM tourne sans audio (`-audio none`). Rien n'a jamais été testé. |
-| **Le GPU, le jeu, le HDR** | Impossibles ici. C'est tout l'objet du SP4b (vraie machine) et du SP5. |
-| **La vraie installation** | Ce que tu vois est une VM installée par notre installeur, mais sur du matériel virtuel simple. |
+| **Fluidité** | Mesurer les interactions, le renderer et la charge. Corriger les régressions du bureau et isoler les limites du rendu virtuel. |
+| **Son** | La configuration UTM actuelle ne déclare aucune carte audio. Compléter le banc, puis tester la chaîne applicative. |
+| **Parcours** | Vérifier les versions installées et tester les corrections dans la VM, pas seulement dans la CI. |
+| **Matériel Mac** | GPU hybride, puce T2, pilotes, thermique et veille réelle restent à éprouver sur l'A1990 après qualification de la VM. |
 
-Juge donc **le design, la disposition, les mots, le parcours** — pas la vitesse.
+La VM doit être agréable et fonctionnelle pour ce qu'elle permet de tester.
+Ses limites matérielles ne justifient ni des panneaux cassés ni des parcours
+qui exigent des réparations en terminal.
 
 ## 5. Me renvoyer ton verdict
 

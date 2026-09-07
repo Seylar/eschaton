@@ -6058,3 +6058,235 @@ identique au patch capturé avant la reprise :
 ```text
 21b37603c7b26aea102d0879d5adedc8eb61a6cb4e33da835abced83a4c6787f
 ```
+
+## 38. Recentrage sur la VM de dogfooding — 2026-09-07
+
+Seylar signale que la VM est « vraiment bancale » et demande une VM
+fonctionnelle et fluide avant de passer au Mac. Le [plan de stabilisation](../docs/superpowers/plans/2026-09-07-vm-dogfooding.md)
+fixe ce jalon et ses limites matérielles. Le guide de prise en main ne demande
+plus d'ignorer la vitesse.
+
+Lecture réelle du fichier UTM de `eschaton-dev` :
+
+```text
+Backend: QEMU
+Architecture: aarch64
+CPUCount: 4
+MemorySize: 8192
+Hypervisor: True
+Display Hardware: virtio-gpu-pci
+Sound: []
+```
+
+`utmctl list` montre les deux VM arrêtées au départ. `utmctl start eschaton-dev`
+a réussi ; une observation de la fenêtre UTM montre une barre DMS et un fond
+sombre. Aucun temps de réponse n'a été mesuré. Une tentative d'action sur le
+panneau a été interrompue par `noWindowsAvailable` : ouverture non validée.
+
+La console série s'ouvre sur `/dev/ttys006`. Après envoi de `seylar`, l'invité
+présente `Mot de passe :` ; l'attente du motif anglais `Password:` expire.
+Aucun mot de passe ni aucune commande invitée n'a ensuite été envoyé. Le
+canal série raccroche et le démon se termine avec code 0. `utmctl list`
+confirme de nouveau les deux VM arrêtées. La cause de cet arrêt n'est pas
+établie : il ne prouve pas un crash d'Eschaton.
+
+Cette passe n'a changé ni la configuration UTM, ni les paquets de la VM, ni
+les réglages du système invité. Les versions installées et le renderer actif
+restent à relever au diagnostic. Les constats antérieurs de rendu logiciel
+sont ceux du §12, pas une nouvelle mesure. Modifications de cette passe :
+documentation et ordre du travail uniquement ; `git diff --check` passe.
+
+## 39. Stabilisation VM et abonnement Codex — 2026-09-07
+
+### 39.1 Périmètre et état réel
+
+Le pilote demande une VM fluide, une IA centrale exploitable et une interface
+finie, puis le Mac. Il précise que l'IA doit utiliser les abonnements Claude
+et Codex, en commençant par Codex. Branche `codex/vm-stabilisation-2026-09-07`,
+issue de `3ef3aae` ; les PR 6 et 7 demeurent conservées, sans fusion ici.
+
+Clone UTM créé : `eschaton-stabilisation`, depuis `eschaton-dev` arrêté.
+4 vCPU, 8192 Mio, aarch64, hyperviseur actif. Le clone seul passe de
+`virtio-gpu-pci` à `virtio-gpu-gl-pci`. Le guest expose ensuite `card0` et
+`renderD128`, mais son environnement Hyprland porte encore
+`LIBGL_ALWAYS_SOFTWARE=1` dans l'initial_session de `/etc/eschaton/greetd.toml`.
+Avant livraison, versions réellement installées : desktop 10, assistant 10,
+update 15. Les corrections précédentes n'étaient donc pas appliquées au guest.
+Le serveur local `127.0.0.1:8080` ne répond pas (curl HTTP 000).
+
+### 39.2 Essai graphique et retour au réglage fonctionnel
+
+Sauvegarde guest `/etc/eschaton/greetd.toml.before-gpu`, retrait du forçage
+logiciel, redémarrage greetd. Échec réel de Hyprland :
+
+```text
+[EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER
+CDRMRenderer(drm): Can't create renderer, no matching devices found
+[EGL] Command eglCreateContext errored out with EGL_BAD_MATCH
+```
+
+DMS perd alors son environnement Wayland et échoue également. Restauration du
+fichier greetd sauvegardé, retrait du marqueur éphémère `/run/greetd.run` pour
+rejouer l'initial_session, puis redémarrage greetd. Le bureau s'ouvre à nouveau.
+Pas de gain de fluidité démontré ; aucun benchmark comparatif valide.
+L'accélération UTM empêche aussi la suspension du clone ; aucun état suspendu
+n'a été créé. La référence originale n'a pas été modifiée.
+
+### 39.3 Intégration Codex livrée dans le clone
+
+Sources officielles consultées :
+- https://learn.chatgpt.com/docs/app-server — intégration, streaming,
+  `account/login/start` type `chatgptDeviceCode`, outils dynamiques ;
+- https://learn.chatgpt.com/docs/auth — abonnement ChatGPT et code de connexion ;
+- https://learn.chatgpt.com/docs/config-file/config-reference — désactivation
+  des outils natifs, authentification ChatGPT imposée ;
+- release `openai/codex`, tag `rust-v0.139.0` et empreintes SHA-256 de ses assets.
+
+Schémas générés avec la CLI officielle 0.139.0, y compris `--experimental` pour
+les outils dynamiques. `CodexProtocol.js` dialogue avec app-server sur stdin/out ;
+`CodexCore.qml` adapte ce protocole au panneau et au `ToolExecutor` existant.
+Répertoire du runtime : `${XDG_DATA_HOME:-$HOME/.local/share}/eschaton/codex`,
+créé sous umask 077. Codex conserve ses propres identifiants ; ils ne passent
+ni dans QML, ni dans le catalogue, ni dans les journaux DMS. Stockage fichier
+privé, sans prétendre qu'il est chiffré. Aucun identifiant de l'hôte n'est copié.
+
+Le panneau propose Codex par défaut sur une configuration vierge, un bouton
+« Connecter mon abonnement », le code et le lien officiels, la déconnexion et
+les modèles retournés par `model/list`. L'utilisateur active le distant en
+cliquant Connecter ; le mode local uniquement continue à empêcher son lancement.
+Les modèles et abonnements ne sont pas remplacés par des noms supposés.
+
+Archives ARM construites avec makepkg, empreintes amont vérifiées, installées
+avec pacman dans le clone :
+
+```text
+eschaton-codex 0.139.0-1
+eschaton-desktop-config 0.1.0-11
+eschaton-dms-plugin-assistant 0.1.0-13
+eschaton-dms-plugin-update 0.1.0-16
+```
+
+Les sources utilisent la LICENSE commune : transférer aussi la LICENSE du
+monorepo dans une arborescence de build séparée. Arch ARM produit ici des
+`.pkg.tar.xz`, pas des `.pkg.tar.zst`.
+
+### 39.4 Vérification et limites
+
+- `bats tests/` : **215/215**. Le nouveau test lance **12 scénarios Node** sur
+  les fonctions de production : compte ChatGPT, modèles, streaming, conversation,
+  Stop avant/après création, outils tardifs, statut hostile, refus d'élévation,
+  bornes/délais, compte API refusé et annulation tardive de connexion.
+- App-server natif 0.139.0 sur l'hôte, répertoire vierge :
+  `PASS native initialize`, `PASS native account/read signedIn=false`.
+- Quickshell 0.3.1 dans le guest, composant réel et runtime installé :
+  `CODEX_SMOKE_PASS ready=true signedIn=false`.
+- Le harnais `fixtures/CodexSmoke.qml` doit être copié à la racine du dossier
+  du plugin avec `import "." as Assistant` avant `qs -p` : Quickshell refuse
+  les types situés hors de sa racine de configuration.
+- DMS : `Daemon plugin loaded: eschatonAssistant`, les trois plugins Eschaton
+  sont chargés, `systemctl --user --failed` donne **0 loaded units listed**.
+- Capture visuelle : le panneau affiche le choix Codex et le bouton Connecter.
+  Les clics automatisés UTM ne déplacent pas correctement le pointeur invité
+  (position Hyprland inchangée) ; cela ne démontre pas un défaut du bouton.
+  Vérification manuelle demandée au pilote.
+- **Non validé** : connexion personnelle, réponse distante réelle, modèle et
+  quota du compte, action système Codex de bout en bout, fluide à l'usage,
+  trois démarrages, endurance d'une heure, audio et abonnement Claude.
+
+Le transfert série volumineux peut dépasser 30 secondes. Un timeout du client
+ne signifie pas un échec du transfert : attendre sa fin et vérifier le fichier
+avant de rejouer. Une commande multilignes terminée par un saut de ligne casse
+actuellement le wrapper `run` (`;` isolé) ; les essais ci-dessus utilisent des
+commandes sur une ligne. Ne pas utiliser `exit` hors sous-shell dans `run` :
+il ferme la console interactive avant le marqueur de fin.
+
+## 40. Premier service agent indépendant et personnalisation réelle — 2026-09-07
+
+### 40.1 Périmètre livré dans la branche de stabilisation
+
+`eschaton-agent` possède désormais le processus Codex app-server, son transport,
+l’historique et l’identifiant de conversation. Une unité systemd utilisateur et
+un socket Unix `0600` assurent son indépendance du panneau. Le plugin QML devient
+client ; quitter/recharger DMS ne tue plus le moteur. Le mode local uniquement
+arrête explicitement le runtime distant. Aucun jeton de compte n’est stocké par
+ce service : le stockage Codex isolé existant reste utilisé.
+
+Capacités : état des services système/utilisateur, espace disque et paquets en
+lecture seule ; lecture des barres ; déplacement d’un widget existant entre
+les zones gauche/centre/droite. Aucun shell libre, élévation, réparation de
+paquet ou restauration automatique n’est exposé. Les portes update/rollback v1
+restent dans les panneaux dédiés et le fournisseur API historique. Leur
+migration dans le service Codex reste à faire. Après `system_status`, la garde
+v1 interdit toujours un autre outil dans le même tour.
+
+DMS interdit les objets/tableaux dans son setter IPC `settings set`. Le nouveau
+`DesktopBridge.qml` appelle `SettingsData.updateBarConfig` avec une comparaison
+synchrone de la disposition attendue dans la même boucle QML. Seuls les trois
+tableaux de widgets existants peuvent changer ; ajouter/supprimer un widget ou
+écraser un réglage concurrent est refusé. Le service journalise avant mutation,
+relit le résultat, conserve les conflits et vérifie l’état avant annulation.
+Une opération incertaine est rapprochée du bureau réel ; elle n’est pas rejouée
+au redémarrage. Une réponse interrompue est signalée et la conversation peut
+être reprise sur une nouvelle demande, sans réexécuter l’ancienne.
+
+### 40.2 Preuves obtenues dans `eschaton-stabilisation`
+
+- L’appel direct `qs ipc -p /usr/share/quickshell/dms --any-display call ...`
+  répond en **48 ms** pour la lecture de `barConfigs`. Contre-mesure explicite
+  après redémarrage : **51 ms** pour `dms ipc`, **30 ms** pour `qs ipc`. Le délai
+  de cinq secondes observé auparavant n’est pas reproduit et ne permet pas
+  d’attribuer la lenteur aux raccourcis. Aucun gain global de fluidité n’est prouvé.
+- Source réelle inspectée : `/usr/share/quickshell/dms/DMSShellIPC.qml`, setter
+  objet désactivé ; `Common/SettingsData.qml`, `updateBarConfig` lignes 2479+.
+- Nouvelle capacité chargée avec le plugin réel : `eschatonDesktop inspect`
+  renvoie la barre `default` et ses trois listes de widgets.
+- Requête `vm-clock-left-1` : déplacement de `clock` vers `left`, index 0.
+  Résultat **`status=verified`**, durée **156 ms**, `settings.json` relu :
+  `leftWidgets=[clock,launcherButton,workspaceSwitcher,focusedWindow]`,
+  `centerWidgets=[music,weather]`. Capture CUA : heure à gauche et bouton
+  « Annuler ce changement » visible dans le panneau.
+- `systemctl --user restart dms.service` : **MainPID de l’agent 35601 avant
+  et après** ; réglage conservé sur disque et par l’IPC du nouveau DMS.
+- Annulation via le client du service : **`status=undone`**, listes initiales
+  restaurées. Puis redémarrage de l’agent : service actif, journal conservé,
+  `recentChange=null`, aucune action rejouée.
+- Clics CUA sur le bouton : fenêtre amenée au premier plan mais événement invité
+  non confirmé ; l’annulation a donc été exercée via la même API du service,
+  **pas validée par un clic utilisateur**.
+- Suite locale : **216 tests Bats**, dont **22 scénarios Node** (12 protocole,
+  10 agent/statut). Tests : mouvement, annulation, conflit, idempotence,
+  timeout après écriture, arrêt avant écriture, persistance, exécution sans
+  client connecté, reprise de thread, mode local et échec partiel de diagnostic.
+  Le modèle de ces tests est simulé ; ce n’est pas une réponse OpenAI réelle.
+
+### 40.3 Runtime de validation et réserves
+
+L’index pacman du clone référençait des versions Node/ada/simdjson retirées du
+miroir (404). La tentative d’installation normale n’a rien changé. Une mise
+à niveau globale `pacman -Syu` a été refusée par le contrôle automatique en
+raison de sa portée ; elle n’a pas été exécutée.
+
+Alternative limitée : binaire **officiel Node 22.23.2 linux-arm64**, téléchargé
+via HTTPS depuis nodejs.org et vérifié contre son SHA-256 officiel :
+`fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8`.
+Paquet local explicite `eschaton-node-test-runtime-22.23.2-1`, installé seulement
+dans le clone, fournit `nodejs` et entre en conflit avec le paquet normal.
+Le binaire vit dans `/usr/lib/eschaton/test-node/node`. Ce paquet de validation
+n’est **pas** ajouté au dépôt ni à l’ISO. Le paquet produit dépend de `nodejs>=22`.
+La transition vers le Node du dépôt devra être validée avec une mise à niveau
+cohérente de la VM. Snapshots de transaction initiale : 191/192 ; suivante :
+193/194. Aucune installation sur le Mac personnel.
+
+Restent non validés : connexion personnelle et vraie requête en langage naturel,
+quota/réseau distant, qualité du modèle, reprise native d’un thread authentifié,
+autocorrection sans chat, tâches généralistes, clic utilisateur, fluidité GPU,
+audio, abonnement Claude et déploiement A1990. Le service est une première
+tranche fonctionnelle de l’ADR 0005, pas la réalisation complète de l’expert OS.
+
+Complément de validation finale : paquets `eschaton-agent 0.1.0-3` et
+`eschaton-dms-plugin-assistant 0.1.0-15` construits et installés dans le clone.
+Le harnais QML, copié avec le `CodexCore.qml` installé et connecté au service
+systemd réel, produit **`CODEX_SMOKE_PASS ready=true signedIn=false`**.
+Les quatre sources de `system.status` répondent `available=true`,
+`truncated=false`. Le mode réseau antérieur du service a été restauré après
+ce smoke test. Ces contrôles ne connectent aucun compte personnel.

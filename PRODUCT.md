@@ -14,12 +14,32 @@ bienvenus, mais ne dictent ni le vocabulaire ni la densité par défaut.
 
 ## Product Purpose
 
-Eschaton rend l'administration d'un système Arch rolling entièrement
-graphique, réversible et compréhensible. L'assistant est une surface native du
-shell : il explique l'état réel de la machine et agit uniquement au travers
-d'un catalogue fermé, des flux Eschaton existants et des confirmations
-humaines. Le succès se mesure à une tâche système terminée sans commande à
-recopier, sans privilège implicite et sans peur de l'irréversible.
+Eschaton est un système d'exploitation avec un expert intégré. Cet agent
+connaît l'état de la machine, détecte ses incidents, cherche leur cause,
+réalise les changements autorisés, vérifie leur effet et récupère d'un échec.
+Il sait aussi personnaliser le bureau à la demande, sans configuration
+manuelle à imposer à l'utilisateur.
+
+L'autonomie par défaut, confirmée par le pilote le 2026-09-07 : **détecter et
+corriger seul les problèmes courants réversibles ; solliciter l'utilisateur
+pour les changements importants**. Une opération réversible peut néanmoins
+être importante si elle affecte les accès, les données ou la disponibilité.
+Le modèle ne décide pas lui-même d'étendre ses droits.
+
+Le même produit donne accès à l'agent généraliste préféré de l'utilisateur
+pour travailler sur ses fichiers, ses projets et ses applications. Abonnements
+Codex puis Claude : les intégrations officiellement supportées sont à qualifier.
+Le panneau de conversation est une interface parmi d'autres ; fermer le panneau
+ne doit pas supprimer une tâche ou arrêter la surveillance du système.
+
+La promesse se mesure à des incidents effectivement résolus et à des tâches
+terminées. Le bureau, le réseau et les mécanismes de récupération doivent
+continuer à fonctionner quand le modèle est indisponible. Aucune garantie
+d'infaillibilité du LLM ou de réparation de toute panne n'est revendiquée.
+
+Décision de référence : [ADR 0005](docs/decisions/0005-agent-systeme.md).
+L'ancien catalogue de trois outils décrit l'implémentation v1, pas la cible
+produit. Le moteur système décrit ici reste à construire.
 
 ## Brand Personality
 
@@ -42,14 +62,18 @@ vient du comportement du système, jamais d'une surcharge visuelle.
 
 1. Faire au lieu de dicter : aucune commande shell n'est donnée comme réponse
    à une tâche que l'interface peut accomplir.
-2. Rendre la confiance visible : fournisseur, état réseau, outil demandé,
-   confirmation humaine et résultat restent explicites.
+2. Rendre l’autonomie compréhensible : état, intervention effectuée, résultat
+   vérifié et possibilité d’annuler sont visibles ; les changements importants
+   demandent une décision concrète, les réparations courantes ne multiplient
+   pas les interruptions.
 3. S'intégrer avant de se distinguer : réutiliser le vocabulaire DMS et ses
    composants familiers ; réserver l'accent Eschaton aux actions et états.
 4. Montrer l'état réel : vide, chargement, streaming, erreur, annulation et
    troncature ont chacun une présentation lisible.
-5. Garder une porte de sortie : toute action privilégiée passe par les flux
-   existants et le rollback reste perceptible comme filet de sécurité.
+5. Garder une porte de sortie : les changements passent par une exécution
+   contrôlée, avec vérification et récupération adaptée à leur portée.
+6. Être présent dans le système : réglages, erreurs, notifications et tâches
+   partagent le même moteur ; aucune capacité centrale ne dépend de la sidebar.
 
 ## Accessibility & Inclusion
 

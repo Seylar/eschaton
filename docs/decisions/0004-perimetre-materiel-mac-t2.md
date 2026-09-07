@@ -1,7 +1,7 @@
 # ADR 0004 — Le Mac T2 est toléré et cloisonné, pas supporté
 
 - **Date** : 2026-08-29
-- **Statut** : **proposé** — recommandation du contrôleur, en attente de ratification par l'utilisateur (trois points ouverts au §6)
+- **Statut** : **accepté pour le dogfooding personnel le 2026-09-07** — maintien du cloisonnement décidé par Codex sur délégation du pilotage ; machine et objectif confirmés par l’utilisateur. Cette décision ne vaut pas validation matérielle ni annonce de support public.
 - **Portée** : sous-projet 4b (première vraie machine), et par ricochet la doctrine de packaging du Socle
 - **Contexte amont** : [veille Mac Intel T2 du 2026-08-29](../veille/2026-08-29-mac-intel-t2.md) (296 lignes sourcées), [Spec du Socle](../superpowers/specs/2026-08-27-socle-design.md) §3 (« pas de migrations », paquets `arch=(any)`)
 
@@ -9,7 +9,16 @@
 
 ## 1. Contexte
 
-La machine de dogfooding est désormais connue : **un MacBook Pro i7 de 2019, 16 Gio**, donc équipé de la puce **T2**. C'est sur elle que l'utilisateur installera Eschaton dès qu'un ISO existera, et c'est là que le produit sera ajusté.
+La cible de dogfooding est le **MacBook Pro A1990 de l'utilisateur, format
+15 pouces, Intel + Radeon Pro dédiée et puce T2**. Le contexte initial indiquait
+2019, i7 et 16 Gio ; la référence A1990 seule ne reconfirme pas toute cette
+configuration. La Radeon exacte et l'inventaire restent à relever sur la machine.
+Sources : [complément matériel daté](../veille/2026-09-07-premiere-session.md#complément-du-2026-09-07--machine-et-priorité-confirmées).
+
+Le 2026-09-07, l'utilisateur choisit **Eschaton uniquement**, puis précise :
+**dogfooding pour lui, diffusion ensuite si cela fonctionne bien**. La première
+réussite est donc l'usage quotidien sur ce Mac, avec mise à jour et récupération
+éprouvées. La diffusion n'est pas déclenchée par la seule construction d'un ISO.
 
 La veille datée établit trois faits qui ne se négocient pas :
 
@@ -53,8 +62,23 @@ Eschaton vise « un nouveau Windows » : un système pour tout le monde, sur du 
 - Le chiffrement au repos ne peut pas s'appuyer sur celui de la T2 (transparent pour Linux) : ce sera **LUKS** ou rien.
 - **Réserve honnête assumée** : dogfooder sur un matériel atypique retarde la découverte des vrais problèmes du grand public (pilotes Nvidia, écrans VRR, matériel bas de gamme). Il faudra un second banc représentatif avant toute distribution à des tiers.
 
-## 6. Points ouverts — à trancher par l'utilisateur
+## 6. Décisions de reprise et vérifications restantes — 2026-09-07
 
-1. **Taille d'écran du MacBook** : 13″ (iGPU seul, cas simple) ou 15″/16″ (GPU AMD dédié à gérer en hybride, un modèle donnant un écran noir sans `nomodeset`).
-2. **macOS** : effacer le disque entier (recommandé — l'ESP d'Apple fait 300 Mo là où notre spec en exige 4 Gio) ou tenter une cohabitation.
-3. **Ratification** : cette décision de périmètre est-elle acceptée telle quelle ?
+1. **Machine : format tranché.** A1990, 15 pouces avec GPU AMD dédié ; le cas
+   13 pouces/iGPU seul n'est plus celui du banc. La Radeon exacte, le CPU, la
+   mémoire et le stockage restent à relever. Les paramètres GPU d'amorçage
+   doivent être éprouvés sur cette unité, pas déduits comme garantis du châssis.
+2. **macOS : choix utilisateur tranché.** La cible est Eschaton seul, sans
+   cohabitation macOS. Cela oriente le protocole d'installation sur disque
+   entier ; cette décision documentaire n'exécute aucun effacement.
+3. **Périmètre : décision de pilotage.** Codex maintient l'option B sous
+   l'autorité de reprise confiée par l'utilisateur. Le variant T2 sert d'abord
+   au dogfooding privé. Une diffusion ultérieure exige des preuves sur un banc
+   représentatif et la résolution des conditions de publication.
+4. **Ordre : explicite.** Connexion/trousseau/verrouillage, installation T2,
+   usages quotidiens, mises à jour et rollback ; ensuite élargissement et
+   diffusion. Signature et licence restent des prérequis de distribution,
+   leur report dans l'ordre de travail ne les supprime pas.
+
+L'installation réelle, la sortie de veille et le rollback sur ce Mac restent
+non exécutés. Les résultats CI et VM existants ne les remplacent pas.
