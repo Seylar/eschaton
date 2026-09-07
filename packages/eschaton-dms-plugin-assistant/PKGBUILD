@@ -1,23 +1,26 @@
 pkgname=eschaton-dms-plugin-assistant
 pkgver=0.1.0
-pkgrel=11
+pkgrel=13
 pkgdesc="Plugin DMS Eschaton : assistant système à catalogue d'outils fermé"
 arch=(any)
 license=(MIT)
 # `foot` a disparu le 2026-08-30 : `trigger_update` n'ouvre plus de terminal,
 # il emprunte la porte polkit `org.eschaton.update` comme le panneau.
-depends=(dms-shell curl libsecret jq pacman-contrib eschaton-base polkit)
+depends=(dms-shell curl libsecret jq pacman-contrib eschaton-base polkit eschaton-codex)
 optdepends=('ramalama: fournisseur local OpenAI-compatible')
 # Les harnais et fixtures restent dans les sources de test du dépôt, jamais dans
 # le paquet livré. Le catalogue, lui, est une donnée runtime versionnée.
-source=(plugin.json EschatonAssistantDaemon.qml EschatonAssistantPanel.qml
+source=(CodexCore.qml CodexProtocol.js eschaton-codex-session plugin.json EschatonAssistantDaemon.qml EschatonAssistantPanel.qml
         EschatonAssistantSettings.qml AssistantCore.qml ToolExecutor.qml ProviderCatalog.qml
         KeyringBridge.qml tool-catalog.json providers.json OpenAIAdapter.js
         AnthropicAdapter.js ProviderPolicy.js LICENSE)
-sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP SKIP)
 
 package() {
   local plugin_dir="$pkgdir/etc/xdg/quickshell/dms-plugins/eschatonAssistant"
+  install -Dm644 CodexCore.qml "$plugin_dir/CodexCore.qml"
+  install -Dm644 CodexProtocol.js "$plugin_dir/CodexProtocol.js"
+  install -Dm755 eschaton-codex-session "$pkgdir/usr/bin/eschaton-codex-session"
   install -Dm644 plugin.json "$plugin_dir/plugin.json"
   install -Dm644 EschatonAssistantDaemon.qml "$plugin_dir/EschatonAssistantDaemon.qml"
   install -Dm644 EschatonAssistantPanel.qml "$plugin_dir/EschatonAssistantPanel.qml"

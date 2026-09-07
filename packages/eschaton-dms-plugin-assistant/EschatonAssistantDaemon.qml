@@ -10,14 +10,19 @@ Item {
     // Injectés par PluginService pour les surfaces daemon.
     property var pluginService: null
     property string pluginId: "eschatonAssistant"
-    property var providers: providerCatalog.providers
+    property var providers: [{ id: "codex-subscription", name: "Codex · abonnement",
+        format: "codex", baseUrl: "", model: "", requiresKey: false, local: false }].concat(providerCatalog.providers)
+    readonly property bool codexSelected: !!selectedProvider && selectedProvider.id === "codex-subscription"
+    readonly property var activeCore: codexSelected ? codexCore : assistantCore
     property var selectedProvider: null
     property bool localOnly: true
     property bool credentialsPending: false
     property string providerMessage: providerCatalog.lastError
     readonly property string selectedProviderName: selectedProvider
         ? selectedProvider.name : "Aucun fournisseur"
-    readonly property bool providerReady: !!selectedProvider
+    readonly property bool providerReady: codexSelected
+        ? (!localOnly && codexCore.ready && codexCore.signedIn && codexCore.model !== "")
+        : !!selectedProvider
         && !providerCatalog.lastError
         && !credentialsPending
         && !(localOnly && !selectedProvider.local)
@@ -66,19 +71,25 @@ Item {
             pluginService.loadPluginData(pluginId, "localOnly", true), true
         );
         const wanted = String(pluginService.loadPluginData(
-            pluginId, "selectedProvider", "ramalama-local"
+            pluginId, "selectedProvider", "codex-subscription"
         ));
         applyProvider(providerById(wanted) || providers[0], false);
     }
 
     function selectProviderName(name) {
-        if (assistantCore.busy)
+        if (activeCore.busy || toolExecutor.busy)
             return false;
         const provider = providerByName(name);
         if (!provider)
             return false;
         applyProvider(provider, true);
         return true;
+    }
+
+    function connectCodex() {
+        localOnly = false;
+        if (pluginService) pluginService.savePluginData(pluginId, "localOnly", false);
+        Qt.callLater(codexCore.connectAccount);
     }
 
     function applyProvider(provider, persist) {
@@ -176,9 +187,14 @@ Item {
         stubTools: false
     }
 
+    CodexCore {
+        id: codexCore
+        active: root.codexSelected && !root.localOnly
+    }
+
     ToolExecutor {
         id: toolExecutor
-        assistantCore: assistantCore
+        assistantCore: root.activeCore
     }
 
     Variants {
@@ -196,19 +212,24 @@ Item {
             expandedWidthValue: Math.min(960, modelData.width)
 
             onRevealed: {
-                root.refreshCredentials();
+                if (root.codexSelected) codexCore.refresh();
+                else root.refreshCredentials();
                 if (slideout.loadedItem)
                     slideout.loadedItem.focusComposer();
             }
 
             content: EschatonAssistantPanel {
-                assistantCore: assistantCore
+                assistantCore: root.activeCore
                 toolExecutor: toolExecutor
                 providerNames: root.providerNames()
                 currentProvider: root.selectedProviderName
                 localOnly: root.localOnly
                 providerReady: root.providerReady
-                providerMessage: root.providerMessage
+                providerMessage: root.codexSelected
+                    ? (root.localOnly ? "Connecte ton abonnement ChatGPT. Tes demandes seront envoyées à OpenAI." : codexCore.connectionMessage)
+                    : root.providerMessage
+                subscriptionCore: root.codexSelected ? codexCore : null
+                onConnectSubscription: root.connectCodex()
                 credentialsPending: root.credentialsPending
                 onProviderSelected: name => root.selectProviderName(name)
                 onHideRequested: slideout.hide()

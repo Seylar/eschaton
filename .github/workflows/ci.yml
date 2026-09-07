@@ -62,7 +62,8 @@ jobs:
             packages/eschaton-t2/t2-garde-noyau \
             packages/eschaton-desktop-config/eschaton-session \
             packages/eschaton-desktop-config/eschaton-dms-provision \
-            packages/eschaton-desktop-config/eschaton-assistant-shadowing
+            packages/eschaton-desktop-config/eschaton-assistant-shadowing \
+            packages/eschaton-dms-plugin-assistant/eschaton-codex-session
       # Différé du Socle soldé au SP4 : un fichier sudoers invalide n'est pas
       # ignoré, il rend TOUT sudo inopérant sur la machine — y compris celui qui
       # servirait à le réparer. `visudo -cf` est la seule vérification qui

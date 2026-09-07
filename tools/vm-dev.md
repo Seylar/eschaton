@@ -6095,3 +6095,107 @@ les réglages du système invité. Les versions installées et le renderer actif
 restent à relever au diagnostic. Les constats antérieurs de rendu logiciel
 sont ceux du §12, pas une nouvelle mesure. Modifications de cette passe :
 documentation et ordre du travail uniquement ; `git diff --check` passe.
+
+## 39. Stabilisation VM et abonnement Codex — 2026-09-07
+
+### 39.1 Périmètre et état réel
+
+Le pilote demande une VM fluide, une IA centrale exploitable et une interface
+finie, puis le Mac. Il précise que l'IA doit utiliser les abonnements Claude
+et Codex, en commençant par Codex. Branche `codex/vm-stabilisation-2026-09-07`,
+issue de `3ef3aae` ; les PR 6 et 7 demeurent conservées, sans fusion ici.
+
+Clone UTM créé : `eschaton-stabilisation`, depuis `eschaton-dev` arrêté.
+4 vCPU, 8192 Mio, aarch64, hyperviseur actif. Le clone seul passe de
+`virtio-gpu-pci` à `virtio-gpu-gl-pci`. Le guest expose ensuite `card0` et
+`renderD128`, mais son environnement Hyprland porte encore
+`LIBGL_ALWAYS_SOFTWARE=1` dans l'initial_session de `/etc/eschaton/greetd.toml`.
+Avant livraison, versions réellement installées : desktop 10, assistant 10,
+update 15. Les corrections précédentes n'étaient donc pas appliquées au guest.
+Le serveur local `127.0.0.1:8080` ne répond pas (curl HTTP 000).
+
+### 39.2 Essai graphique et retour au réglage fonctionnel
+
+Sauvegarde guest `/etc/eschaton/greetd.toml.before-gpu`, retrait du forçage
+logiciel, redémarrage greetd. Échec réel de Hyprland :
+
+```text
+[EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER
+CDRMRenderer(drm): Can't create renderer, no matching devices found
+[EGL] Command eglCreateContext errored out with EGL_BAD_MATCH
+```
+
+DMS perd alors son environnement Wayland et échoue également. Restauration du
+fichier greetd sauvegardé, retrait du marqueur éphémère `/run/greetd.run` pour
+rejouer l'initial_session, puis redémarrage greetd. Le bureau s'ouvre à nouveau.
+Pas de gain de fluidité démontré ; aucun benchmark comparatif valide.
+L'accélération UTM empêche aussi la suspension du clone ; aucun état suspendu
+n'a été créé. La référence originale n'a pas été modifiée.
+
+### 39.3 Intégration Codex livrée dans le clone
+
+Sources officielles consultées :
+- https://learn.chatgpt.com/docs/app-server — intégration, streaming,
+  `account/login/start` type `chatgptDeviceCode`, outils dynamiques ;
+- https://learn.chatgpt.com/docs/auth — abonnement ChatGPT et code de connexion ;
+- https://learn.chatgpt.com/docs/config-file/config-reference — désactivation
+  des outils natifs, authentification ChatGPT imposée ;
+- release `openai/codex`, tag `rust-v0.139.0` et empreintes SHA-256 de ses assets.
+
+Schémas générés avec la CLI officielle 0.139.0, y compris `--experimental` pour
+les outils dynamiques. `CodexProtocol.js` dialogue avec app-server sur stdin/out ;
+`CodexCore.qml` adapte ce protocole au panneau et au `ToolExecutor` existant.
+Répertoire du runtime : `${XDG_DATA_HOME:-$HOME/.local/share}/eschaton/codex`,
+créé sous umask 077. Codex conserve ses propres identifiants ; ils ne passent
+ni dans QML, ni dans le catalogue, ni dans les journaux DMS. Stockage fichier
+privé, sans prétendre qu'il est chiffré. Aucun identifiant de l'hôte n'est copié.
+
+Le panneau propose Codex par défaut sur une configuration vierge, un bouton
+« Connecter mon abonnement », le code et le lien officiels, la déconnexion et
+les modèles retournés par `model/list`. L'utilisateur active le distant en
+cliquant Connecter ; le mode local uniquement continue à empêcher son lancement.
+Les modèles et abonnements ne sont pas remplacés par des noms supposés.
+
+Archives ARM construites avec makepkg, empreintes amont vérifiées, installées
+avec pacman dans le clone :
+
+```text
+eschaton-codex 0.139.0-1
+eschaton-desktop-config 0.1.0-11
+eschaton-dms-plugin-assistant 0.1.0-13
+eschaton-dms-plugin-update 0.1.0-16
+```
+
+Les sources utilisent la LICENSE commune : transférer aussi la LICENSE du
+monorepo dans une arborescence de build séparée. Arch ARM produit ici des
+`.pkg.tar.xz`, pas des `.pkg.tar.zst`.
+
+### 39.4 Vérification et limites
+
+- `bats tests/` : **215/215**. Le nouveau test lance **12 scénarios Node** sur
+  les fonctions de production : compte ChatGPT, modèles, streaming, conversation,
+  Stop avant/après création, outils tardifs, statut hostile, refus d'élévation,
+  bornes/délais, compte API refusé et annulation tardive de connexion.
+- App-server natif 0.139.0 sur l'hôte, répertoire vierge :
+  `PASS native initialize`, `PASS native account/read signedIn=false`.
+- Quickshell 0.3.1 dans le guest, composant réel et runtime installé :
+  `CODEX_SMOKE_PASS ready=true signedIn=false`.
+- Le harnais `fixtures/CodexSmoke.qml` doit être copié à la racine du dossier
+  du plugin avec `import "." as Assistant` avant `qs -p` : Quickshell refuse
+  les types situés hors de sa racine de configuration.
+- DMS : `Daemon plugin loaded: eschatonAssistant`, les trois plugins Eschaton
+  sont chargés, `systemctl --user --failed` donne **0 loaded units listed**.
+- Capture visuelle : le panneau affiche le choix Codex et le bouton Connecter.
+  Les clics automatisés UTM ne déplacent pas correctement le pointeur invité
+  (position Hyprland inchangée) ; cela ne démontre pas un défaut du bouton.
+  Vérification manuelle demandée au pilote.
+- **Non validé** : connexion personnelle, réponse distante réelle, modèle et
+  quota du compte, action système Codex de bout en bout, fluide à l'usage,
+  trois démarrages, endurance d'une heure, audio et abonnement Claude.
+
+Le transfert série volumineux peut dépasser 30 secondes. Un timeout du client
+ne signifie pas un échec du transfert : attendre sa fin et vérifier le fichier
+avant de rejouer. Une commande multilignes terminée par un saut de ligne casse
+actuellement le wrapper `run` (`;` isolé) ; les essais ci-dessus utilisent des
+commandes sur une ligne. Ne pas utiliser `exit` hors sous-shell dans `run` :
+il ferme la console interactive avant le marqueur de fin.

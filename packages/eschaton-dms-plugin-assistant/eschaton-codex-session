@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Espace Codex propre à l'assistant : aucune configuration CLI, aucun MCP ou
+# jeton d'une autre application n'est importé. Le serveur reste sur stdin/out.
+set -euo pipefail
+umask 077
+codex_data="${XDG_DATA_HOME:-$HOME/.local/share}/eschaton/codex"
+mkdir -p "$codex_data/workspace"
+cd "$codex_data/workspace"
+exec env CODEX_HOME="$codex_data" /usr/bin/eschaton-codex app-server \
+  -c 'forced_login_method="chatgpt"' \
+  -c 'cli_auth_credentials_store="file"' \
+  -c 'features.shell_tool=false' \
+  -c 'features.unified_exec=false' \
+  -c 'features.apply_patch_freeform=false' \
+  -c 'features.shell_snapshot=false' \
+  -c 'features.multi_agent=false' \
+  -c 'features.apps=false' \
+  -c 'web_search="disabled"'

@@ -90,3 +90,32 @@ La VM ARM ne prouve ni le GPU hybride Intel/AMD, ni la puce T2, ni les pilotes
 x86_64 du Mac. Une VM réussie autorise cette étape de qualification matérielle,
 pas l'annonce que le Mac fonctionnera sans autre travail. La diffusion à des
 tiers reste postérieure au dogfooding et aux prérequis de publication.
+
+## Précision utilisateur et première implémentation — abonnements
+
+Le pilote exige les **abonnements Claude et Codex**, avec Codex en premier.
+Un formulaire de clés API ou le petit modèle local de démonstration ne répond
+pas à ce besoin. L'abonnement Claude reste à intégrer ; le fournisseur
+Anthropic par clé API existant n'en tient pas lieu.
+
+Le 7 septembre, la branche `codex/vm-stabilisation-2026-09-07` ajoute Codex
+app-server 0.139.0, épinglé pour ARM et x86, et le parcours de connexion ChatGPT
+par code dans le panneau. Le catalogue de modèles vient du compte ; aucun
+jeton de l'hôte n'est importé. Le runtime utilise un répertoire privé de
+l'utilisateur invité et les trois outils du même `ToolExecutor` que le
+transport historique. Les appels natifs de shell et d'édition sont désactivés,
+l'accès aux environnements est désactivé, le sandbox est en lecture seule et
+les demandes d'élévation sont refusées. Après `system_status`, le transport
+refuse tout nouvel outil jusqu'au prochain message utilisateur.
+
+La connexion personnelle et une conversation avec de vraies réponses sont
+encore à valider. Le chargement réel du panneau, le protocole natif non
+connecté et les tests de comportement ne remplacent pas cette validation.
+
+La VM de référence est conservée. Les essais se font dans son clone
+`eschaton-stabilisation`. Le pilote `virtio-gpu-gl-pci` expose un render node,
+mais retirer `LIBGL_ALWAYS_SOFTWARE=1` fait échouer l'initialisation EGL du
+compositeur. Le réglage logiciel a donc été restauré. Cela identifie une
+limite du banc actuel ; **la fluidité n'est pas acquise**. Les entrées de
+contrôle automatisées ne ciblent pas correctement les boutons de l'invité ;
+une vérification manuelle a été demandée au pilote. Voir `tools/vm-dev.md` §39.

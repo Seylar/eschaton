@@ -19,6 +19,10 @@ Item {
     property bool credentialsPending: false
     property string providerMessage: ""
 
+    property bool followTail: true
+    property var subscriptionCore: null
+    signal connectSubscription
+
     signal hideRequested
     signal providerSelected(string name)
 
@@ -44,6 +48,7 @@ Item {
             return;
         if (assistantCore.send(message)) {
             composer.text = "";
+            followTail = true;
             Qt.callLater(function() { messageList.positionViewAtEnd(); });
         }
     }
@@ -72,11 +77,11 @@ Item {
         target: root.assistantCore
 
         function onDelta() {
-            Qt.callLater(function() { messageList.positionViewAtEnd(); });
+            if (root.followTail) Qt.callLater(function() { messageList.positionViewAtEnd(); });
         }
 
         function onDone() {
-            Qt.callLater(function() { messageList.positionViewAtEnd(); });
+            if (root.followTail) Qt.callLater(function() { messageList.positionViewAtEnd(); });
         }
     }
 
@@ -89,7 +94,8 @@ Item {
             spacing: Theme.spacingS
 
             DankDropdown {
-                Layout.preferredWidth: 220
+                Layout.fillWidth: true
+                Layout.minimumWidth: 160
                 options: root.providerNames
                 currentValue: root.currentProvider
                 emptyText: "Aucun fournisseur"
@@ -118,20 +124,63 @@ Item {
                     }
 
                     StyledText {
-                        text: root.localOnly ? "Local uniquement" : "Distant autorisé"
+                        text: root.subscriptionCore ? "ChatGPT" : (root.localOnly ? "Local" : "API")
                         font.pixelSize: Theme.fontSizeSmall
                         color: Theme.surfaceVariantText
                     }
                 }
             }
 
-            Item { Layout.fillWidth: true }
-
             DankActionButton {
                 iconName: "delete_sweep"
                 tooltipText: "Effacer la conversation"
                 enabled: root.assistantCore.messageCount > 0 && !root.assistantCore.busy
                 onClicked: root.assistantCore.clear()
+            }
+        }
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            visible: root.subscriptionCore !== null
+            spacing: Theme.spacingS
+
+            RowLayout {
+                Layout.fillWidth: true
+                DankButton {
+                    text: root.subscriptionCore && root.subscriptionCore.signedIn ? "Déconnecter" : "Connecter mon abonnement"
+                    enabled: !!root.subscriptionCore && !root.assistantCore.busy && !root.subscriptionCore.loginPending
+                    onClicked: {
+                        if (root.subscriptionCore.signedIn) root.subscriptionCore.logout();
+                        else root.connectSubscription();
+                    }
+                }
+                DankDropdown {
+                    Layout.fillWidth: true
+                    visible: !!root.subscriptionCore && root.subscriptionCore.signedIn
+                    options: root.subscriptionCore ? root.subscriptionCore.models.map(m => m.model) : []
+                    currentValue: root.subscriptionCore ? root.subscriptionCore.model : ""
+                    emptyText: "Chargement des modèles…"
+                    enabled: !root.assistantCore.busy
+                    onValueChanged: value => { if (root.subscriptionCore) root.subscriptionCore.chooseModel(value); }
+                }
+            }
+            StyledText {
+                Layout.fillWidth: true
+                visible: !!root.subscriptionCore && root.subscriptionCore.loginCode !== ""
+                text: root.subscriptionCore ? root.subscriptionCore.loginCode : ""
+                font.pixelSize: Theme.fontSizeLarge
+                font.weight: Font.Bold
+                horizontalAlignment: Text.AlignHCenter
+                color: Theme.surfaceText
+            }
+            RowLayout {
+                visible: !!root.subscriptionCore && root.subscriptionCore.loginPending
+                DankButton {
+                    text: "Ouvrir la connexion ChatGPT"
+                    enabled: !!root.subscriptionCore && root.subscriptionCore.loginUrl !== ""
+                    onClicked: Qt.openUrlExternally(root.subscriptionCore.loginUrl)
+                }
+                DankButton { text: "Annuler"; onClicked: root.subscriptionCore.cancelLogin() }
             }
         }
 
@@ -196,7 +245,7 @@ Item {
                 StyledText {
                     width: parent.width - Theme.iconSizeSmall - parent.spacing
                     text: root.toolLabel(root.activeToolName)
-                        + " · catalogue fermé, aucune approbation automatique"
+
                     color: Theme.surfaceText
                     font.pixelSize: Theme.fontSizeSmall
                     wrapMode: Text.WordWrap
@@ -345,6 +394,8 @@ Item {
 
             ListView {
                 id: messageList
+            onMovementStarted: root.followTail = false
+            onMovementEnded: root.followTail = atYEnd
                 anchors.fill: parent
                 clip: true
                 spacing: Theme.spacingM
@@ -448,7 +499,7 @@ Item {
 
                 StyledText {
                     width: parent.width
-                    text: "L'assistant répond en direct. Ses trois outils système sont déclarés, bornés et jamais auto-approuvés."
+                    text: "Comprendre un problème, vérifier les mises à jour, retrouver un système qui fonctionne. Demande simplement."
                     color: Theme.surfaceVariantText
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap
@@ -478,7 +529,7 @@ Item {
                 enabled: root.providerReady && !root.assistantCore.busy
                 placeholderText: root.assistantCore.busy ? "Réponse en cours…"
                     : (root.providerReady ? "Écris une demande système…"
-                                          : "Configure un fournisseur disponible…")
+                                          : "Connecte ton abonnement pour commencer…")
                 wrapMode: TextArea.Wrap
                 color: Theme.surfaceText
                 placeholderTextColor: Theme.surfaceVariantText

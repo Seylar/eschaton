@@ -19,6 +19,28 @@
 
 ---
 
+## Priorité active — VM et abonnements IA
+
+Retour pilote : lenteur générale, IA centrale bancale, rendu visuel inachevé.
+Les fournisseurs attendus sont les **abonnements Codex et Claude**, Codex en
+premier. Le transport à clés API existant ne satisfait pas ce besoin.
+
+- [x] Ajouter le runtime Codex officiel et un parcours ChatGPT par code au panneau.
+- [x] Construire et installer dans le clone les paquets corrigés du bureau,
+  de l'assistant et des mises à jour ; vérifier le dialogue QML ↔ Codex réel.
+- [ ] Finaliser la connexion personnelle et éprouver les vraies réponses,
+  les erreurs de quota/réseau, l'annulation et les actions système.
+- [ ] Résoudre le rendu de la VM : le test VirGL échoue encore sans le forçage
+  logiciel. Ne pas annoncer la fluidité comme acquise.
+- [ ] Vérifier l'entrée souris/clavier avec le pilote, puis terminer la finition
+  graphique et le parcours d'utilisation quotidienne.
+- [ ] Intégrer l'abonnement Claude par un mécanisme officiellement supporté.
+
+Preuves : `tools/vm-dev.md` §39. Branche :
+`codex/vm-stabilisation-2026-09-07`. Aucun déploiement sur le Mac à ce stade.
+
+---
+
 ## 0. Conventions non négociables
 
 Elles ont toutes été payées par un incident réel. Ne les renégocie pas en cours de route.
