@@ -77,6 +77,18 @@ preuve matérielle restent distinctes. Preuves : `tools/vm-dev.md` §36.9 et §3
 
 ## 3. Chantiers ouverts, par ordre
 
+### 3.0 PRIORITÉ — qualifier la VM avant toute installation sur le Mac
+
+Retour de Seylar le 2026-09-07 : la VM reste « vraiment bancale ». Le prochain
+livrable est donc une **VM fonctionnelle et réactive**, installée avec les
+corrections actuelles, puis réellement utilisée. Les PR vertes ne ferment pas
+ce point. Voir le [plan de stabilisation et ses critères de passage](superpowers/plans/2026-09-07-vm-dogfooding.md).
+
+Ordre : diagnostic du banc et mise à niveau effective, correction des parcours,
+connexion/trousseau/verrouillage, audio/réseau, mise à jour/rollback, prise en
+main. Le travail T2 est conservé ; la qualification du vrai Mac vient ensuite.
+
+
 ### 3.1 SP4c — Première ouverture de session *(le plus gros morceau disponible)*
 
 C'est le dernier sous-projet entièrement débloqué. Il solde trois dettes ouvertes depuis le Socle :

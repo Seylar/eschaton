@@ -6058,3 +6058,40 @@ identique au patch capturé avant la reprise :
 ```text
 21b37603c7b26aea102d0879d5adedc8eb61a6cb4e33da835abced83a4c6787f
 ```
+
+## 38. Recentrage sur la VM de dogfooding — 2026-09-07
+
+Seylar signale que la VM est « vraiment bancale » et demande une VM
+fonctionnelle et fluide avant de passer au Mac. Le [plan de stabilisation](../docs/superpowers/plans/2026-09-07-vm-dogfooding.md)
+fixe ce jalon et ses limites matérielles. Le guide de prise en main ne demande
+plus d'ignorer la vitesse.
+
+Lecture réelle du fichier UTM de `eschaton-dev` :
+
+```text
+Backend: QEMU
+Architecture: aarch64
+CPUCount: 4
+MemorySize: 8192
+Hypervisor: True
+Display Hardware: virtio-gpu-pci
+Sound: []
+```
+
+`utmctl list` montre les deux VM arrêtées au départ. `utmctl start eschaton-dev`
+a réussi ; une observation de la fenêtre UTM montre une barre DMS et un fond
+sombre. Aucun temps de réponse n'a été mesuré. Une tentative d'action sur le
+panneau a été interrompue par `noWindowsAvailable` : ouverture non validée.
+
+La console série s'ouvre sur `/dev/ttys006`. Après envoi de `seylar`, l'invité
+présente `Mot de passe :` ; l'attente du motif anglais `Password:` expire.
+Aucun mot de passe ni aucune commande invitée n'a ensuite été envoyé. Le
+canal série raccroche et le démon se termine avec code 0. `utmctl list`
+confirme de nouveau les deux VM arrêtées. La cause de cet arrêt n'est pas
+établie : il ne prouve pas un crash d'Eschaton.
+
+Cette passe n'a changé ni la configuration UTM, ni les paquets de la VM, ni
+les réglages du système invité. Les versions installées et le renderer actif
+restent à relever au diagnostic. Les constats antérieurs de rendu logiciel
+sont ceux du §12, pas une nouvelle mesure. Modifications de cette passe :
+documentation et ordre du travail uniquement ; `git diff --check` passe.
