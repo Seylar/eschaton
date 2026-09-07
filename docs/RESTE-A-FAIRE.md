@@ -5,6 +5,18 @@
 - **État de référence distant** : `origin/main` = `1d87d83` (passation #5 fusionnée), version de code **`v0.3.0`** à `3d8feb6`. Le Socle, le Bureau, l'Assistant et l'ISO nominal y sont fusionnés. Attention : le checkout racine `main` est encore à `1b10b85`.
 - **Reprise Codex du 2026-09-07** : branche `codex/audit-reprise-2026-09-07`, depuis `handoff` à `32c9e70`, dans `.worktrees/socle`. [Audit global](audits/2026-09-07-projet-global.md), preuves §37 de `tools/vm-dev.md`. Corrections enregistrées localement (`31a90c2`) : 154 tests, core Quickshell et builds ARM verts. **Publication explicitement autorisée : [PR #6](https://github.com/Seylar/eschaton/pull/6). [Première CI](https://github.com/Seylar/eschaton/actions/runs/34132966375) verte sur les deux architectures ; deuxième exécution touchée par un HTTP 504 de GraalVM (§37.9).** Aucune fusion dans `main` ni publication ISO.
 
+
+### Cap utilisateur confirmé le 2026-09-07
+
+- **Machine personnelle** : MacBook Pro A1990, 15 pouces, GPU Intel + AMD ;
+  modèle exact de Radeon et inventaire à relever ([source et limites](veille/2026-09-07-premiere-session.md#complément-du-2026-09-07--machine-et-priorité-confirmées)).
+- **Installation visée** : Eschaton uniquement, sans cohabitation macOS.
+- **Premier objectif** : usage quotidien personnel satisfaisant ; diffusion
+  ensuite, conditionnée aux résultats. Priorité à la connexion sécurisée,
+  au démarrage T2, au réseau/audio/reprise et au couple mise à jour/rollback.
+- **Cloisonnement T2 maintenu par décision de pilotage** : ADR 0004 accepté
+  pour ce dogfooding ; cela ne promet pas de support public des Mac T2.
+
 ---
 
 ## 0. Conventions non négociables
@@ -75,7 +87,7 @@ C'est le dernier sous-projet entièrement débloqué. Il solde trois dettes ouve
 
 La [veille du 2026-09-07](veille/2026-09-07-premiere-session.md) et une [proposition de spec](superpowers/specs/2026-09-07-premiere-session-design.md) sont maintenant rédigées. ReGreet + Cage est le premier spike proposé ; les deux paquets existent sur les deux architectures. **Spec non validée : revue prévue avant implémentation PAM/greeter.** Aucun auto-login ni trousseau existant n'a été modifié.
 
-### 3.2 SP4a — Signature du dépôt *(spec et plan prêts, mais §4 d'abord)*
+### 3.2 SP4a — Signature du dépôt *(avant diffusion à des tiers ; §4 d'abord)*
 
 [Spec](superpowers/specs/2026-08-28-signature-design.md) et [plan](superpowers/plans/2026-08-28-signature.md) existent et sont à jour. Le dépôt sert des paquets **non signés** depuis le premier jour — c'est un prérequis bloquant de toute distribution à des tiers.
 
@@ -100,7 +112,7 @@ Aucun de ces points ne s'ouvre sans une réponse explicite de Seylar. Le [regist
 1. **Garde de la clé de signature** (SP4a, Task 1) : la sauvegarde chiffrée et sa passphrase doivent être **remises à l'utilisateur avant** que la clé privée n'entre dans un secret GitHub. Et le **threat model** de la spec §3.1 (clé privée en CI = un compromis du compte permet de signer des paquets malveillants) est à veto.
 2. **Licence de l'ISO** : `iso/eschaton/` dérive de `configs/releng` d'archiso, **GPL-3.0-or-later**, dans un dépôt MIT. Inventaire exact dans `iso/PROVENANCE.md`. À trancher **avant** toute mise en ligne étiquetée — trois issues possibles : réécrire les fichiers empruntés, donner à `iso/` sa propre licence, ou passer le dépôt en GPL.
 3. **Publication de l'ISO** : elle est en **brouillon** depuis le 2026-08-30. Retirer `--draft` est une décision de produit, jamais un nettoyage.
-4. **ADR 0004** (périmètre T2) : toujours en statut **proposé**. Trois points ouverts — taille d'écran du MacBook (le 15/16 pouces ajoute un GPU AMD à gérer en hybride), sort de macOS (effacer est recommandé : l'ESP d'Apple fait 300 Mio contre 4 Gio exigés), et ratification du principe « toléré mais cloisonné ».
+4. **ADR 0004 : débloqué pour le dogfooding le 2026-09-07.** A1990/15 pouces et Eschaton seul confirmés ; cloisonnement maintenu par le pilote du projet. Restent l’inventaire GPU exact et les preuves matérielles, pas une nouvelle question sur macOS.
 5. **Requalification du mot « atomique »** dans la feuille de route du Socle (§1.2).
 
 ### Arbitrages de produit en attente
