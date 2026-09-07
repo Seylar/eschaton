@@ -2,7 +2,7 @@
 
 - **Date** : 2026-09-07
 - **Pilotage** : Codex reprend le projet à la demande explicite de Seylar le 2026-09-07 (« full autorité, c’est toi qui reprend le sujet »). Les anciennes réservations de revue/fusion à Claude sont remplacées par cette délégation ; les preuves techniques et les décisions de produit non encore tranchées restent à documenter.
-- **État de référence distant** : `origin/main` = `3d8feb6`, tag **`v0.3.0`** posé. Le Socle, le Bureau, l'Assistant et l'ISO nominal y sont fusionnés. Attention : le checkout racine `main` est encore à `1b10b85`.
+- **État de référence distant** : `origin/main` = `1d87d83` (passation #5 fusionnée), version de code **`v0.3.0`** à `3d8feb6`. Le Socle, le Bureau, l'Assistant et l'ISO nominal y sont fusionnés. Attention : le checkout racine `main` est encore à `1b10b85`.
 - **Reprise Codex du 2026-09-07** : branche `codex/audit-reprise-2026-09-07`, depuis `handoff` à `32c9e70`, dans `.worktrees/socle`. [Audit global](audits/2026-09-07-projet-global.md), preuves §37 de `tools/vm-dev.md`. Corrections enregistrées localement (`31a90c2`) : 154 tests, core Quickshell et builds ARM verts. **Publication explicitement autorisée : [PR #6](https://github.com/Seylar/eschaton/pull/6). [Première CI](https://github.com/Seylar/eschaton/actions/runs/34132966375) verte sur les deux architectures ; deuxième exécution touchée par un HTTP 504 de GraalVM (§37.9).** Aucune fusion dans `main` ni publication ISO.
 
 ---
@@ -40,6 +40,7 @@ Elles ont toutes été payées par un incident réel. Ne les renégocie pas en c
 Branche `iso-t2`, tête **`8b982ab`**. Le variant existe, se construit (1,18 Gio) et a passé une revue qui l'a jugé solide sur le fond : cloisonnement du dépôt tiers à double garde, delta de paquets sans fourche du profil, garde d'épinglage du noyau qui tranche sur le nom exact et échoue fermée, réserves honnêtes.
 
 Les corrections interrompues ont été reprises dans
+[PR #7](https://github.com/Seylar/eschaton/pull/7), branche
 `codex/t2-reprise-2026-09-07` (`.worktrees/t2-reprise`), commit `0b23a23`, puis
 réunies localement avec la vague générale. Le worktree original
 `.claude/worktrees/agent-a186b0e417ae099d8` est intact. Le chemin T2, les gardes

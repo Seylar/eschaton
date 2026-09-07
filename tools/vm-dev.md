@@ -6039,3 +6039,22 @@ packages/eschaton-base/10-wheel.sudoers: parsed OK
 Le build ARM de la tête `2af131b` a fini vert. Le job x86_64 victime du 504 a
 été relancé seul avec `gh run rerun 34133131678 --failed`. Aucun assouplissement
 de version épinglée, de somme de contrôle ou de validation n'est appliqué.
+
+
+### 37.10 Livraison des deux vagues
+
+La reprise T2 réunie est publiée dans la [PR #7](https://github.com/Seylar/eschaton/pull/7),
+empilée sur la [PR #6](https://github.com/Seylar/eschaton/pull/6), toutes deux en
+brouillon. Les comptes rendus CI définitifs sont joints à leurs descriptions ;
+aucune fusion dans `main`, aucun tag et aucune publication ISO ne sont réalisés.
+
+Un `git fetch origin` confirme que `main=1d87d83` a reçu la passation #5 :
+seul `docs/RESTE-A-FAIRE.md` change depuis `3d8feb6`, et nos branches contiennent
+déjà `32c9e70`. Aucun changement de code supplémentaire à réconcilier.
+
+Vérification finale du worktree T2 d'origine : SHA-256 de `git diff --binary`
+identique au patch capturé avant la reprise :
+
+```text
+21b37603c7b26aea102d0879d5adedc8eb61a6cb4e33da835abced83a4c6787f
+```
