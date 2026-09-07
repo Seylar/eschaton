@@ -11,6 +11,19 @@ valid_bar_position() { # $1=réponse de `bar getPosition`
   case ${1:-} in top|bottom|left|right) return 0 ;; *) return 1 ;; esac
 }
 
+wait_for_settings() { # $1=settings.json $2=essais (défaut 90) $3=délai (défaut 1)
+  local settings=$1 attempts=${2:-90} delay=${3:-1} attempt
+  for ((attempt = 0; attempt < attempts; attempt++)); do
+    # DMS peut créer le fichier après le démarrage du service, ou être encore
+    # en train de l'écrire. Ne jamais remplacer ses réglages par une amorce ici.
+    if [[ -r "$settings" ]] && jq -e 'type == "object"' "$settings" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep "$delay"
+  done
+  return 1
+}
+
 wait_for_bar_position() { # $1=dms $2=essais (défaut 45) $3=délai (défaut 1)
   local dms_bin=$1 attempts=${2:-45} delay=${3:-1} position
   local attempt
@@ -109,14 +122,14 @@ main() {
   systemctl_bin="${ESCHATON_SYSTEMCTL_BIN:-/usr/bin/systemctl}"
 
   [[ ! -e "$stamp" ]] || return 0
-  [[ -r "$settings" ]] || {
-    log "$settings est absent ; provisioning reporté à la prochaine session"
+  wait_for_settings "$settings" || {
+    log "$settings absent ou incomplet après 90 s ; nouvelle tentative par le service"
     return 1
   }
 
   # dms.service peut être actif avant que le serveur IPC et le scan des plugins
   # ne soient prêts. La temporisation est bornée ; aucun marqueur n'est posé en
-  # cas d'échec, donc une session ultérieure retentera proprement.
+  # cas d'échec, donc le service peut retenter dans la même session.
   for _ in {1..45}; do
     if "$dms_bin" ipc call plugins list >/dev/null 2>&1; then
       ready=true

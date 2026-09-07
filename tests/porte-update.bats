@@ -639,11 +639,8 @@ FIN
   # Un succès dégradé n'est jamais annoncé comme un succès.
   run grep -F 'Mise à jour installée, système dégradé' "$WIDGET"
   [ "$status" -eq 0 ]
-  bloc_echec=$(awk '/readonly property bool resultatEstUnEchec/,/^$/' "$WIDGET")
-  [[ "$bloc_echec" == *'"succes-degrade"'* ]] || {
-    echo "un succès dégradé n'est pas traité comme un échec par l'interface"
-    return 1
-  }
+  # La classification est exécutée pour chaque verdict dans update-logic.cjs.
+  # Chercher le mot « succes-degrade » ne vérifie pas une liste d'exclusion.
 
   # Et le paquet déclare la dépendance qui fournit l'action `org.eschaton.rollback`.
   run grep -F 'eschaton-dms-plugin-rollback' "$RACINE/packages/eschaton-dms-plugin-update/PKGBUILD"

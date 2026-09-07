@@ -129,3 +129,112 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(< "$calls")" = "--user --no-block restart dms.service" ]
 }
+
+@test "un settings absent puis partiellement écrit devient prêt dans la même session" {
+  rm "$settings"
+  settings_ticks=0
+  sleep() {
+    settings_ticks=$((settings_ticks + 1))
+    if ((settings_ticks == 1)); then
+      printf '{"barConfigs":' > "$settings"
+    else
+      printf '{"theme":"personnel"}' > "$settings"
+    fi
+  }
+  wait_for_settings "$settings" 3 0
+  [ "$settings_ticks" -eq 2 ]
+  [ "$(jq -r .theme "$settings")" = personnel ]
+}
+
+@test "l'attente settings est bornée et ne remplace jamais un fichier invalide" {
+  printf 'incomplet' > "$settings"
+  settings_ticks=0
+  sleep() { settings_ticks=$((settings_ticks + 1)); }
+  if wait_for_settings "$settings" 3 0; then
+    return 1
+  fi
+  [ "$settings_ticks" -eq 3 ]
+  [ "$(cat "$settings")" = incomplet ]
+}
+
+prepare_delayed_session() {
+  export XDG_CONFIG_HOME="$BATS_TEST_TMPDIR/config"
+  export DMS_TEST_SETTINGS="$XDG_CONFIG_HOME/DankMaterialShell/settings.json"
+  export DMS_TEST_TICKS="$BATS_TEST_TMPDIR/ticks"
+  export DMS_TEST_CALLS="$BATS_TEST_TMPDIR/calls"
+  export DMS_TEST_APPEARS_AT=65
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat > "$BATS_TEST_TMPDIR/bin/sleep" <<'SH'
+#!/usr/bin/env bash
+n=0
+[[ ! -f "$DMS_TEST_TICKS" ]] || read -r n < "$DMS_TEST_TICKS"
+n=$((n + 1))
+printf '%s\n' "$n" > "$DMS_TEST_TICKS"
+if ((n == DMS_TEST_APPEARS_AT)); then
+  mkdir -p "$(dirname "$DMS_TEST_SETTINGS")"
+  printf '%s\n' '{"theme":"personnel","barConfigs":[{"rightWidgets":["systemTray"]}]}' > "$DMS_TEST_SETTINGS"
+fi
+SH
+  cat > "$BATS_TEST_TMPDIR/bin/dms" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DMS_TEST_CALLS"
+case "$*" in
+  'ipc call plugins list') echo 'plugins' ;;
+  'ipc call bar getPosition index 0') echo top ;;
+  'ipc call bar setPosition index 0 top') : ;;
+  'ipc call wallpaper get') echo /home/user/personal.png ;;
+  'ipc call plugins status '*) echo loaded ;;
+  'ipc call settings get barConfigs') echo '[{"rightWidgets":["systemTray"]}]' ;;
+  *) exit 1 ;;
+esac
+SH
+  cat > "$BATS_TEST_TMPDIR/bin/systemctl" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DMS_TEST_CALLS"
+exit "${DMS_TEST_RESTART_RC:-0}"
+SH
+  chmod +x "$BATS_TEST_TMPDIR/bin/"*
+  export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+  export ESCHATON_DMS_BIN="$BATS_TEST_TMPDIR/bin/dms"
+  export ESCHATON_SYSTEMCTL_BIN="$BATS_TEST_TMPDIR/bin/systemctl"
+  provision_script="$BATS_TEST_DIRNAME/../packages/eschaton-desktop-config/eschaton-dms-provision"
+  provision_stamp="$XDG_CONFIG_HOME/DankMaterialShell/.eschaton-plugins-provisioned-v2"
+}
+
+@test "première session lente : le programme attend 65 ticks, compose et ne rejoue pas le succès" {
+  prepare_delayed_session
+  run bash "$provision_script"
+  [ "$status" -eq 0 ]
+  [ -f "$provision_stamp" ]
+  [ "$(jq -r .theme "$DMS_TEST_SETTINGS")" = personnel ]
+  [ "$(jq -c '.barConfigs[0].rightWidgets' "$DMS_TEST_SETTINGS")" = '["systemTray","eschatonUpdate","eschatonRollback"]' ]
+  grep -qx -- '--user --no-block restart dms.service' "$DMS_TEST_CALLS"
+  calls_before=$(cat "$DMS_TEST_CALLS")
+  run bash "$provision_script"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$DMS_TEST_CALLS")" = "$calls_before" ]
+}
+
+@test "DMS absent : le programme échoue après 90 ticks sans marqueur ni IPC" {
+  prepare_delayed_session
+  export DMS_TEST_APPEARS_AT=999
+  run bash "$provision_script"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'après 90 s'* ]]
+  [ "$(cat "$DMS_TEST_TICKS")" -eq 90 ]
+  [ ! -e "$provision_stamp" ]
+  [ ! -e "$DMS_TEST_CALLS" ]
+}
+
+@test "une recomposition refusée laisse le provisioning rejouable" {
+  prepare_delayed_session
+  export DMS_TEST_RESTART_RC=1
+  run bash "$provision_script"
+  [ "$status" -eq 1 ]
+  [ ! -e "$provision_stamp" ]
+  export DMS_TEST_RESTART_RC=0
+  run bash "$provision_script"
+  [ "$status" -eq 0 ]
+  [ -f "$provision_stamp" ]
+  [ "$(jq '[.barConfigs[0].rightWidgets[] | select(. == "eschatonUpdate")] | length' "$DMS_TEST_SETTINGS")" -eq 1 ]
+}
