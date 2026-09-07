@@ -189,8 +189,11 @@ Item {
 
     CodexCore {
         id: codexCore
-        active: root.codexSelected && !root.localOnly
+        active: root.codexSelected
+        networkAllowed: !root.localOnly
     }
+
+    DesktopBridge {}
 
     ToolExecutor {
         id: toolExecutor

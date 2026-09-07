@@ -2,7 +2,8 @@
 
 - Date : 2026-09-07.
 - Statut : **cap produit et niveau d'autonomie actés par le pilote**.
-  Architecture ci-dessous proposée pour l'implémentation ; non livrée.
+  Architecture en cours : première tranche service + bureau implémentée et
+  éprouvée dans le clone (§40 de `tools/vm-dev.md`) ; le cap complet reste à livrer.
 - Source : clarification de Seylar dans la conversation de reprise : réparer
   les paquets, traiter les problèmes de sécurité, personnaliser le bureau et
   disposer en plus de son agent généraliste préféré. Référence exprimée :
@@ -15,8 +16,10 @@
 
 La sidebar, les trois outils fixes et l'interdiction d'agir après une collecte
 de statut ne satisfont pas le besoin. La PR 8 fournit une connexion Codex utile,
-mais pas un expert système : l'orchestration vit encore dans QML, les tâches
-ne survivent pas au shell et les moyens d'action sont trop limités. Les anciens
+mais pas encore un expert système complet. La tranche du §40 sort désormais
+l’orchestration Codex de QML et journalise les déplacements de widgets. Les
+réparations automatiques, les mandats importants et les tâches généralistes
+restent à construire. Les anciens
 critères « Assistant terminé » décrivent uniquement la v1.
 
 ## Décision produit

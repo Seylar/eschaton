@@ -1,11 +1,12 @@
 import QtQuick
 import Quickshell.Io
-import "./CodexProtocol.js" as CodexProtocol
 
+// Thin IPC client. Closing/reloading the panel never terminates the agent.
 Item {
     id: root
     visible: false
     property bool active: false
+    property bool networkAllowed: false
     property bool ready: false
     property bool signedIn: false
     property bool busy: false
@@ -15,129 +16,84 @@ Item {
     property string plan: ""
     property string model: ""
     property var models: []
+    property var recentChange: null
     property string lastError: ""
     property string connectionMessage: "Connecte ton abonnement ChatGPT pour utiliser Codex."
     property alias messages: messageModel
     readonly property int messageCount: messageModel.count
-    property var protocol: null
-    property string buffer: ""
-    property string pendingDelta: ""
-    property int assistantRow: -1
-    property string lastItemId: ""
+    property bool connected: false
     property bool connectWhenReady: false
+    property bool sending: false
+    property string buffer: ""
+    property int sequence: 0
+    property string clientId: Date.now() + "-" + Math.random().toString(36).slice(2)
     signal delta(string chunk)
     signal done(string status)
     signal toolCall(string callId, string name, string argsJson)
 
-    function start() {
-        if (!active || server.running) return;
-        lastError = ""; ready = false; buffer = "";
-        connectionMessage = "Démarrage de Codex…";
-        let catalog;
-        try { catalog = JSON.parse(catalogFile.text()).tools; }
-        catch (_) { lastError = "Catalogue système indisponible."; return; }
-        protocol = CodexProtocol.create(function(msg) { server.write(JSON.stringify(msg) + "\n"); },
-            function(type, data) { root.handleEvent(type, data); }, catalog);
-        server.running = true;
-        startupTimeout.restart();
+    function request(method, params) {
+        if (!connected) return false;
+        transport.write(JSON.stringify({id: clientId + "-" + (++sequence), method: method, params: params || {}}) + "\n");
+        return true;
     }
+    function start() { if (active && !transport.running) { buffer = ""; transport.running = true; } }
+    function refresh() { if (connected) request("refresh"); else start(); }
     function connectAccount() {
         if (!active) return;
-        lastError = "";
-        if (ready) protocol.login();
+        if (connected) { request("enable", {enabled: networkAllowed}); request("login"); }
         else { connectWhenReady = true; start(); }
     }
-    function refresh() { if (ready) protocol.refresh(); else start(); }
-    function cancelLogin() { if (protocol) protocol.cancelLogin(); }
-    function logout() { if (ready && !busy && protocol.logout()) clear(); }
-    function chooseModel(value) { if (ready) protocol.chooseModel(value); }
+    function cancelLogin() { request("cancelLogin"); }
+    function logout() { request("logout"); }
+    function chooseModel(value) { request("model", {model: value}); }
     function send(text) {
-        if (!ready || busy || !signedIn) return false;
-        // Append before sending: event handlers may run synchronously.
-        if (!String(text).trim() || String(text).length > 32768 || !model) return false;
-        lastError = "";
-        if (messageModel.count >= 80) messageModel.remove(0, 2);
-        messageModel.append({ role: "user", content: text, status: "ok", id: "user-" + Date.now() });
-        assistantRow = -1; lastItemId = "";
-        return protocol.send(text);
+        if (!ready || !signedIn || !model || busy || sending || !String(text).trim()) return false;
+        sending = request("send", {text: text});
+        return sending;
     }
-    function cancel() { if (protocol && busy) { protocol.cancel(); cancelTimeout.restart(); } }
-    function clear() {
-        if (busy) return;
-        if (protocol) protocol.clear();
-        messageModel.clear(); assistantRow = -1; lastItemId = ""; pendingDelta = ""; lastError = "";
-    }
-    function toolResult(id, result) {
-        const accepted = protocol ? protocol.toolResult(id, result) : false;
-        if (accepted && busy) responseTimeout.restart();
-        return accepted;
-    }
-    function flushDelta() {
-        if (!pendingDelta || assistantRow < 0) return;
-        const chunk = pendingDelta; pendingDelta = "";
-        messageModel.setProperty(assistantRow, "content", messageModel.get(assistantRow).content + chunk);
-        delta(chunk);
-    }
-    function stopWithError(message) {
-        lastError = message;
-        connectionMessage = message;
-        ready = false; server.running = false;
-    }
-    function handleEvent(type, data) {
-        if (type === "ready") {
-            startupTimeout.stop(); ready = true;
-            if (connectWhenReady) { connectWhenReady = false; protocol.login(); }
-        } else if (type === "account") {
-            signedIn = data.signedIn; plan = data.plan;
-            connectionMessage = signedIn ? "" : "Connecte ton abonnement ChatGPT pour utiliser Codex.";
-            if (!signedIn) { model = ""; models = []; }
-        } else if (type === "models") {
-            models = data.models; model = data.model;
-            if (!model) connectionMessage = "Aucun modèle Codex disponible pour ce compte.";
-        } else if (type === "loginPending") {
-            loginPending = true; connectionMessage = "Préparation de la connexion sécurisée…";
-        } else if (type === "login") {
-            loginCode = data.code || ""; loginUrl = data.url || ""; loginPending = loginCode !== "";
-            connectionMessage = loginPending ? "Ouvre la page de connexion, puis saisis ce code." : "";
-        } else if (type === "busy") {
-            busy = true; responseTimeout.restart();
-        } else if (type === "delta") {
-            responseTimeout.restart();
-            if (assistantRow < 0 || lastItemId !== data.itemId) {
-                flushDelta();
-                if (assistantRow >= 0) messageModel.setProperty(assistantRow, "status", "ok");
-                assistantRow = messageModel.count; lastItemId = data.itemId;
-                messageModel.append({ role: "assistant", content: "", status: "streaming", id: String(data.itemId) });
+    function cancel() { request("cancel"); }
+    function clear() { if (!busy) request("clear"); }
+    function undoLastChange() { if (recentChange) request("desktop.undo", {id: recentChange.id}); }
+    function toolResult(id, result) { return false; }
+    function receive(msg) {
+        if (msg.type !== "snapshot") {
+            sending = false;
+            if (msg.ok === false) lastError = msg.error || "Demande refusée.";
+            return;
+        }
+        const s = msg.state, wasBusy = busy;
+        ready = s.ready; signedIn = s.signedIn; busy = s.busy;
+        loginPending = s.loginPending; loginCode = s.loginCode; loginUrl = s.loginUrl;
+        plan = s.plan; model = s.model; models = s.models;
+        recentChange = s.recentChange; lastError = s.lastError; connectionMessage = s.connectionMessage;
+        const rows = s.messages || [];
+        // Update only changed rows; preserve the list and scroll position while streaming.
+        if (messageModel.count > rows.length || (rows.length && messageModel.count && messageModel.get(0).id !== rows[0].id))
+            messageModel.clear();
+        let changed = false;
+        for (let i = 0; i < rows.length; i++) {
+            if (i >= messageModel.count) { messageModel.append(rows[i]); changed = true; }
+            else if (messageModel.get(i).content !== rows[i].content || messageModel.get(i).status !== rows[i].status) {
+                messageModel.set(i, rows[i]); changed = true;
             }
-            pendingDelta += data.text;
-            if (!deltaFlush.running) deltaFlush.start();
-        } else if (type === "tool") {
-            responseTimeout.stop();
-            toolCall(data.id, data.name, data.args);
-        } else if (type === "done") {
-            flushDelta(); busy = false; cancelTimeout.stop(); responseTimeout.stop();
-            lastError = data.error || "";
-            if (assistantRow >= 0) messageModel.setProperty(assistantRow, "status", data.status);
-            done(data.status);
-        } else if (type === "fatal") stopWithError(data.error);
+        }
+        if (changed) delta("");
+        if (wasBusy && !busy) done(lastError ? "error" : "ok");
     }
-    onActiveChanged: {
-        if (active) start();
-        else { connectWhenReady = false; server.running = false; }
-    }
+    onNetworkAllowedChanged: { if (connected) request("enable", {enabled: networkAllowed}); }
+    onActiveChanged: { if (active) start(); else transport.running = false; }
     Component.onCompleted: { if (active) start(); }
-    FileView { id: catalogFile; path: Qt.resolvedUrl("tool-catalog.json"); blockLoading: true }
     ListModel { id: messageModel }
-    Timer { id: deltaFlush; interval: 32; onTriggered: root.flushDelta() }
-    Timer { interval: 1000; repeat: true; running: server.running; onTriggered: { if (root.protocol) root.protocol.tick(Date.now()); } }
-    Timer { id: startupTimeout; interval: 15000; onTriggered: root.stopWithError("Codex n'a pas démarré. Vérifie le paquet eschaton-codex.") }
-    Timer { id: cancelTimeout; interval: 5000; onTriggered: root.stopWithError("Réponse arrêtée. Relance Codex pour continuer.") }
-    Timer { id: responseTimeout; interval: 120000; onTriggered: root.stopWithError("Codex ne répond plus depuis deux minutes. Réessaie.") }
+    Timer { interval: 2000; repeat: true; running: root.active && !transport.running; onTriggered: root.start() }
     Process {
-        id: server
-        command: ["/usr/bin/eschaton-codex-session"]
+        id: transport
+        command: ["/usr/bin/eschaton-agent", "attach"]
         stdinEnabled: true
-        onStarted: root.protocol.start()
+        onStarted: {
+            root.connected = true;
+            root.request("enable", {enabled: root.networkAllowed});
+            if (root.connectWhenReady) { root.connectWhenReady = false; root.request("login"); }
+        }
         stdout: SplitParser {
             splitMarker: ""
             onRead: chunk => {
@@ -145,24 +101,18 @@ Item {
                 let index;
                 while ((index = root.buffer.indexOf("\n")) >= 0) {
                     const line = root.buffer.slice(0, index); root.buffer = root.buffer.slice(index + 1);
-                    if (line.trim()) root.protocol.receive(line);
+                    if (line.trim()) {
+                        try { root.receive(JSON.parse(line)); }
+                        catch (_) { root.lastError = "Réponse du service invalide."; transport.running = false; }
+                    }
                 }
-                if (root.buffer.length > 1048576) root.stopWithError("Flux Codex trop volumineux.");
+                if (root.buffer.length > 1048576) transport.running = false;
             }
         }
-        // Les diagnostics du runtime peuvent contenir des données de compte.
-        // Ils sont consommés sans les recopier dans le journal du bureau.
         stderr: SplitParser { splitMarker: ""; onRead: chunk => {} }
-        onExited: exitCode => {
-            startupTimeout.stop(); cancelTimeout.stop(); responseTimeout.stop();
-            root.flushDelta(); root.ready = false; root.signedIn = false;
-            root.loginPending = false; root.loginCode = ""; root.loginUrl = "";
-            if (root.busy) { root.busy = false; root.done("cancelled"); }
-            root.protocol = null;
-            if (root.active && !root.lastError) {
-                root.lastError = "Codex s'est arrêté. Réessaie la connexion.";
-                root.connectionMessage = root.lastError;
-            }
+        onExited: {
+            root.connected = false; root.ready = false; root.sending = false;
+            if (root.active) root.connectionMessage = "Reconnexion au service Eschaton…";
         }
     }
 }

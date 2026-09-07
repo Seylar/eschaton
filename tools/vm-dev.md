@@ -6199,3 +6199,92 @@ avant de rejouer. Une commande multilignes terminée par un saut de ligne casse
 actuellement le wrapper `run` (`;` isolé) ; les essais ci-dessus utilisent des
 commandes sur une ligne. Ne pas utiliser `exit` hors sous-shell dans `run` :
 il ferme la console interactive avant le marqueur de fin.
+
+## 40. Premier service agent indépendant et personnalisation réelle — 2026-09-07
+
+### 40.1 Périmètre livré dans la branche de stabilisation
+
+`eschaton-agent` possède désormais le processus Codex app-server, son transport,
+l’historique et l’identifiant de conversation. Une unité systemd utilisateur et
+un socket Unix `0600` assurent son indépendance du panneau. Le plugin QML devient
+client ; quitter/recharger DMS ne tue plus le moteur. Le mode local uniquement
+arrête explicitement le runtime distant. Aucun jeton de compte n’est stocké par
+ce service : le stockage Codex isolé existant reste utilisé.
+
+Capacités : état des services système/utilisateur, espace disque et paquets en
+lecture seule ; lecture des barres ; déplacement d’un widget existant entre
+les zones gauche/centre/droite. Aucun shell libre, élévation, réparation de
+paquet ou restauration automatique n’est exposé. Les portes update/rollback v1
+restent dans les panneaux dédiés et le fournisseur API historique. Leur
+migration dans le service Codex reste à faire. Après `system_status`, la garde
+v1 interdit toujours un autre outil dans le même tour.
+
+DMS interdit les objets/tableaux dans son setter IPC `settings set`. Le nouveau
+`DesktopBridge.qml` appelle `SettingsData.updateBarConfig` avec une comparaison
+synchrone de la disposition attendue dans la même boucle QML. Seuls les trois
+tableaux de widgets existants peuvent changer ; ajouter/supprimer un widget ou
+écraser un réglage concurrent est refusé. Le service journalise avant mutation,
+relit le résultat, conserve les conflits et vérifie l’état avant annulation.
+Une opération incertaine est rapprochée du bureau réel ; elle n’est pas rejouée
+au redémarrage. Une réponse interrompue est signalée et la conversation peut
+être reprise sur une nouvelle demande, sans réexécuter l’ancienne.
+
+### 40.2 Preuves obtenues dans `eschaton-stabilisation`
+
+- L’appel direct `qs ipc -p /usr/share/quickshell/dms --any-display call ...`
+  répond en **48 ms** pour la lecture de `barConfigs`. Le wrapper `dms ipc`
+  prenait environ cinq secondes. Ce chiffre ne mesure pas la fluidité graphique.
+- Source réelle inspectée : `/usr/share/quickshell/dms/DMSShellIPC.qml`, setter
+  objet désactivé ; `Common/SettingsData.qml`, `updateBarConfig` lignes 2479+.
+- Nouvelle capacité chargée avec le plugin réel : `eschatonDesktop inspect`
+  renvoie la barre `default` et ses trois listes de widgets.
+- Requête `vm-clock-left-1` : déplacement de `clock` vers `left`, index 0.
+  Résultat **`status=verified`**, durée **156 ms**, `settings.json` relu :
+  `leftWidgets=[clock,launcherButton,workspaceSwitcher,focusedWindow]`,
+  `centerWidgets=[music,weather]`. Capture CUA : heure à gauche et bouton
+  « Annuler ce changement » visible dans le panneau.
+- `systemctl --user restart dms.service` : **MainPID de l’agent 35601 avant
+  et après** ; réglage conservé sur disque et par l’IPC du nouveau DMS.
+- Annulation via le client du service : **`status=undone`**, listes initiales
+  restaurées. Puis redémarrage de l’agent : service actif, journal conservé,
+  `recentChange=null`, aucune action rejouée.
+- Clics CUA sur le bouton : fenêtre amenée au premier plan mais événement invité
+  non confirmé ; l’annulation a donc été exercée via la même API du service,
+  **pas validée par un clic utilisateur**.
+- Suite locale : **216 tests Bats**, dont **22 scénarios Node** (12 protocole,
+  10 agent/statut). Tests : mouvement, annulation, conflit, idempotence,
+  timeout après écriture, arrêt avant écriture, persistance, exécution sans
+  client connecté, reprise de thread, mode local et échec partiel de diagnostic.
+  Le modèle de ces tests est simulé ; ce n’est pas une réponse OpenAI réelle.
+
+### 40.3 Runtime de validation et réserves
+
+L’index pacman du clone référençait des versions Node/ada/simdjson retirées du
+miroir (404). La tentative d’installation normale n’a rien changé. Une mise
+à niveau globale `pacman -Syu` a été refusée par le contrôle automatique en
+raison de sa portée ; elle n’a pas été exécutée.
+
+Alternative limitée : binaire **officiel Node 22.23.2 linux-arm64**, téléchargé
+via HTTPS depuis nodejs.org et vérifié contre son SHA-256 officiel :
+`fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8`.
+Paquet local explicite `eschaton-node-test-runtime-22.23.2-1`, installé seulement
+dans le clone, fournit `nodejs` et entre en conflit avec le paquet normal.
+Le binaire vit dans `/usr/lib/eschaton/test-node/node`. Ce paquet de validation
+n’est **pas** ajouté au dépôt ni à l’ISO. Le paquet produit dépend de `nodejs>=22`.
+La transition vers le Node du dépôt devra être validée avec une mise à niveau
+cohérente de la VM. Snapshots de transaction initiale : 191/192 ; suivante :
+193/194. Aucune installation sur le Mac personnel.
+
+Restent non validés : connexion personnelle et vraie requête en langage naturel,
+quota/réseau distant, qualité du modèle, reprise native d’un thread authentifié,
+autocorrection sans chat, tâches généralistes, clic utilisateur, fluidité GPU,
+audio, abonnement Claude et déploiement A1990. Le service est une première
+tranche fonctionnelle de l’ADR 0005, pas la réalisation complète de l’expert OS.
+
+Complément de validation finale : paquets `eschaton-agent 0.1.0-3` et
+`eschaton-dms-plugin-assistant 0.1.0-15` construits et installés dans le clone.
+Le harnais QML, copié avec le `CodexCore.qml` installé et connecté au service
+systemd réel, produit **`CODEX_SMOKE_PASS ready=true signedIn=false`**.
+Les quatre sources de `system.status` répondent `available=true`,
+`truncated=false`. Le mode réseau antérieur du service a été restauré après
+ce smoke test. Ces contrôles ne connectent aucun compte personnel.

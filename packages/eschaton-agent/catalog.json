@@ -1,0 +1,65 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "system_status",
+        "description": "Lire les services en échec, l’espace disque et les paquets installés. Après cette collecte, explique le résultat sans effectuer de modification dans ce tour.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "desktop_inspect",
+        "description": "Lire les barres réelles du bureau et leurs widgets avant une personnalisation.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "desktop_move_widget",
+        "description": "Déplacer un widget existant dans une barre, avec journal, vérification et annulation. Autorisé pour les personnalisations demandées par l'utilisateur. Ne modifie aucun paquet ni privilège.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "barId": {
+              "type": "string"
+            },
+            "widget": {
+              "type": "string"
+            },
+            "section": {
+              "type": "string",
+              "enum": [
+                "left",
+                "center",
+                "right"
+              ]
+            },
+            "index": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "barId",
+            "widget",
+            "section",
+            "index"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

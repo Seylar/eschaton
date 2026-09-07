@@ -27,12 +27,17 @@ problèmes courants réversibles ; solliciter pour les changements importants**.
 Référence : [ADR 0005](decisions/0005-agent-systeme.md).
 
 La sidebar à trois outils et la connexion Codex de la PR 8 sont des briques v1.
-Elles ne valident pas le cœur du produit. Prochaine preuve : une demande de
-personnalisation menée jusqu'au résultat vérifié et annulable, puis un incident
-contrôlé détecté et réparé sans conversation ouverte. Le moteur durable,
-la politique de mandat, les observations système et les tâches généralistes
-restent à construire. L'architecture proposée est détaillée dans l'ADR ;
-aucune extension de privilèges n'est déployée par cette décision documentaire.
+Elles ne valident pas le cœur du produit. Première tranche implémentée : service
+utilisateur indépendant, transport Codex persistant, diagnostic en lecture seule,
+déplacements de widgets avec comparaison atomique, journal et annulation.
+Dans le clone : horloge déplacée en 156 ms, réglage conservé après redémarrage
+DMS (PID de l’agent inchangé), annulation vérifiée. La demande via un modèle
+réel reste à éprouver après connexion personnelle. Preuves : `tools/vm-dev.md` §40.
+
+Prochaine tranche : incident contrôlé détecté et réparé sans conversation
+ouverte, avec mandat borné et vérification. La politique des changements
+importants et les tâches généralistes restent à construire. Les privilèges
+système ne sont pas étendus par le service actuel.
 
 ## Priorité active — VM et abonnements IA
 

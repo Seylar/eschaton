@@ -1,0 +1,10 @@
+[Unit]
+Description=Eschaton agent IPC
+
+[Socket]
+ListenStream=%t/eschaton-agent.sock
+SocketMode=0600
+RemoveOnStop=yes
+
+[Install]
+WantedBy=default.target

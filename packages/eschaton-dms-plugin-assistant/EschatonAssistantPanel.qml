@@ -184,6 +184,23 @@ Item {
             }
         }
 
+        RowLayout {
+            Layout.fillWidth: true
+            visible: !!root.subscriptionCore && !!root.subscriptionCore.recentChange
+            StyledText {
+                Layout.fillWidth: true
+                text: root.subscriptionCore && root.subscriptionCore.recentChange
+                    ? "Bureau modifié · " + root.subscriptionCore.recentChange.label : ""
+                color: Theme.surfaceVariantText
+                elide: Text.ElideRight
+            }
+            DankButton {
+                text: "Annuler ce changement"
+                enabled: !root.assistantCore.busy
+                onClicked: root.subscriptionCore.undoLastChange()
+            }
+        }
+
         StyledRect {
             Layout.fillWidth: true
             Layout.preferredHeight: providerRow.implicitHeight + Theme.spacingM * 2
@@ -488,7 +505,7 @@ Item {
 
                 StyledText {
                     width: parent.width
-                    text: "Que veux-tu vérifier sur cette machine ?"
+                    text: root.subscriptionCore ? "Que veux-tu faire ?" : "Que veux-tu vérifier sur cette machine ?"
                     color: Theme.surfaceText
                     font.pixelSize: Theme.fontSizeLarge
                     font.weight: Font.Medium
@@ -499,7 +516,9 @@ Item {
 
                 StyledText {
                     width: parent.width
-                    text: "Comprendre un problème, vérifier les mises à jour, retrouver un système qui fonctionne. Demande simplement."
+                    text: root.subscriptionCore
+                        ? "Pose une question, consulte l’état du système ou personnalise ta barre. Par exemple : mets l’heure à gauche. Les réparations automatiques arrivent ensuite."
+                        : "Comprendre un problème, vérifier les mises à jour, retrouver un système qui fonctionne. Demande simplement."
                     color: Theme.surfaceVariantText
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap

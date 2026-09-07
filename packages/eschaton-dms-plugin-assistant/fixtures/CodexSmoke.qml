@@ -3,7 +3,7 @@ import Quickshell
 import ".." as Assistant
 
 ShellRoot {
-    Assistant.CodexCore { id: core }
+    Assistant.CodexCore { id: core; networkAllowed: true }
     Timer { interval: 50; running: true; onTriggered: core.active = true }
     Timer {
         interval: 100; running: true; repeat: true

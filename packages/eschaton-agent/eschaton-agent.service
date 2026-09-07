@@ -1,0 +1,11 @@
+[Unit]
+Description=Expert système Eschaton
+Requires=eschaton-agent.socket
+After=eschaton-agent.socket
+
+[Service]
+ExecStart=/usr/bin/node /usr/lib/eschaton/agent/agent.cjs serve
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=yes

@@ -1,0 +1,1 @@
+../eschaton-dms-plugin-assistant/CodexProtocol.js

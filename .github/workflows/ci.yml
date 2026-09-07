@@ -63,7 +63,8 @@ jobs:
             packages/eschaton-desktop-config/eschaton-session \
             packages/eschaton-desktop-config/eschaton-dms-provision \
             packages/eschaton-desktop-config/eschaton-assistant-shadowing \
-            packages/eschaton-dms-plugin-assistant/eschaton-codex-session
+            packages/eschaton-dms-plugin-assistant/eschaton-codex-session \
+            packages/eschaton-agent/eschaton-agent
       # Différé du Socle soldé au SP4 : un fichier sudoers invalide n'est pas
       # ignoré, il rend TOUT sudo inopérant sur la machine — y compris celui qui
       # servirait à le réparer. `visudo -cf` est la seule vérification qui
@@ -88,7 +89,8 @@ jobs:
       - name: dépendances du bureau (Arch x86_64 + ALARM aarch64)
         run: |
           tools/check-desktop-deps \
-            --also-pkgbuild packages/eschaton-dms-plugin-assistant/PKGBUILD
+            --also-pkgbuild packages/eschaton-dms-plugin-assistant/PKGBUILD \
+            --also-pkgbuild packages/eschaton-agent/PKGBUILD
 
   # Un job de build PAR ARCHITECTURE (spec §5.3) : les deux paquets vendorés
   # sont des binaires natifs compilés par GraalVM, pas des paquets `any`. Chaque
