@@ -5636,3 +5636,23 @@ relevé. Les autres réserves sont dans l'audit, avec leur chemin de code.
 Non exécutés : construction ISO, démarrage T2, rollback après changement de
 noyau, installation du greeter/PAM proposé, test visuel du nouveau panneau,
 compatibilité des plugins avec DMS 1.6. Ces items ne sont pas déclarés terminés.
+
+### 37.7 CI distante et livraison
+
+Commit de corrections : `31a90c2`. Le push de
+`codex/audit-reprise-2026-09-07` vers `origin` a été refusé par la revue
+automatique d'autorisation. Vérification complémentaire en lecture seule :
+
+```json
+{"login":"Seylar"}
+{"isPrivate":false,"nameWithOwner":"Seylar/eschaton","url":"https://github.com/Seylar/eschaton","viewerPermission":"ADMIN"}
+```
+
+Après cette preuve d'appartenance, la revue a maintenu son refus : publier
+l'ensemble du code et des documents sur ce dépôt **public** demande une
+autorisation explicite. Aucun push, aucune PR, aucun tag et aucune fusion n'ont
+donc été réalisés. La CI distante **n'a pas été lancée pour ces corrections**.
+Les contrôles locaux et les builds ARM ci-dessus sont verts ; ils ne doivent
+pas être présentés comme une CI bi-architecture verte. Pour finir cette porte :
+autoriser le push de cette branche vers `Seylar/eschaton`, ouvrir la PR brouillon,
+attendre les deux builds et joindre leurs résultats.

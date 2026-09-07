@@ -96,3 +96,11 @@ actuelles. Les composants DMS existants restent la référence visuelle.
 
 Les sorties et limites exactes de validation sont consignées dans
 [`tools/vm-dev.md`, §37](../../tools/vm-dev.md#37-reprise-codex--audit-et-corrections-2026-09-07).
+
+## Livraison
+
+Corrections enregistrées localement dans `31a90c2`. La revue automatique
+a refusé le push vers le dépôt public `Seylar/eschaton`, même après vérification
+que le compte connecté en est propriétaire. Une autorisation explicite de
+publication est demandée ; aucune PR n’a été créée et aucune CI distante de
+cette vague n’a tourné. Les résultats locaux sont détaillés au §37 du journal.

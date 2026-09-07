@@ -3,7 +3,7 @@
 - **Date** : 2026-09-07
 - **Destinataire** : Codex (exécution). Les gates de revue, les rulings, les tags et les fusions restent à Claude.
 - **État de référence distant** : `origin/main` = `3d8feb6`, tag **`v0.3.0`** posé. Le Socle, le Bureau, l'Assistant et l'ISO nominal y sont fusionnés. Attention : le checkout racine `main` est encore à `1b10b85`.
-- **Reprise Codex du 2026-09-07** : branche `codex/audit-reprise-2026-09-07`, depuis `handoff` à `32c9e70`, dans `.worktrees/socle`. [Audit global](audits/2026-09-07-projet-global.md), preuves §37 de `tools/vm-dev.md`. Corrections locales soumises à validation, aucune fusion ni publication ISO.
+- **Reprise Codex du 2026-09-07** : branche `codex/audit-reprise-2026-09-07`, depuis `handoff` à `32c9e70`, dans `.worktrees/socle`. [Audit global](audits/2026-09-07-projet-global.md), preuves §37 de `tools/vm-dev.md`. Corrections enregistrées localement (`31a90c2`) : 154 tests, core Quickshell et builds ARM verts. **Push/PR bloqués par la revue automatique : autorisation explicite de publication sur le dépôt public demandée. CI distante non lancée pour cette vague.** Aucune fusion ni publication ISO.
 
 ---
 
